@@ -20,15 +20,15 @@ import'./platform.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await ApiService.initialize();
+  // Initialize settings and api in parallel, then run platform/account/cookie chain.
+  await Future.wait<void>([
+    ApiService.initialize(),
+    AppSettings.initialize(),
+  ]);
 
   await PlatformManager().initialize();
-
   await AccountManager.initialize();
-
   await CookieManager.initialize();
-
-  await AppSettings.initialize();
 
   registerCustomAcknowledgementLicenses();
 
@@ -246,6 +246,13 @@ class _MainPageState extends State<MainPage> {
         ]
       ),
       bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        selectedItemColor: Theme.of(context).colorScheme.primary,
+        unselectedItemColor: Theme.of(
+          context,
+        ).colorScheme.onSurface.withValues(alpha: 0.72),
+        showUnselectedLabels: true,
+        type: BottomNavigationBarType.fixed,
         items: const <BottomNavigationBarItem>[
           BottomNavigationBarItem(
             icon: Icon(Icons.school),

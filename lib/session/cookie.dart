@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:cookie_jar/cookie_jar.dart';
@@ -106,25 +107,35 @@ class CookieManager {
 
   static Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
-    await loadAllCookies();
+    await loadAllCookies(refreshOnlineState: false);
+    // Avoid blocking first screen with network refresh; keep it running in background.
+    unawaited(refreshAccountsInBackground());
   }
 
-  static Future<void> loadAllCookies() async {
+  static Future<void> refreshAccountsInBackground() async {
+    if (refreshCounts < 3) {
+      await _refreshAccounts();
+    }
+  }
+
+  static Future<void> loadAllCookies({bool refreshOnlineState = true}) async {
     // 获取所有账号并预加载 CookieJar
     final accounts = AccountManager.getAllAccounts();
     if (accounts.isEmpty) {
       return;
     }
 
-    for (final user in accounts) {
-      try {
-        await getCookieJarForUser(user.uid);
-      } catch (e) {
-        debugPrint('预加载账号 ${user.uid} 的 CookieJar 失败：$e');
-      }
-    }
+    await Future.wait<void>(
+      accounts.map((user) async {
+        try {
+          await getCookieJarForUser(user.uid);
+        } catch (e) {
+          debugPrint('预加载账号 ${user.uid} 的 CookieJar 失败：$e');
+        }
+      }),
+    );
 
-    if (refreshCounts < 3) {
+    if (refreshOnlineState && refreshCounts < 3) {
       await _refreshAccounts();
     }
   }

@@ -1116,6 +1116,7 @@ class TCLoginApi {
     if (mfaCode == null || mfaCode.trim().isEmpty) {
       return {
         'ok': false,
+        'cancelledMfa': true,
         'message': '短信动态码已发送，但你取消了输入；请重新发起畅课登录后再验证',
         'debug': lastLoginTrace,
       };

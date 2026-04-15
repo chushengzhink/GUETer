@@ -149,7 +149,8 @@ class PlatformManager {
       _platformChangeController.add(platform);
       await AccountManager.switchToPlatformAccount();
       await AccountManager.refreshAccounts();
-      await CookieManager.loadAllCookies();
+      await CookieManager.loadAllCookies(refreshOnlineState: false);
+      unawaited(CookieManager.refreshAccountsInBackground());
       AccountChangeNotifier().notifyAccountChanged(AccountManager.currentSessionId);
     }
   }

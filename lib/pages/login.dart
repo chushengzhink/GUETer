@@ -385,7 +385,12 @@ class _LoginPageState extends State<LoginPage> {
     final detail = (debug?.trim().isNotEmpty == true)
         ? debug!.trim()
         : '暂无详细链路日志';
-    final merged = '错误信息:\n$message\n\n链路日志:\n$detail';
+    const guide =
+        '提示：请求过快，请重试；多次重试仍无法连接，请根据设置中的邮箱联系开发者。';
+    final merged = '错误信息:\n$message\n\n$guide\n\n链路日志:\n$detail';
+    final detailPreview = detail.length > 1200
+      ? '${detail.substring(0, 1200)}\n\n...(日志较长，已截断显示，点击复制可获取完整链路)'
+      : detail;
 
     await showDialog<void>(
       context: context,
@@ -395,7 +400,20 @@ class _LoginPageState extends State<LoginPage> {
           content: SizedBox(
             width: 460,
             child: SingleChildScrollView(
-              child: SelectableText(merged),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SelectableText('错误信息:\n$message\n\n$guide'),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '链路日志预览',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  SelectableText(detailPreview),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -818,9 +836,26 @@ class _LoginPageState extends State<LoginPage> {
         );
 
         if (result['ok'] != true) {
+          final message = (result['message'] ?? '畅课登录失败').toString();
+          final cancelledMfa = result['cancelledMfa'] == true ||
+              message.contains('取消了输入') ||
+              message.contains('取消了验证');
+
+          if (cancelledMfa) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('你已取消本次短信验证，可稍后重新登录继续验证'),
+                  backgroundColor: Color(0xFF2F3A4A),
+                ),
+              );
+            }
+            return;
+          }
+
           if (mounted) {
             await _showTronclassDebugDialog(
-              message: (result['message'] ?? '畅课登录失败').toString(),
+              message: message,
               debug: result['debug']?.toString() ?? TCLoginApi.lastLoginTrace,
             );
           }
