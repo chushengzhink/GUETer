@@ -179,6 +179,14 @@ class CookieManager {
     return Uri.parse('https://$tcDomain');
   }
 
+  static String _normalizeCookieHost(String? rawDomain) {
+    final domain = rawDomain?.trim() ?? '';
+    if (domain.isEmpty) {
+      return '';
+    }
+    return domain.replaceFirst(RegExp(r'^\.+'), '');
+  }
+
   /// 临时保存Cookie到内存
   static Future<void> tempSaveCookie(
     List<Cookie> cookies, {
@@ -189,7 +197,13 @@ class CookieManager {
     for (var cookie in cookies) {
       late Uri uri;
       if (cookie.domain != null && cookie.domain!.isNotEmpty) {
-        uri = Uri.parse('https://${cookie.domain}');
+        final host = _normalizeCookieHost(cookie.domain);
+        if (host.isNotEmpty) {
+          uri = Uri.parse('https://$host');
+        } else {
+          uri = responseUri ?? getDomainUri();
+          cookie.domain = uri.host;
+        }
       } else {
         uri = responseUri ?? getDomainUri();
         cookie.domain = uri.host;
@@ -202,6 +216,10 @@ class CookieManager {
   /// 获取临时 CookieJar
   static CookieJar? getTempCookieJar() {
     return _tempCookieJar;
+  }
+
+  static void clearTempCookies() {
+    _tempCookieJar = null;
   }
 
   static Future<CookieJar> getCookieJarForUser(String userId) async {
@@ -245,8 +263,11 @@ class CookieManager {
         }
 
         if (cookie.domain != null && cookie.domain!.isNotEmpty) {
-          final uri = Uri.parse('https://${cookie.domain}');
-          await cookieJar.saveFromResponse(uri, [cookie]);
+          final host = _normalizeCookieHost(cookie.domain);
+          if (host.isNotEmpty) {
+            final uri = Uri.parse('https://$host');
+            await cookieJar.saveFromResponse(uri, [cookie]);
+          }
         }
       }
     } catch (e) {
@@ -331,11 +352,15 @@ class CookieManager {
 
     for (var cookie in tempCookies) {
       if (cookie.domain != null && cookie.domain!.isNotEmpty) {
-        final uri = Uri.parse('https://${cookie.domain}');
-        await targetJar.saveFromResponse(uri, [cookie]);
+        final host = _normalizeCookieHost(cookie.domain);
+        if (host.isNotEmpty) {
+          final uri = Uri.parse('https://$host');
+          await targetJar.saveFromResponse(uri, [cookie]);
+        }
       }
     }
 
     await saveCookiesForUser(userId);
+    clearTempCookies();
   }
 }

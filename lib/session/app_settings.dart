@@ -12,6 +12,9 @@ class AppSettings {
   static const String strictSecurityModeKey = 'app_strict_security_mode';
   static const String globalColorSchemeKey = 'app_global_color_scheme';
   static const String appThemeModeKey = 'app_theme_mode';
+  static const String readingLastPageKey = 'app_reading_last_page';
+  static const String readingLastOpenAtKey = 'app_reading_last_open_at';
+  static const String readingNightModeKey = 'app_reading_night_mode';
 
   static const String portalOpenModeExternalPreferred = 'external_preferred';
   static const String portalOpenModeEmbeddedPreferred = 'embedded_preferred';

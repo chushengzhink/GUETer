@@ -17,7 +17,6 @@ import 'widget/avatar.dart';
 import 'login.dart';
 import 'tronclass_web_login.dart';
 import 'ketangpai_main_struct.dart';
-import 'weizhuojiao_page.dart';
 
 class AccountChangeNotifier {
   static final AccountChangeNotifier _instance =
@@ -49,6 +48,8 @@ class _AccountsPageState extends State<AccountsPage>
     with TickerProviderStateMixin {
   List<User> _accounts = [];
   final Set<String> _selectedAccounts = <String>{};
+  final Map<String, bool> _chaoxingLoginState = <String, bool>{};
+  final Map<String, bool> _rainClassroomLoginState = <String, bool>{};
   final Map<String, bool> _tronclassLoginState = <String, bool>{};
   final Map<String, bool> _ketangpaiLoginState = <String, bool>{};
   bool _isMultiSelectMode = false;
@@ -101,12 +102,22 @@ class _AccountsPageState extends State<AccountsPage>
   Future<void> _loadAccounts() async {
     final current = AccountManager.currentSessionId;
     final allAccounts = AccountManager.getAllAccounts();
+    final chaoxingState = await _refreshChaoxingLoginState(allAccounts);
+    final rainClassroomState = await _refreshRainClassroomLoginState(
+      allAccounts,
+    );
     final tronclassState = await _refreshTronclassLoginState(allAccounts);
     final ketangpaiState = _refreshKetangpaiLoginState(allAccounts);
 
     setState(() {
       _accounts = allAccounts;
       _currentAccountId = current;
+      _chaoxingLoginState
+        ..clear()
+        ..addAll(chaoxingState);
+      _rainClassroomLoginState
+        ..clear()
+        ..addAll(rainClassroomState);
       _tronclassLoginState
         ..clear()
         ..addAll(tronclassState);
@@ -123,6 +134,40 @@ class _AccountsPageState extends State<AccountsPage>
         continue;
       }
       state[user.uid] = user.token.isNotEmpty;
+    }
+    return state;
+  }
+
+  Future<Map<String, bool>> _refreshChaoxingLoginState(
+    List<User> accounts,
+  ) async {
+    final state = <String, bool>{};
+    for (final user in accounts) {
+      if (!user.isChaoxing) {
+        continue;
+      }
+      final jar = await CookieManager.getCookieJarForUser(user.uid);
+      final cookies = await jar.loadForRequest(
+        Uri.parse('https://${CookieManager.cxDomain}'),
+      );
+      state[user.uid] = cookies.isNotEmpty;
+    }
+    return state;
+  }
+
+  Future<Map<String, bool>> _refreshRainClassroomLoginState(
+    List<User> accounts,
+  ) async {
+    final state = <String, bool>{};
+    for (final user in accounts) {
+      if (!user.isRainClassroom) {
+        continue;
+      }
+      final jar = await CookieManager.getCookieJarForUser(user.uid);
+      final cookies = await jar.loadForRequest(
+        Uri.parse('https://${CookieManager.rcDomain}'),
+      );
+      state[user.uid] = cookies.isNotEmpty;
     }
     return state;
   }
@@ -208,7 +253,7 @@ class _AccountsPageState extends State<AccountsPage>
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('确认退出登录'),
-          content: Text('确定要退出 ${user.name} 的畅课登录状态吗？'),
+          content: Text('确定要退出 ${user.name} 的${_platformLabel(user)}登录状态吗？'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -234,6 +279,7 @@ class _AccountsPageState extends State<AccountsPage>
       await CookieManager.clearCookiesForUser(user.uid);
       await TronclassAuthManager.clearSessionIdForUser(user.uid);
     }
+    CookieManager.clearTempCookies();
 
     if (user.isKetangpai) {
       await AccountManager.addAccount(
@@ -407,23 +453,6 @@ class _AccountsPageState extends State<AccountsPage>
       }
     }
 
-    if (defaultTargetPlatform == TargetPlatform.windows) {
-      final opened = await launchUrl(
-        Uri.parse(PlatformManager().tronclassBaseUrl),
-        mode: LaunchMode.externalApplication,
-      );
-      if (!opened && mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('系统浏览器打开失败')));
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Windows 下已改用系统浏览器重新认证')),
-        );
-      }
-      return;
-    }
-
     final autoCloseWebLogin = await AppSettings.getBool(
       AppSettings.autoCloseWebLoginKey,
       true,
@@ -448,6 +477,22 @@ class _AccountsPageState extends State<AccountsPage>
       ).showSnackBar(const SnackBar(content: Text('重新认证成功')));
     }
     await _loadAccounts();
+  }
+
+  bool _isAccountLoggedIn(User user) {
+    if (user.isChaoxing) {
+      return _chaoxingLoginState[user.uid] ?? false;
+    }
+    if (user.isRainClassroom) {
+      return _rainClassroomLoginState[user.uid] ?? false;
+    }
+    if (user.isTronclass) {
+      return _tronclassLoginState[user.uid] ?? false;
+    }
+    if (user.isKetangpai) {
+      return _ketangpaiLoginState[user.uid] ?? false;
+    }
+    return false;
   }
 
   Future<void> _navigateToPasswordLogin() async {
@@ -666,6 +711,13 @@ class _AccountsPageState extends State<AccountsPage>
     qrState.dispose();
   }
 
+  void _showWeizhuojiaoComingSoonNotice() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('微助教功能正在完善中，敬请期待')));
+  }
+
   String _platformLabel(User user) {
     if (user.isTronclass) return '畅课';
     if (user.isKetangpai) return '课堂派';
@@ -735,9 +787,17 @@ class _AccountsPageState extends State<AccountsPage>
     bool isCurrentAccount,
   ) {
     final canLogout =
-        user.isTronclass && (_tronclassLoginState[user.uid] ?? false);
-    final canKetangpaiLogout =
-        user.isKetangpai && (_ketangpaiLoginState[user.uid] ?? false);
+      (user.isChaoxing && (_chaoxingLoginState[user.uid] ?? false)) ||
+      (user.isRainClassroom &&
+        (_rainClassroomLoginState[user.uid] ?? false)) ||
+      (user.isTronclass && (_tronclassLoginState[user.uid] ?? false)) ||
+      (user.isKetangpai && (_ketangpaiLoginState[user.uid] ?? false));
+    final chaoxingStatus = user.isChaoxing
+      ? ((_chaoxingLoginState[user.uid] ?? false) ? '已登录' : '未登录')
+      : null;
+    final rainClassroomStatus = user.isRainClassroom
+      ? ((_rainClassroomLoginState[user.uid] ?? false) ? '已登录' : '未登录')
+      : null;
     final tronclassStatus = user.isTronclass
         ? ((_tronclassLoginState[user.uid] ?? false) ? '已登录' : '未登录')
         : null;
@@ -747,7 +807,11 @@ class _AccountsPageState extends State<AccountsPage>
     final weizhuojiaoStatus = user.isWeizhuojiao ? '工具页' : null;
 
     final platformStatus =
-        tronclassStatus ?? ketangpaiStatus ?? weizhuojiaoStatus;
+      chaoxingStatus ??
+      rainClassroomStatus ??
+      tronclassStatus ??
+      ketangpaiStatus ??
+      weizhuojiaoStatus;
     final subtitle = platformStatus == null
         ? 'ID: ${user.uid}\n手机号: ${user.phone}'
         : 'ID: ${user.uid}\n手机号: ${user.phone}\n平台状态: $platformStatus';
@@ -760,7 +824,7 @@ class _AccountsPageState extends State<AccountsPage>
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if ((canLogout || canKetangpaiLogout) && !_isMultiSelectMode)
+          if (canLogout && !_isMultiSelectMode)
             IconButton(
               tooltip: '退出登录',
               icon: const Icon(Icons.logout),
@@ -1094,6 +1158,11 @@ class _AccountsPageState extends State<AccountsPage>
                           groupValue: _selectedPlatform,
                           onChanged: (PlatformType? value) async {
                             if (value != null) {
+                              if (value == PlatformType.weizhuojiao) {
+                                Navigator.pop(context);
+                                _showWeizhuojiaoComingSoonNotice();
+                                return;
+                              }
                               setState(() {
                                 _selectedPlatform = value;
                               });
@@ -1186,7 +1255,9 @@ class _AccountsPageState extends State<AccountsPage>
                       itemBuilder: (context, index) {
                         final user = _accounts[index];
                         final isSelected = _selectedAccounts.contains(user.uid);
-                        final isCurrent = user.uid == _currentAccountId;
+                        final isCurrent =
+                            user.uid == _currentAccountId &&
+                            _isAccountLoggedIn(user);
                         return Card(
                           elevation: isCurrent ? 3 : 1,
                           margin: const EdgeInsets.symmetric(
@@ -1228,6 +1299,12 @@ class _AccountsPageState extends State<AccountsPage>
           borderRadius: BorderRadius.circular(12.0),
         ),
         children: [
+          if (_selectedPlatform == PlatformType.weizhuojiao)
+            SpeedDialChild(
+              child: const Icon(Icons.block_outlined),
+              label: '微助教功能正在完善中',
+              onTap: _showWeizhuojiaoComingSoonNotice,
+            ),
           if (_selectedPlatform == PlatformType.tronclass)
             SpeedDialChild(
               child: const Icon(Icons.verified_user),
@@ -1259,30 +1336,26 @@ class _AccountsPageState extends State<AccountsPage>
                 );
               },
             ),
-          if (_selectedPlatform == PlatformType.weizhuojiao)
+          if (_selectedPlatform != PlatformType.tronclass &&
+              _selectedPlatform != PlatformType.weizhuojiao)
             SpeedDialChild(
-              child: const Icon(Icons.assistant_outlined),
-              label: '微助教工具',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const WeizhuojiaoPage()),
-                );
-              },
+              child: const Icon(Icons.qr_code),
+              label: '二维码登录',
+              onTap: _showQRCodeLoginDialog,
             ),
-          SpeedDialChild(
-            child: const Icon(Icons.qr_code),
-            label: '二维码登录',
-            onTap: _showQRCodeLoginDialog,
-          ),
-          SpeedDialChild(
-            child: const Icon(Icons.sms),
-            label: '验证码登录',
-            onTap: _navigateToCaptchaLogin,
-          ),
+          if (_selectedPlatform != PlatformType.tronclass &&
+              _selectedPlatform != PlatformType.weizhuojiao)
+            SpeedDialChild(
+              child: const Icon(Icons.sms),
+              label: '验证码登录',
+              onTap: _navigateToCaptchaLogin,
+            ),
+          if (_selectedPlatform != PlatformType.weizhuojiao)
           SpeedDialChild(
             child: const Icon(Icons.password),
-            label: '密码登录',
+            label: _selectedPlatform == PlatformType.tronclass
+                ? '账号密码登录'
+                : '密码登录',
             onTap: _navigateToPasswordLogin,
           ),
         ],

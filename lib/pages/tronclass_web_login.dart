@@ -48,6 +48,7 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
   bool _didAttemptMfaRecovery = false;
   bool _didAttemptPortalRecovery = false;
   bool _isPortalBootstrapping = false;
+  bool _summaryExpanded = false;
 
   bool get _isWindowsWebView => defaultTargetPlatform == TargetPlatform.windows;
 
@@ -669,15 +670,24 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
     );
   }
 
-  Widget _buildPortalSummary(BuildContext context, bool keyboardVisible) {
+  Widget _buildPortalSummary(
+    BuildContext context,
+    bool keyboardVisible,
+    bool compactLayout,
+  ) {
+    if (keyboardVisible) {
+      return const SizedBox.shrink();
+    }
+
     final modeText = _isPortalMode ? '门户预览' : '登录认证';
     final uaText = _isMobileMode ? '移动端 UA' : '桌面端 UA';
     final currentPage = _pageTitle?.trim().isNotEmpty == true
         ? _pageTitle!.trim()
         : (_currentUrl.isNotEmpty ? _currentUrl : '等待网页加载');
+    final expanded = !compactLayout || _summaryExpanded;
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      margin: EdgeInsets.fromLTRB(12, compactLayout ? 8 : 12, 12, 8),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -742,23 +752,40 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
                 ),
                 child: const Icon(Icons.language_outlined, color: Colors.white),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _buildInfoChip(label: '模式', value: modeText, color: Colors.white),
-              _buildInfoChip(label: 'UA', value: uaText, color: Colors.white),
-              _buildInfoChip(
-                label: '当前页',
-                value: currentPage,
-                color: Colors.white,
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: expanded ? '收起面板' : '展开面板',
+                onPressed: compactLayout
+                    ? () {
+                        setState(() {
+                          _summaryExpanded = !_summaryExpanded;
+                        });
+                      }
+                    : null,
+                icon: Icon(
+                  expanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  color: Colors.white,
+                ),
               ),
             ],
           ),
-          if (!keyboardVisible) ...[
+          if (expanded) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildInfoChip(label: '模式', value: modeText, color: Colors.white),
+                _buildInfoChip(label: 'UA', value: uaText, color: Colors.white),
+                _buildInfoChip(
+                  label: '当前页',
+                  value: currentPage,
+                  color: Colors.white,
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -789,6 +816,12 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
                 ),
               ],
             ),
+          ] else ...[
+            const SizedBox(height: 10),
+            Text(
+              '已折叠工具面板，点击右侧箭头可展开。',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
           ],
         ],
       ),
@@ -799,6 +832,8 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
   Widget build(BuildContext context) {
     final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
     final keyboardVisible = keyboardInset > 0;
+    final size = MediaQuery.of(context).size;
+    final compactLayout = size.height < 780 || size.width < 420;
 
     return PopScope(
       canPop: false,
@@ -868,7 +903,7 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
           child: Column(
             children: [
               if (_progress < 1) LinearProgressIndicator(value: _progress),
-              _buildPortalSummary(context, keyboardVisible),
+              _buildPortalSummary(context, keyboardVisible, compactLayout),
               Expanded(
                 child: _isLoading && !_isCompleting
                     ? const Center(child: CircularProgressIndicator())

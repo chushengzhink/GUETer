@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -725,17 +726,180 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Future<void> _applyRandomColorScheme() async {
+    if (_colorSchemeItems.length <= 1) {
+      return;
+    }
 
-  Widget _buildSectionTitle(IconData icon, String text) {
-    return Row(
-      children: [
-        Icon(icon, size: 18),
-        const SizedBox(width: 6),
-        Text(
-          text,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+    final candidates = _colorSchemeItems
+        .where((item) => item['id'] != _globalColorScheme)
+        .toList();
+    final picked = candidates[Random().nextInt(candidates.length)];
+    final id = picked['id'] as String;
+    final name = picked['name'] as String;
+
+    setState(() {
+      _globalColorScheme = id;
+    });
+    await _saveGlobalColorScheme();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已切换盲盒配色：$name')));
+  }
+
+  Future<void> _copySetupSummary() async {
+    final summary = StringBuffer()
+      ..writeln('GUETer 设置摘要')
+      ..writeln('- 主题: ${_appThemeMode.name}')
+      ..writeln('- 配色: $_globalColorScheme')
+      ..writeln('- 畅课门户策略: $_tronclassPortalOpenMode')
+      ..writeln('- 畅课重认证策略: $_tronclassReauthMode')
+      ..writeln('- 严格安全模式: ${_strictSecurityMode ? '开启' : '关闭'}')
+      ..writeln('- 网页登录自动返回: ${_autoCloseWebLogin ? '开启' : '关闭'}')
+      ..writeln('- 触感反馈: ${_enableHaptics ? '开启' : '关闭'}');
+
+    await Clipboard.setData(ClipboardData(text: summary.toString().trim()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('设置摘要已复制')));
+  }
+
+  Future<void> _showDisclaimerDialog() async {
+    const content =
+        '免责声明（综合常见模板）\n\n'
+        '1. 本应用仅供学习交流与技术研究使用，不得用于任何违法违规用途。\n\n'
+        '2. 本应用与学习通、雨课堂、畅课、课堂派、微助教等平台及其所属机构不存在官方合作关系。\n\n'
+        '3. 用户应确保本人已获得对应平台账号与课程的合法使用授权，因个人操作导致的账号风险、数据损失或其他后果由用户自行承担。\n\n'
+        '4. 本应用不承诺服务连续可用，不对因网络波动、平台策略调整、接口变更、设备兼容问题导致的功能异常承担责任。\n\n'
+        '5. 本应用不主动收集与留存不必要个人敏感信息，用户仍应妥善保管自身账号密码与设备权限。\n\n'
+        '6. 若你所在学校、平台方或权利人认为相关功能或展示内容存在不当，请及时联系我们处理。\n\n'
+        '如有侵权请联系邮箱3177401522a@gmai.com';
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('免责声明'),
+        content: const SizedBox(
+          width: 460,
+          child: SingleChildScrollView(
+            child: Text(content, style: TextStyle(fontSize: 13, height: 1.5)),
+          ),
         ),
-      ],
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(const ClipboardData(text: content));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('免责声明已复制')),
+              );
+            },
+            child: const Text('复制全文'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('我已知晓'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _generateRandomPassword({int length = 16}) {
+    const chars =
+        'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%^&*_+-=';
+    final rand = Random.secure();
+    return List.generate(length, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+
+  Future<void> _showPasswordGeneratorDialog() async {
+    String generated = _generateRandomPassword(length: 16);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setInnerState) => AlertDialog(
+          title: const Text('随机密码生成器'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('通用小工具：可用于网站、论坛、邮箱等密码草案。'),
+              const SizedBox(height: 10),
+              SelectableText(
+                generated,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton(
+                    onPressed: () {
+                      setInnerState(() {
+                        generated = _generateRandomPassword(length: 12);
+                      });
+                    },
+                    child: const Text('12位'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () {
+                      setInnerState(() {
+                        generated = _generateRandomPassword(length: 16);
+                      });
+                    },
+                    child: const Text('16位'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () {
+                      setInnerState(() {
+                        generated = _generateRandomPassword(length: 24);
+                      });
+                    },
+                    child: const Text('24位'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('关闭'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: generated));
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('密码已复制到剪贴板')),
+                );
+              },
+              icon: const Icon(Icons.copy_all_outlined),
+              label: const Text('复制'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFoldSection({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required List<Widget> children,
+  }) {
+    return Card(
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        maintainState: true,
+        leading: Icon(icon),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        children: children,
+      ),
     );
   }
 
@@ -785,391 +949,478 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const SizedBox(height: 14),
-          _buildSectionTitle(Icons.tune, '常用功能'),
-          const SizedBox(height: 8),
-          SwitchListTile(
-            value: _autoCheckUpdate,
-            title: const Text('自动检查更新'),
-            subtitle: const Text('启动后自动检查是否有新版本'),
-            onChanged: (v) async {
-              setState(() => _autoCheckUpdate = v);
-              await AppSettings.setBool(AppSettings.autoCheckUpdateKey, v);
-            },
-          ),
-          SwitchListTile(
-            value: _autoCloseWebLogin,
-            title: const Text('网页登录成功后自动返回'),
-            subtitle: const Text('畅课网页登录拿到会话后自动关闭页面'),
-            onChanged: (v) async {
-              setState(() => _autoCloseWebLogin = v);
-              await AppSettings.setBool(AppSettings.autoCloseWebLoginKey, v);
-            },
-          ),
-          const SizedBox(height: 6),
-          DropdownButtonFormField<ThemeMode>(
-            key: ValueKey('theme-mode-${_appThemeMode.name}'),
-            initialValue: _appThemeMode,
-            decoration: const InputDecoration(
-              labelText: '主题模式',
-              border: OutlineInputBorder(),
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: ThemeMode.system,
-                child: Text('跟随系统'),
+          Card(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: ListTile(
+              leading: Icon(
+                Icons.warning_amber_rounded,
+                color: Theme.of(context).colorScheme.onErrorContainer,
               ),
-              DropdownMenuItem(value: ThemeMode.light, child: Text('浅色')),
-              DropdownMenuItem(
-                value: ThemeMode.dark,
-                child: Text('深色护眼'),
-              ),
-            ],
-            onChanged: (mode) async {
-              if (mode == null) return;
-              setState(() => _appThemeMode = mode);
-              await AppSettings.setThemeMode(mode);
-            },
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '畅课门户打开方式（默认推荐）',
-                  style: TextStyle(fontWeight: FontWeight.w600),
+              title: Text(
+                '免责声明（请先阅读）',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: Theme.of(context).colorScheme.onErrorContainer,
                 ),
               ),
-              TextButton(
-                onPressed: _showPortalModeHelpDialog,
-                child: const Text('了解详情'),
+              subtitle: Text(
+                '本应用仅供学习交流，点击查看完整条款与侵权联系邮箱。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
               ),
-            ],
-          ),
-          DropdownButtonFormField<String>(
-            key: ValueKey('portal-mode-$_tronclassPortalOpenMode'),
-            initialValue: _tronclassPortalOpenMode,
-            decoration: const InputDecoration(
-              labelText: '畅课门户打开方式',
-              border: OutlineInputBorder(),
+              trailing: Icon(
+                Icons.chevron_right,
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+              onTap: _showDisclaimerDialog,
             ),
-            items: const [
-              DropdownMenuItem(
-                value: AppSettings.portalOpenModeExternalPreferred,
-                child: Text('系统浏览器优先（推荐）'),
-              ),
-              DropdownMenuItem(
-                value: AppSettings.portalOpenModeEmbeddedPreferred,
-                child: Text('内置门户优先'),
-              ),
-              DropdownMenuItem(
-                value: AppSettings.portalOpenModeAskEveryTime,
-                child: Text('每次打开都询问'),
-              ),
-            ],
-            onChanged: (v) async {
-              if (v == null) return;
-              setState(() => _tronclassPortalOpenMode = v);
-              await AppSettings.setString(AppSettings.tronclassPortalOpenModeKey, v);
-            },
           ),
           const SizedBox(height: 10),
-          Row(
+          _buildFoldSection(
+            icon: Icons.tune,
+            title: '常用设置',
+            subtitle: '更新、触感、网页登录返回、主题模式',
             children: [
-              const Expanded(
-                child: Text(
-                  '畅课一键重新认证策略（默认推荐）',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
+              SwitchListTile(
+                value: _autoCheckUpdate,
+                title: const Text('自动检查更新'),
+                subtitle: const Text('启动后自动检查是否有新版本'),
+                onChanged: (v) async {
+                  setState(() => _autoCheckUpdate = v);
+                  await AppSettings.setBool(AppSettings.autoCheckUpdateKey, v);
+                },
               ),
-              TextButton(
-                onPressed: _showReauthModeHelpDialog,
-                child: const Text('了解详情'),
+              SwitchListTile(
+                value: _enableHaptics,
+                title: const Text('启用触感反馈'),
+                subtitle: const Text('按钮点击时使用轻微触感反馈（后续页面逐步接入）'),
+                onChanged: (v) async {
+                  setState(() => _enableHaptics = v);
+                  await AppSettings.setBool(AppSettings.enableHapticsKey, v);
+                },
               ),
-            ],
-          ),
-          DropdownButtonFormField<String>(
-            key: ValueKey('reauth-mode-$_tronclassReauthMode'),
-            initialValue: _tronclassReauthMode,
-            decoration: const InputDecoration(
-              labelText: '畅课一键重新认证策略',
-              border: OutlineInputBorder(),
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: AppSettings.reauthModeReuseSessionFirst,
-                child: Text('优先复用已有会话（少验证码）'),
+              SwitchListTile(
+                value: _autoCloseWebLogin,
+                title: const Text('网页登录成功后自动返回'),
+                subtitle: const Text('畅课网页登录拿到会话后自动关闭页面'),
+                onChanged: (v) async {
+                  setState(() => _autoCloseWebLogin = v);
+                  await AppSettings.setBool(AppSettings.autoCloseWebLoginKey, v);
+                },
               ),
-              DropdownMenuItem(
-                value: AppSettings.reauthModeForceWebReauth,
-                child: Text('每次强制网页重新认证'),
-              ),
-              DropdownMenuItem(
-                value: AppSettings.reauthModeExternalBrowserOnly,
-                child: Text('直接系统浏览器认证'),
-              ),
-            ],
-            onChanged: (v) async {
-              if (v == null) return;
-              setState(() => _tronclassReauthMode = v);
-              await AppSettings.setString(AppSettings.tronclassReauthModeKey, v);
-            },
-          ),
-          const SizedBox(height: 14),
-          _buildSectionTitle(Icons.bolt_outlined, '畅课轻量功能'),
-          const SizedBox(height: 8),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.restart_alt),
-                  title: const Text('恢复推荐策略'),
-                  subtitle: const Text('门户改为系统浏览器优先，重新认证改为会话复用优先'),
-                  onTap: _restoreRecommendedTronclassModes,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.open_in_browser_outlined),
-                  title: const Text('快速打开畅课门户'),
-                  subtitle: const Text('使用系统浏览器打开当前门户地址'),
-                  onTap: _openTronclassPortalQuickly,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.copy_all_outlined),
-                  title: const Text('复制当前门户地址'),
-                  subtitle: Text(PlatformManager().tronclassBaseUrl),
-                  onTap: _copyTronclassPortalUrl,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          _buildSectionTitle(Icons.link_outlined, '平台地址工具'),
-          const SizedBox(height: 8),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.verified_outlined),
-                  title: const Text('检测当前畅课地址'),
-                  subtitle: Text(PlatformManager().tronclassBaseUrl),
-                  onTap: _checkCurrentTronclassAddress,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.restore_outlined),
-                  title: const Text('恢复畅课默认地址'),
-                  subtitle: const Text('https://courses.guet.edu.cn'),
-                  onTap: _resetTronclassBaseUrlToDefault,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.restore_outlined),
-                  title: const Text('恢复课堂派默认地址'),
-                  subtitle: const Text('https://openapiv5.ketangpai.com'),
-                  onTap: _resetKetangpaiBaseUrlToDefault,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          _buildSectionTitle(Icons.health_and_safety_outlined, '平台健康检查'),
-          const SizedBox(height: 8),
-          Card(
-            child: ListTile(
-              leading: _isCheckingPlatformHealth
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2.4),
-                    )
-                  : const Icon(Icons.monitor_heart_outlined),
-              title: const Text('检查四大平台连通性'),
-              subtitle: const Text('学习通、雨课堂、畅课、课堂派'),
-              trailing: _lastPlatformHealthReport == null
-                  ? const Icon(Icons.chevron_right)
-                  : IconButton(
-                      tooltip: '复制上次报告',
-                      icon: const Icon(Icons.copy_all_outlined),
-                      onPressed: () {
-                        final text = _lastPlatformHealthReport;
-                        if (text == null || text.isEmpty) return;
-                        Clipboard.setData(ClipboardData(text: text));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('上次检查报告已复制')),
-                        );
-                      },
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                child: DropdownButtonFormField<ThemeMode>(
+                  key: ValueKey('theme-mode-${_appThemeMode.name}'),
+                  initialValue: _appThemeMode,
+                  decoration: const InputDecoration(
+                    labelText: '主题模式',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: ThemeMode.system,
+                      child: Text('跟随系统'),
                     ),
-              enabled: !_isCheckingPlatformHealth,
-              onTap: _runPlatformHealthCheck,
-            ),
-          ),
-          const SizedBox(height: 14),
-          _buildSectionTitle(Icons.handyman_outlined, '诊断与修复（同学版）'),
-          const SizedBox(height: 8),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.assignment_outlined),
-                  title: const Text('生成诊断包并复制'),
-                  subtitle: const Text('包含设置快照、账号统计、权限状态'),
-                  onTap: _copyDiagnosticPack,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.healing_outlined),
-                  title: const Text('一键修复常见问题'),
-                  subtitle: const Text('恢复推荐策略与默认平台地址'),
-                  onTap: _quickFixCommonIssues,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.fact_check_outlined),
-                  title: const Text('账号体检'),
-                  subtitle: const Text('检查四平台账号可用状态'),
-                  onTap: _runAccountHealthCheck,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.rule_folder_outlined),
-                  title: const Text('批量签到预检'),
-                  subtitle: const Text('检查账号、权限、网络是否就绪'),
-                  onTap: _runBatchSignPrecheck,
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  value: _showBeginnerGuide,
-                  title: const Text('启用新手引导'),
-                  subtitle: const Text('可在下方随时查看引导说明'),
-                  onChanged: (v) async {
-                    setState(() => _showBeginnerGuide = v);
-                    await AppSettings.setBool(AppSettings.showBeginnerGuideKey, v);
+                    DropdownMenuItem(value: ThemeMode.light, child: Text('浅色')),
+                    DropdownMenuItem(
+                      value: ThemeMode.dark,
+                      child: Text('深色护眼'),
+                    ),
+                  ],
+                  onChanged: (mode) async {
+                    if (mode == null) return;
+                    setState(() => _appThemeMode = mode);
+                    await AppSettings.setThemeMode(mode);
                   },
                 ),
-                ListTile(
-                  leading: const Icon(Icons.school_outlined),
-                  title: const Text('查看新手引导'),
-                  subtitle: const Text('首次使用与常见排障建议'),
-                  onTap: _showBeginnerGuideDialog,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildFoldSection(
+            icon: Icons.bolt_outlined,
+            title: '畅课策略与入口',
+            subtitle: '门户打开策略、一键重认证策略与快捷入口',
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '畅课门户打开方式（默认推荐）',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _showPortalModeHelpDialog,
+                      child: const Text('了解详情'),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('portal-mode-$_tronclassPortalOpenMode'),
+                  initialValue: _tronclassPortalOpenMode,
+                  decoration: const InputDecoration(
+                    labelText: '畅课门户打开方式',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: AppSettings.portalOpenModeExternalPreferred,
+                      child: Text('系统浏览器优先（推荐）'),
+                    ),
+                    DropdownMenuItem(
+                      value: AppSettings.portalOpenModeEmbeddedPreferred,
+                      child: Text('内置门户优先'),
+                    ),
+                    DropdownMenuItem(
+                      value: AppSettings.portalOpenModeAskEveryTime,
+                      child: Text('每次打开都询问'),
+                    ),
+                  ],
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    setState(() => _tronclassPortalOpenMode = v);
+                    await AppSettings.setString(
+                      AppSettings.tronclassPortalOpenModeKey,
+                      v,
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '畅课一键重新认证策略（默认推荐）',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _showReauthModeHelpDialog,
+                      child: const Text('了解详情'),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('reauth-mode-$_tronclassReauthMode'),
+                  initialValue: _tronclassReauthMode,
+                  decoration: const InputDecoration(
+                    labelText: '畅课一键重新认证策略',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: AppSettings.reauthModeReuseSessionFirst,
+                      child: Text('优先复用已有会话（少验证码）'),
+                    ),
+                    DropdownMenuItem(
+                      value: AppSettings.reauthModeForceWebReauth,
+                      child: Text('每次强制网页重新认证'),
+                    ),
+                    DropdownMenuItem(
+                      value: AppSettings.reauthModeExternalBrowserOnly,
+                      child: Text('直接系统浏览器认证'),
+                    ),
+                  ],
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    setState(() => _tronclassReauthMode = v);
+                    await AppSettings.setString(
+                      AppSettings.tronclassReauthModeKey,
+                      v,
+                    );
+                  },
+                ),
+              ),
+              const Divider(height: 18),
+              ListTile(
+                leading: const Icon(Icons.restart_alt),
+                title: const Text('恢复推荐策略'),
+                subtitle: const Text('门户改为系统浏览器优先，重新认证改为会话复用优先'),
+                onTap: _restoreRecommendedTronclassModes,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.open_in_browser_outlined),
+                title: const Text('快速打开畅课门户'),
+                subtitle: const Text('使用系统浏览器打开当前门户地址'),
+                onTap: _openTronclassPortalQuickly,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.copy_all_outlined),
+                title: const Text('复制当前门户地址'),
+                subtitle: Text(PlatformManager().tronclassBaseUrl),
+                onTap: _copyTronclassPortalUrl,
+              ),
+            ],
           ),
-          SwitchListTile(
-            value: _enableHaptics,
-            title: const Text('启用触感反馈'),
-            subtitle: const Text('按钮点击时使用轻微触感反馈（后续页面逐步接入）'),
-            onChanged: (v) async {
-              setState(() => _enableHaptics = v);
-              await AppSettings.setBool(AppSettings.enableHapticsKey, v);
-            },
+          const SizedBox(height: 10),
+          _buildFoldSection(
+            icon: Icons.link_outlined,
+            title: '平台地址工具',
+            subtitle: '检查并恢复平台地址',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.verified_outlined),
+                title: const Text('检测当前畅课地址'),
+                subtitle: Text(PlatformManager().tronclassBaseUrl),
+                onTap: _checkCurrentTronclassAddress,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.restore_outlined),
+                title: const Text('恢复畅课默认地址'),
+                subtitle: const Text('https://courses.guet.edu.cn'),
+                onTap: _resetTronclassBaseUrlToDefault,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.restore_outlined),
+                title: const Text('恢复课堂派默认地址'),
+                subtitle: const Text('https://openapiv5.ketangpai.com'),
+                onTap: _resetKetangpaiBaseUrlToDefault,
+              ),
+            ],
           ),
-          SwitchListTile(
-            value: _strictSecurityMode,
-            title: const Text('严格安全模式'),
-            subtitle: const Text('觉得可能请求过快的同学可以开启严格安全模式'),
-            onChanged: (v) async {
-              setState(() => _strictSecurityMode = v);
-              await AppSettings.setBool(AppSettings.strictSecurityModeKey, v);
-            },
+          const SizedBox(height: 10),
+          _buildFoldSection(
+            icon: Icons.health_and_safety_outlined,
+            title: '检查、诊断与修复',
+            subtitle: '平台体检、报告导出与一键修复',
+            children: [
+              ListTile(
+                leading: _isCheckingPlatformHealth
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2.4),
+                      )
+                    : const Icon(Icons.monitor_heart_outlined),
+                title: const Text('检查四大平台连通性'),
+                subtitle: const Text('学习通、雨课堂、畅课、课堂派'),
+                trailing: _lastPlatformHealthReport == null
+                    ? const Icon(Icons.chevron_right)
+                    : IconButton(
+                        tooltip: '复制上次报告',
+                        icon: const Icon(Icons.copy_all_outlined),
+                        onPressed: () {
+                          final text = _lastPlatformHealthReport;
+                          if (text == null || text.isEmpty) return;
+                          Clipboard.setData(ClipboardData(text: text));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('上次检查报告已复制')),
+                          );
+                        },
+                      ),
+                enabled: !_isCheckingPlatformHealth,
+                onTap: _runPlatformHealthCheck,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.assignment_outlined),
+                title: const Text('生成诊断包并复制'),
+                subtitle: const Text('包含设置快照、账号统计、权限状态'),
+                onTap: _copyDiagnosticPack,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.healing_outlined),
+                title: const Text('一键修复常见问题'),
+                subtitle: const Text('恢复推荐策略与默认平台地址'),
+                onTap: _quickFixCommonIssues,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.fact_check_outlined),
+                title: const Text('账号体检'),
+                subtitle: const Text('检查四平台账号可用状态'),
+                onTap: _runAccountHealthCheck,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.rule_folder_outlined),
+                title: const Text('批量签到预检'),
+                subtitle: const Text('检查账号、权限、网络是否就绪'),
+                onTap: _runBatchSignPrecheck,
+              ),
+              const Divider(height: 1),
+              SwitchListTile(
+                value: _showBeginnerGuide,
+                title: const Text('启用新手引导'),
+                subtitle: const Text('可在下方随时查看引导说明'),
+                onChanged: (v) async {
+                  setState(() => _showBeginnerGuide = v);
+                  await AppSettings.setBool(AppSettings.showBeginnerGuideKey, v);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.school_outlined),
+                title: const Text('查看新手引导'),
+                subtitle: const Text('首次使用与常见排障建议'),
+                onTap: _showBeginnerGuideDialog,
+              ),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Row(
-              children: [
-                Text(
-                  '请求安全级别：',
+          const SizedBox(height: 10),
+          _buildFoldSection(
+            icon: Icons.shield_outlined,
+            title: '安全与请求节奏',
+            subtitle: '请求安全级别控制',
+            children: [
+              SwitchListTile(
+                value: _strictSecurityMode,
+                title: const Text('严格安全模式'),
+                subtitle: const Text('觉得可能请求过快的同学可以开启严格安全模式'),
+                onChanged: (v) async {
+                  setState(() => _strictSecurityMode = v);
+                  await AppSettings.setBool(AppSettings.strictSecurityModeKey, v);
+                },
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Row(
+                  children: [
+                    Text(
+                      '请求安全级别：',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.75),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text(_strictSecurityMode ? '严格' : '标准'),
+                      avatar: Icon(
+                        _strictSecurityMode
+                            ? Icons.shield
+                            : Icons.shield_outlined,
+                        size: 16,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+                child: Text(
+                  _strictSecurityMode
+                      ? '当前模式：严格安全模式（签到类请求会额外降频）'
+                      : '当前模式：标准（默认）',
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(
                       context,
-                    ).colorScheme.onSurface.withValues(alpha: 0.75),
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Chip(
-                  visualDensity: VisualDensity.compact,
-                  label: Text(_strictSecurityMode ? '严格' : '标准'),
-                  avatar: Icon(
-                    _strictSecurityMode ? Icons.shield : Icons.shield_outlined,
-                    size: 16,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 4),
-            child: Text(
-              _strictSecurityMode ? '当前模式：严格安全模式（签到类请求会额外降频）' : '当前模式：标准（默认）',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(
-                  context,
-                ).colorScheme.onSurface.withValues(alpha: 0.7),
               ),
-            ),
+            ],
           ),
-          const SizedBox(height: 16),
-          _buildSectionTitle(Icons.palette_outlined, '全局配色方案'),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: _colorSchemeItems.map((item) {
-              final id = item['id'] as String;
-              final selected = _globalColorScheme == id;
-              final primary = item['primary'] as Color;
-              final secondary = item['secondary'] as Color;
-              return InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () async {
-                  setState(() {
-                    _globalColorScheme = id;
-                  });
-                  await _saveGlobalColorScheme();
-                },
-                child: Container(
-                  width: 150,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: selected ? primary : Colors.black26,
-                      width: selected ? 2 : 1,
-                    ),
-                    gradient: LinearGradient(
-                      colors: [
-                        primary.withValues(alpha: 0.95),
-                        secondary.withValues(alpha: 0.95),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          item['name'] as String,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
+          const SizedBox(height: 10),
+          _buildFoldSection(
+            icon: Icons.palette_outlined,
+            title: '外观与趣味功能',
+            subtitle: '全局配色、盲盒配色、设置摘要复制、通用小工具',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.casino_outlined),
+                title: const Text('盲盒随机配色'),
+                subtitle: const Text('随机切换到一套不同的全局配色'),
+                onTap: _applyRandomColorScheme,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.password_outlined),
+                title: const Text('随机密码生成器'),
+                subtitle: const Text('生成常用强密码并一键复制'),
+                onTap: _showPasswordGeneratorDialog,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('复制当前设置摘要'),
+                subtitle: const Text('快速分享当前关键设置组合'),
+                onTap: _copySetupSummary,
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: _colorSchemeItems.map((item) {
+                    final id = item['id'] as String;
+                    final selected = _globalColorScheme == id;
+                    final primary = item['primary'] as Color;
+                    final secondary = item['secondary'] as Color;
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () async {
+                        setState(() {
+                          _globalColorScheme = id;
+                        });
+                        await _saveGlobalColorScheme();
+                      },
+                      child: Container(
+                        width: 150,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: selected ? primary : Colors.black26,
+                            width: selected ? 2 : 1,
+                          ),
+                          gradient: LinearGradient(
+                            colors: [
+                              primary.withValues(alpha: 0.95),
+                              secondary.withValues(alpha: 0.95),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
                           ),
                         ),
-                      ),
-                      if (selected)
-                        const Icon(
-                          Icons.check_circle,
-                          color: Colors.white,
-                          size: 18,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                item['name'] as String,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            if (selected)
+                              const Icon(
+                                Icons.check_circle,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                          ],
                         ),
-                    ],
-                  ),
+                      ),
+                    );
+                  }).toList(),
                 ),
-              );
-            }).toList(),
+              ),
+            ],
           ),
         ],
       ),

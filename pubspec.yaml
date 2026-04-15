@@ -72,6 +72,7 @@ dependencies:
       ref: master
   flutter_html: ^3.0.0
   html: ^0.15.6
+  syncfusion_flutter_pdfviewer: ^31.1.21
   flutter_localizations:
     sdk: flutter
 
@@ -114,6 +115,7 @@ flutter:
   assets:
     - images/placeholder.png
     - images/logo.png
+    - pdf/上海交通大学生存手册.pdf
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

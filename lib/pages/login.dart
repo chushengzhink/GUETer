@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_tencent_captcha/flutter_tencent_captcha.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api/login.dart';
@@ -9,7 +11,9 @@ import '../models/user.dart';
 import '../platform.dart';
 import '../session/account.dart';
 import '../session/app_settings.dart';
+import '../session/cookie.dart';
 import '../session/tronclass_auth.dart';
+import '../utils/encrypt.dart';
 import 'tronclass_web_login.dart';
 
 class QRCodeLoginState {
@@ -17,6 +21,7 @@ class QRCodeLoginState {
   String? _uuid;
   String? _enc;
   String? _state;
+  final _isChaoxing = PlatformManager().isChaoxing;
 
   bool isLoading = false;
   bool isRefreshing = false;
@@ -27,6 +32,17 @@ class QRCodeLoginState {
   Future<bool> initialize() async {
     isLoading = true;
     try {
+      if (!_isChaoxing) {
+        final data = await RCLoginApi.getQRCodeUuid();
+        if (data == null || data.length < 2) {
+          return false;
+        }
+        _uuid = data[0];
+        _state = data[1];
+        qrImageUrl = 'https://open.weixin.qq.com/connect/qrcode/$_uuid';
+        return true;
+      }
+
       if (PlatformManager().isChaoxing) {
         final qrData = await CXLoginApi.getQRCodeData();
         final uuid = qrData?['uuid']?.toString();
@@ -36,19 +52,7 @@ class QRCodeLoginState {
         }
         _uuid = uuid;
         _enc = enc;
-        qrImageUrl = 'https://passport2.chaoxing.com/createqr?uuid=$uuid';
-        return true;
-      }
-
-      if (PlatformManager().isRainClassroom) {
-        final data = await RCLoginApi.getQRCodeUuid();
-        if (data == null || data.length < 2) {
-          return false;
-        }
-        _uuid = data[0];
-        _state = data[1];
-        qrImageUrl =
-            'https://lp.open.weixin.qq.com/connect/qrcode/${_uuid!}?dark=000000&light=ffffff';
+        qrImageUrl = 'https://passport2.chaoxing.com/createqr?uuid=$uuid&fid=-1';
         return true;
       }
 
@@ -59,43 +63,91 @@ class QRCodeLoginState {
   }
 
   Future<void> refreshQRCode() async {
-    dispose();
-    isLoginActive = true;
-    await initialize();
+    if (isRefreshing) return;
+
+    isRefreshing = true;
+    try {
+      if (!_isChaoxing) {
+        final data = await RCLoginApi.getQRCodeUuid();
+        if (data != null && data.length == 2) {
+          _uuid = data[0];
+          _state = data[1];
+          qrImageUrl = 'https://open.weixin.qq.com/connect/qrcode/$_uuid';
+        }
+      } else {
+        final qrData = await CXLoginApi.getQRCodeData();
+        if (qrData != null) {
+          _uuid = qrData['uuid']?.toString();
+          _enc = qrData['enc']?.toString();
+          qrImageUrl = 'https://passport2.chaoxing.com/createqr?uuid=$_uuid&fid=-1';
+        }
+      }
+    } catch (_) {
+      // keep old QR if refresh fails
+    } finally {
+      isRefreshing = false;
+    }
   }
 
   void startPolling(Future<void> Function(bool success) onResult) {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      if (!isLoginActive) {
+    if (!_isChaoxing) {
+      () async {
+        while (isLoginActive && _uuid != null && _state != null) {
+          try {
+            final status = await RCLoginApi.checkQRAuthStatus(_uuid!, _state!);
+            if (status == '405') {
+              isLoginActive = false;
+              await onResult(true);
+              return;
+            } else if (status == '402') {
+              await refreshQRCode();
+              if (!isLoginActive || _uuid == null) {
+                return;
+              }
+            }
+          } catch (_) {
+            // keep polling
+          }
+
+          if (!isLoginActive) {
+            return;
+          }
+          await Future.delayed(const Duration(seconds: 5));
+        }
+      }();
+      return;
+    }
+
+    _pollTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      if (!isLoginActive || _uuid == null || _enc == null) {
         timer.cancel();
         return;
       }
 
       try {
-        bool success = false;
-        if (PlatformManager().isChaoxing && _uuid != null && _enc != null) {
-          final result = await CXLoginApi.checkQRAuthStatus(_uuid!, _enc!);
-          success = result?['status'] == true || result?['result'] == 1;
-        } else if (PlatformManager().isRainClassroom &&
-            _uuid != null &&
-            _state != null) {
-          final status = await RCLoginApi.checkQRAuthStatus(_uuid!, _state!);
-          success = status == '405';
-        }
-
-        if (success) {
-          isLoginActive = false;
-          timer.cancel();
-          await onResult(true);
+        final result = await CXLoginApi.checkQRAuthStatus(_uuid!, _enc!);
+        if (result != null) {
+          if (result['status'] == true || result['result'] == 1) {
+            timer.cancel();
+            isLoginActive = false;
+            await onResult(true);
+          } else if (result['type']?.toString() == '2') {
+            timer.cancel();
+            await refreshQRCode();
+            if (isLoginActive) {
+              startPolling(onResult);
+            }
+          }
         }
       } catch (_) {
-        // keep polling until timeout or success
+        // keep polling
       }
     });
   }
 
   void dispose() {
+    isLoginActive = false;
     _pollTimer?.cancel();
     _pollTimer = null;
   }
@@ -103,10 +155,11 @@ class QRCodeLoginState {
 
 Future<bool> handleLoginSuccess(BuildContext context) async {
   try {
-    User? user;
+    CookieManager.isLoggingIn = true;
+    late User? user;
     if (PlatformManager().isChaoxing) {
       user = await CXLoginApi.getUserInfo();
-    } else if (PlatformManager().isRainClassroom) {
+    } else {
       user = await RCLoginApi.getUserInfo();
     }
 
@@ -114,20 +167,29 @@ Future<bool> handleLoginSuccess(BuildContext context) async {
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('扫码后未获取到用户信息')));
+        ).showSnackBar(const SnackBar(content: Text('获取用户信息失败')));
       }
+      CookieManager.isLoggingIn = false;
       return false;
     }
 
     await AccountManager.addAccount(user);
-    await AccountManager.setCurrentSession(user.uid);
-    return true;
-  } catch (e) {
+
     if (context.mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('扫码登录失败：$e')));
+      ).showSnackBar(SnackBar(content: Text('${user.name} 登录成功')));
     }
+    CookieManager.isLoggingIn = false;
+    return true;
+  } catch (e) {
+    debugPrint('处理登录成功失败：$e');
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('登录处理失败')));
+    }
+    CookieManager.isLoggingIn = false;
     return false;
   }
 }
@@ -150,10 +212,35 @@ class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
   bool _showPassword = false;
   String _currentLoginType = '1'; // 1: 密码, 2: 验证码
+  String? _ticket;
+  String? _randstr;
+
+  bool get _supportsTencentCaptcha {
+    if (kIsWeb) {
+      return false;
+    }
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+  }
+
+  String _normalizeMainlandPhone(String input) {
+    var value = input.trim().replaceAll(RegExp(r'\s+'), '');
+    if (value.startsWith('+86')) {
+      value = value.substring(3);
+    }
+    if (value.startsWith('86') && value.length > 11) {
+      value = value.substring(2);
+    }
+    return value;
+  }
 
   @override
   void initState() {
     super.initState();
+    if (PlatformManager().isRainClassroom && _supportsTencentCaptcha) {
+      TencentCaptcha.init(Constant.tCaptchaAppId);
+    }
+
     if (PlatformManager().isTronclass) {
       _currentLoginType = '1';
       return;
@@ -241,12 +328,16 @@ class _LoginPageState extends State<LoginPage> {
       barrierDismissible: false,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('请输入动态验证码'),
+          title: const Text('请输入短信动态验证码'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(tip?.isNotEmpty == true ? tip! : '已发送动态码，请输入短信验证码'),
+              Text(
+                tip?.isNotEmpty == true
+                    ? tip!
+                    : '验证码已发送，请输入收到的短信动态码',
+              ),
               if (mobileHint != null && mobileHint.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
@@ -258,8 +349,8 @@ class _LoginPageState extends State<LoginPage> {
                 autofocus: true,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
-                  labelText: '动态码',
-                  hintText: '请输入短信动态码',
+                  labelText: '短信动态码',
+                  hintText: '请输入手机收到的验证码',
                 ),
                 onSubmitted: (_) {
                   Navigator.of(dialogContext).pop(codeController.text.trim());
@@ -270,7 +361,7 @@ class _LoginPageState extends State<LoginPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('取消'),
+              child: const Text('暂不验证'),
             ),
             FilledButton(
               onPressed: () =>
@@ -284,6 +375,74 @@ class _LoginPageState extends State<LoginPage> {
 
     codeController.dispose();
     return result;
+  }
+
+  Future<void> _showTronclassDebugDialog({
+    required String message,
+    String? debug,
+  }) async {
+    if (!mounted) return;
+    final detail = (debug?.trim().isNotEmpty == true)
+        ? debug!.trim()
+        : '暂无详细链路日志';
+    final merged = '错误信息:\n$message\n\n链路日志:\n$detail';
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('畅课登录诊断信息'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: SelectableText(merged),
+            ),
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: merged));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('诊断信息已复制')),
+                );
+              },
+              icon: const Icon(Icons.copy_all_outlined),
+              label: const Text('复制'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('我知道了'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<bool> _completeTronclassLoginWithSession({
+    required String username,
+    required String sessionId,
+  }) async {
+    final user =
+        await TCLoginApi.getUserInfo(fallbackUid: username) ??
+        User(
+          uid: username,
+          name: username,
+          avatar: '',
+          phone: '未知手机号',
+          school: '桂林电子科技大学',
+          platform: 'tronclass',
+        );
+
+    await AccountManager.addAccount(user);
+    await AccountManager.setCurrentSession(user.uid);
+    await TronclassAuthManager.setSessionIdForUser(user.uid, sessionId);
+    await TCLoginApi.bootstrapPortalSession(sessionId: sessionId);
+
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('畅课登录成功')));
+    Navigator.pop(context, true);
+    return true;
   }
 
   Future<String?> _showKetangpaiCaptchaDialog(Uint8List imageBytes) async {
@@ -335,7 +494,32 @@ class _LoginPageState extends State<LoginPage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('请输入账号')));
+        ).showSnackBar(const SnackBar(content: Text('请输入手机号')));
+      }
+      return;
+    }
+
+    if (PlatformManager().isRainClassroom && _supportsTencentCaptcha) {
+      final captchaResult = await _showTencentCaptcha();
+      if (captchaResult != true) {
+        return;
+      }
+
+      if (_ticket == null || _randstr == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('验证码验证失败，请重试')));
+        }
+        return;
+      }
+    } else if (PlatformManager().isRainClassroom) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('当前运行平台不支持雨课堂验证码验证，请在 Android/iOS 上使用验证码登录'),
+          ),
+        );
       }
       return;
     }
@@ -343,12 +527,21 @@ class _LoginPageState extends State<LoginPage> {
     try {
       if (PlatformManager().isChaoxing) {
         final result = await CXLoginApi.sendCaptcha(account);
-        final ok = result?['result'] == 1 || result?['status'] == true;
+        if (result == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('发送验证码失败，请重试')),
+            );
+          }
+          return;
+        }
+
+        final ok = result['status'] == true;
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              ok ? '验证码已发送' : (result?['msg'] ?? '发送失败').toString(),
+              ok ? '验证码已发送' : (result['mes'] ?? '发送验证码失败').toString(),
             ),
           ),
         );
@@ -356,15 +549,40 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       if (PlatformManager().isRainClassroom) {
-        final result = await RCLoginApi.sendCaptcha(account, '', '');
-        final code = (result?['code'] ?? -1).toString();
+        final phone = _normalizeMainlandPhone(account);
+        if (!RegExp(r'^1\d{10}$').hasMatch(phone)) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('雨课堂验证码登录仅支持11位手机号')),
+            );
+          }
+          return;
+        }
+
+        // Terminal diagnostics for captcha send failures.
+        debugPrint('[RC][sendCaptcha][request] phone=$phone ticketLen=${_ticket?.length ?? 0} randLen=${_randstr?.length ?? 0}');
+
+        final result = await RCLoginApi.sendCaptcha(phone, _ticket!, _randstr!);
+        if (result == null) {
+          debugPrint('[RC][sendCaptcha][response] null result');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('发送验证码失败，请重试')),
+            );
+          }
+          return;
+        }
+
+        debugPrint('[RC][sendCaptcha][response] $result');
+
+        final code = (result['code'] ?? -1).toString();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               code == '0'
                   ? '验证码已发送'
-                  : (result?['message'] ?? result?['msg'] ?? '发送失败').toString(),
+                  : (result['msg'] ?? '发送验证码失败').toString(),
             ),
           ),
         );
@@ -412,6 +630,73 @@ class _LoginPageState extends State<LoginPage> {
           context,
         ).showSnackBar(SnackBar(content: Text('发送验证码失败：$e')));
       }
+    }
+  }
+
+  Future<bool?> _showTencentCaptcha() async {
+    if (!_supportsTencentCaptcha) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('当前运行平台未集成腾讯验证码插件，请在 Android/iOS 上重试'),
+          ),
+        );
+      }
+      return false;
+    }
+
+    final config = TencentCaptchaConfig(
+      bizState: 'tencent-captcha',
+      enableDarkMode: Theme.of(context).brightness == Brightness.dark,
+    );
+
+    try {
+      late Map<dynamic, dynamic>? verifyResult;
+      final completer = Completer<bool?>();
+
+      await TencentCaptcha.verify(
+        config: config,
+        onSuccess: (data) {
+          verifyResult = data;
+          if (verifyResult != null) {
+            _ticket = verifyResult!['ticket']?.toString();
+            _randstr = verifyResult!['randstr']?.toString();
+            completer.complete(true);
+          } else {
+            completer.complete(false);
+          }
+        },
+        onFail: (data) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '验证失败：${(data['errorMessage'] ?? '未知错误').toString()}',
+                ),
+              ),
+            );
+          }
+          completer.complete(false);
+        },
+      );
+
+      return completer.future;
+    } on MissingPluginException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('腾讯验证码插件未正确加载，请使用 Android/iOS 真机运行后重试'),
+          ),
+        );
+      }
+      return false;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('验证异常：$e')));
+      }
+      return false;
     }
   }
 
@@ -499,6 +784,24 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
+    if (PlatformManager().isRainClassroom && _supportsTencentCaptcha) {
+      if (_ticket == null || _randstr == null) {
+        final captchaResult = await _showTencentCaptcha();
+        if (captchaResult != true) {
+          return;
+        }
+      }
+    } else if (PlatformManager().isRainClassroom) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('当前运行平台不支持雨课堂验证码验证，请在 Android/iOS 上登录'),
+          ),
+        );
+      }
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
@@ -516,10 +819,9 @@ class _LoginPageState extends State<LoginPage> {
 
         if (result['ok'] != true) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text((result['message'] ?? '畅课登录失败').toString()),
-              ),
+            await _showTronclassDebugDialog(
+              message: (result['message'] ?? '畅课登录失败').toString(),
+              debug: result['debug']?.toString() ?? TCLoginApi.lastLoginTrace,
             );
           }
           return;
@@ -534,29 +836,10 @@ class _LoginPageState extends State<LoginPage> {
           }
           return;
         }
-
-        final user =
-            await TCLoginApi.getUserInfo(fallbackUid: username) ??
-            User(
-              uid: username,
-              name: username,
-              avatar: '',
-              phone: '未知手机号',
-              school: '桂林电子科技大学',
-              platform: 'tronclass',
-            );
-
-        await AccountManager.addAccount(user);
-        await AccountManager.setCurrentSession(user.uid);
-        await TronclassAuthManager.setSessionIdForUser(user.uid, sessionId);
-        await TCLoginApi.bootstrapPortalSession(sessionId: sessionId);
-
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('畅课登录成功')));
-          Navigator.pop(context, true);
-        }
+        await _completeTronclassLoginWithSession(
+          username: username,
+          sessionId: sessionId,
+        );
         return;
       }
 
@@ -599,22 +882,34 @@ class _LoginPageState extends State<LoginPage> {
               token: token,
             );
       } else if (PlatformManager().isRainClassroom) {
-        final loginType = _currentLoginType == '2'
-            ? 3
-            : (username.contains('@') ? 2 : 1);
+        final loginType = _currentLoginType == '2' ? 3 : 2;
+        final accountForLogin = _currentLoginType == '2'
+            ? _normalizeMainlandPhone(username)
+            : username;
+        if (_currentLoginType == '2' &&
+            !RegExp(r'^1\d{10}$').hasMatch(accountForLogin)) {
+          throw Exception('雨课堂验证码登录仅支持11位手机号');
+        }
+
         final code = _currentLoginType == '2'
             ? _captchaController.text.trim()
             : _passwordController.text;
 
-        loginResult = await RCLoginApi.login(loginType, username, code, '', '');
+        loginResult = await RCLoginApi.login(
+          loginType,
+          accountForLogin,
+          code,
+          _ticket!,
+          _randstr!,
+        );
 
-        final success =
-            loginResult?['status'] == 1 ||
-            loginResult?['success'] == true ||
-            loginResult?['code']?.toString() == '0';
+        _ticket = null;
+        _randstr = null;
+
+        final success = loginResult?['code'] == 0;
         if (!success) {
           throw Exception(
-            (loginResult?['msg'] ?? loginResult?['message'] ?? '雨课堂登录失败')
+            (loginResult?['msg'] ?? '雨课堂登录失败')
                 .toString(),
           );
         }
@@ -686,6 +981,7 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final isTronclass = PlatformManager().isTronclass;
+    final isCaptchaMode = !isTronclass && _currentLoginType == '2';
 
     return Scaffold(
       appBar: AppBar(title: Text(_pageTitle)),
@@ -727,35 +1023,37 @@ class _LoginPageState extends State<LoginPage> {
                           validator: (v) =>
                               v == null || v.trim().isEmpty ? '请输入账号' : null,
                         ),
-                        const SizedBox(height: 14),
-                        TextFormField(
-                          controller: _passwordController,
-                          obscureText: !_showPassword,
-                          decoration: InputDecoration(
-                            labelText: '密码',
-                            hintText: '输入密码',
-                            border: const OutlineInputBorder(),
-                            prefixIcon: const Icon(Icons.lock),
-                            suffixIcon: IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  _showPassword = !_showPassword;
-                                });
-                              },
-                              icon: Icon(
-                                _showPassword
-                                    ? Icons.visibility
-                                    : Icons.visibility_off,
+                        if (!isCaptchaMode) ...[
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _passwordController,
+                            obscureText: !_showPassword,
+                            decoration: InputDecoration(
+                              labelText: '密码',
+                              hintText: '输入密码',
+                              border: const OutlineInputBorder(),
+                              prefixIcon: const Icon(Icons.lock),
+                              suffixIcon: IconButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _showPassword = !_showPassword;
+                                  });
+                                },
+                                icon: Icon(
+                                  _showPassword
+                                      ? Icons.visibility
+                                      : Icons.visibility_off,
+                                ),
                               ),
                             ),
+                            validator: (v) {
+                              if (_currentLoginType == '2' && !isTronclass) {
+                                return null;
+                              }
+                              return v == null || v.isEmpty ? '请输入密码' : null;
+                            },
                           ),
-                          validator: (v) {
-                            if (_currentLoginType == '2' && !isTronclass) {
-                              return null;
-                            }
-                            return v == null || v.isEmpty ? '请输入密码' : null;
-                          },
-                        ),
+                        ],
                         if (!isTronclass) ...[
                           const SizedBox(height: 14),
                           TextFormField(

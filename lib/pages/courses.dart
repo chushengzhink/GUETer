@@ -26,7 +26,6 @@ import 'presentation.dart';
 import 'tronclass_sign_in.dart';
 import 'tronclass_web_login.dart';
 import 'ketangpai_course_struct.dart';
-import 'weizhuojiao_page.dart';
 
 
 class CourseContentPage extends StatefulWidget {
@@ -1087,7 +1086,34 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     if (PlatformManager().isWeizhuojiao) {
-      return const WeizhuojiaoPage();
+      return Scaffold(
+        appBar: AppBar(title: const Text('课程')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.construction_outlined,
+                  size: 52,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '微助教功能正在完善中',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '该入口已临时封禁，后续版本开放。',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     final isTronclass = PlatformManager().isTronclass;

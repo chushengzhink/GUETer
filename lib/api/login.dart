@@ -255,8 +255,10 @@ class RCLoginApi {
         method: 'POST',
         body: jsonData,
       );
+      debugPrint('[RC][API.sendCaptcha] request=$jsonData response=${response.data}');
       return response.data;
     } catch (e) {
+      debugPrint('[RC][API.sendCaptcha] error=$e');
       debugPrint('sendCaptcha error: $e');
     }
     return null;
@@ -268,7 +270,7 @@ class RCLoginApi {
     String code,
   ) async {
     try {
-      final url = 'https://www.yuketang.cn/api/v3/user/code/verify';
+      final url = '/api/v3/user/code/verify';
 
       final jsonData = {'phoneNumber': phone, 'email': '', 'code': code};
 
@@ -606,6 +608,23 @@ class TCLoginApi {
       'https://identity.guet.edu.cn/auth/realms/guet/protocol/openid-connect/auth';
   static const _tokenUrl =
       'https://identity.guet.edu.cn/auth/realms/guet/protocol/openid-connect/token';
+  static final List<String> _loginTrace = <String>[];
+
+  static void _resetTrace() {
+    _loginTrace
+      ..clear()
+      ..add('[TC] 开始畅课登录链路');
+  }
+
+  static void _trace(String message) {
+    _loginTrace.add(message);
+    if (_loginTrace.length > 80) {
+      _loginTrace.removeAt(0);
+    }
+    debugPrint(message);
+  }
+
+  static String get lastLoginTrace => _loginTrace.join('\n');
 
   static Map<String, String> _authQueryParams() {
     return {
@@ -645,30 +664,361 @@ class TCLoginApi {
         lower.contains('reauthcheck');
   }
 
-  static Future<Map<String, dynamic>> _sendDynamicCode(String username) async {
-    final resp = await ApiService.sendRequest(
-      'https://cas.guet.edu.cn/authserver/dynamicCode/getDynamicCodeByReauth.do',
-      method: 'POST',
-      headers: {'content-type': 'application/x-www-form-urlencoded'},
-      body: {'userName': username, 'authCodeTypeName': 'reAuthDynamicCodeType'},
-      responseType: ResponseType.plain,
-      allowRedirects: false,
-    );
-
-    final data = resp.data;
-    if (data is Map<String, dynamic>) {
-      return data;
+  static bool _looksLikeReAuthHtml(dynamic htmlContent) {
+    final html = htmlContent?.toString().toLowerCase() ?? '';
+    if (html.isEmpty) {
+      return false;
     }
-    return jsonDecode(data.toString()) as Map<String, dynamic>;
+    return html.contains('reauthsubmit.do') ||
+        html.contains('ismultifactor=true') ||
+        html.contains('多因子认证') ||
+        html.contains('dynamiccode') ||
+        html.contains('reauthdynamiccodetype');
   }
 
-  static Future<Map<String, dynamic>> _reAuthCheck(String code) async {
+  static bool _isReAuthResponse(Response response) {
+    return _isReAuthUrl(response.requestOptions.uri.toString()) ||
+        _isReAuthUrl(response.headers.value('location')) ||
+        _looksLikeReAuthHtml(response.data);
+  }
+
+  static bool _isCasLoginUrl(String? url) {
+    if (url == null || url.isEmpty) {
+      return false;
+    }
+    final lower = url.toLowerCase();
+    return lower.contains('cas.guet.edu.cn/authserver/login');
+  }
+
+  static Future<String?> _buildCasCookieHeader() async {
+    try {
+      final jar = CookieManager.getTempCookieJar();
+      if (jar == null) {
+        return null;
+      }
+
+      final probes = <Uri>[
+        Uri.parse('https://cas.guet.edu.cn/'),
+        Uri.parse('https://cas.guet.edu.cn/authserver/login'),
+        Uri.parse(
+          'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthLoginView.do',
+        ),
+        Uri.parse(
+          'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthSubmit.do',
+        ),
+        Uri.parse(
+          'https://cas.guet.edu.cn/authserver/dynamicCode/getDynamicCodeByReauth.do',
+        ),
+        Uri.parse('https://identity.guet.edu.cn/'),
+        Uri.parse('https://guet.edu.cn/'),
+      ];
+
+      final merged = <String, String>{};
+      for (final probe in probes) {
+        final cookies = await jar.loadForRequest(probe);
+        for (final cookie in cookies) {
+          if (cookie.name.isEmpty) {
+            continue;
+          }
+          merged[cookie.name] = cookie.value;
+        }
+      }
+
+      if (merged.isEmpty) {
+        return null;
+      }
+
+      final names = merged.keys.join(',');
+      _trace('[TC][cookie] cas header cookies=[$names]');
+      return merged.entries.map((e) => '${e.key}=${e.value}').join('; ');
+    } catch (e) {
+      _trace('[TC][cookie] build failed=$e');
+      return null;
+    }
+  }
+
+  static String? _extractReauthEntryUrl(
+    Response response, {
+    String? service,
+  }) {
+    if (service != null && service.isNotEmpty) {
+      return 'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthLoginView.do?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}';
+    }
+
+    final location = response.headers.value('location');
+    if (location != null && location.isNotEmpty) {
+      final resolved = _resolveUrlWithBase(response.requestOptions.uri, location);
+      if (_isReAuthUrl(resolved)) {
+        return resolved;
+      }
+    }
+
+    final htmlRedirect = _resolveUrlWithBase(
+      response.requestOptions.uri,
+      _extractRedirectUrlFromHtml(response.data),
+    );
+    if (_isReAuthUrl(htmlRedirect)) {
+      return htmlRedirect;
+    }
+
+    final current = response.requestOptions.uri.toString();
+    if (_isReAuthUrl(current)) {
+      return current;
+    }
+
+    final html = response.data?.toString() ?? '';
+    final reauthRegex = RegExp(
+      r'''https?://[^\s'"]+/authserver/reAuthCheck/reAuthLoginView\.do\?[^\s'"]+''',
+      caseSensitive: false,
+    );
+    final reauthMatch = reauthRegex.firstMatch(html);
+    final reauthUrl = reauthMatch?.group(0);
+    if (reauthUrl != null && reauthUrl.isNotEmpty) {
+      return reauthUrl;
+    }
+    return null;
+  }
+
+  static Map<String, dynamic>? _tryParseJsonMap(dynamic raw) {
+    if (raw is Map<String, dynamic>) {
+      return raw;
+    }
+    if (raw is Map) {
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    }
+
+    final text = raw?.toString().trim() ?? '';
+    if (text.isEmpty) {
+      return null;
+    }
+
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      if (decoded is Map) {
+        return decoded.map((k, v) => MapEntry(k.toString(), v));
+      }
+    } catch (_) {
+      // non-json response
+    }
+
+    try {
+      // 兼容 jsonp / 包裹文本：例如 callback({...}) 或前后拼接文本
+      final start = text.indexOf('{');
+      final end = text.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        final candidate = text.substring(start, end + 1);
+        final decoded = jsonDecode(candidate);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        if (decoded is Map) {
+          return decoded.map((k, v) => MapEntry(k.toString(), v));
+        }
+      }
+    } catch (_) {
+      // keep null on parse failure
+    }
+    return null;
+  }
+
+  static Future<Map<String, dynamic>> _sendDynamicCodeWithContext(
+    String username, {
+    String? reauthEntryUrl,
+    String? service,
+  }) async {
+    final url =
+        'https://cas.guet.edu.cn/authserver/dynamicCode/getDynamicCodeByReauth.do';
+    final form = {
+      'userName': username,
+      'authCodeTypeName': 'reAuthDynamicCodeType',
+      if (service != null && service.isNotEmpty) 'service': service,
+      'isMultifactor': 'true',
+    };
+
+    final casCookieHeader = await _buildCasCookieHeader();
+    final derivedReauthUrl =
+        reauthEntryUrl ??
+        (service != null && service.isNotEmpty
+            ? 'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthLoginView.do?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}'
+            : null);
+
+    if (reauthEntryUrl == null && derivedReauthUrl != null) {
+      _trace('[TC][dynamicCode] derived reauthEntryUrl from service=$derivedReauthUrl');
+    }
+
+    // 先回打一次 reAuth 页面，尽量让 CAS 在当前会话里完成多因子上下文绑定。
+    final warmupUrl = derivedReauthUrl;
+    Future<void> warmupReauth({required bool followRedirects}) async {
+      if (warmupUrl == null || warmupUrl.isEmpty) {
+        return;
+      }
+      try {
+        final warmHeaders = <String, String>{
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'origin': 'https://cas.guet.edu.cn',
+          if (service != null && service.isNotEmpty)
+            'referer': 'https://cas.guet.edu.cn/authserver/login?service=${Uri.encodeQueryComponent(service)}',
+          if (casCookieHeader != null && casCookieHeader.isNotEmpty)
+            'cookie': casCookieHeader,
+        };
+        final warm = await ApiService.sendRequest(
+          warmupUrl,
+          headers: warmHeaders,
+          responseType: ResponseType.plain,
+          allowRedirects: followRedirects,
+        );
+        final location = warm.headers.value('location') ?? '';
+        _trace(
+          '[TC][dynamicCode][warmup] follow=$followRedirects status=${warm.statusCode} uri=${warm.requestOptions.uri} location=$location',
+        );
+      } catch (e) {
+        _trace('[TC][dynamicCode][warmup] failed=$e');
+      }
+    }
+
+    await warmupReauth(followRedirects: false);
+
+    final extraHeaders = <String, String>{
+      'content-type': 'application/x-www-form-urlencoded',
+      'accept': 'application/json, text/javascript, */*; q=0.01',
+      'x-requested-with': 'XMLHttpRequest',
+      'origin': 'https://cas.guet.edu.cn',
+      if (warmupUrl != null && warmupUrl.isNotEmpty) 'referer': warmupUrl,
+      if (casCookieHeader != null && casCookieHeader.isNotEmpty)
+        'cookie': casCookieHeader,
+    };
+
+    bool sawLoginRedirect = false;
+
+    Future<Map<String, dynamic>?> runAttempts(int round) async {
+      final attempts = <Future<Response>>[
+        ApiService.sendRequest(
+          url,
+          method: 'POST',
+          headers: extraHeaders,
+          body: form,
+          responseType: ResponseType.plain,
+          allowRedirects: false,
+        ),
+        ApiService.sendRequest(
+          url,
+          method: 'POST',
+          headers: extraHeaders,
+          body: form,
+          responseType: ResponseType.plain,
+          allowRedirects: true,
+        ),
+        ApiService.sendRequest(
+          url,
+          method: 'GET',
+          params: {
+            'userName': username,
+            'authCodeTypeName': 'reAuthDynamicCodeType',
+            if (service != null && service.isNotEmpty) 'service': service,
+            'isMultifactor': 'true',
+          },
+          headers: {
+            'accept': 'application/json, text/javascript, */*; q=0.01',
+            'x-requested-with': 'XMLHttpRequest',
+            if (warmupUrl != null && warmupUrl.isNotEmpty)
+              'referer': warmupUrl,
+            if (casCookieHeader != null && casCookieHeader.isNotEmpty)
+              'cookie': casCookieHeader,
+          },
+          responseType: ResponseType.plain,
+          allowRedirects: true,
+        ),
+      ];
+
+      for (int i = 0; i < attempts.length; i++) {
+        final resp = await attempts[i];
+        final parsed = _tryParseJsonMap(resp.data);
+        if (parsed != null) {
+          final parsedCode = parsed['code']?.toString();
+          final parsedStatus = parsed['status']?.toString();
+          final parsedRes = parsed['res']?.toString();
+          final parsedResult = parsed['result']?.toString();
+          final parsedMsg = (parsed['returnMessage'] ?? parsed['msg'] ?? parsed['message'])
+              ?.toString();
+          _trace(
+            '[TC][dynamicCode][round=${round + 1} try=${i + 1}] status=${resp.statusCode} parsed=ok code=$parsedCode statusField=$parsedStatus res=$parsedRes result=$parsedResult msg=${parsedMsg ?? ''}',
+          );
+          return parsed;
+        }
+
+        final location = resp.headers.value('location') ?? '';
+        final body = resp.data?.toString() ?? '';
+        final lowerBody = body.toLowerCase();
+        final bodySnippet = body.replaceAll('\n', ' ');
+        _trace(
+          '[TC][sendDynamicCode][round=${round + 1} try=${i + 1}] status=${resp.statusCode} location=$location body=${bodySnippet.substring(0, bodySnippet.length > 160 ? 160 : bodySnippet.length)}',
+        );
+
+        final redirectedToLogin =
+            location.toLowerCase().contains('authserver/login') ||
+            lowerBody.contains('帐号登录或动态码登录') ||
+            lowerBody.contains('账号登录或动态码登录') ||
+            lowerBody.contains('id="casloginform"') ||
+            lowerBody.contains("id='casloginform'");
+        if (redirectedToLogin) {
+          sawLoginRedirect = true;
+          continue;
+        }
+      }
+      return null;
+    }
+
+    final firstRound = await runAttempts(0);
+    if (firstRound != null) {
+      return firstRound;
+    }
+
+    if (sawLoginRedirect && warmupUrl != null && warmupUrl.isNotEmpty) {
+      _trace('[TC][dynamicCode] 检测到登录页回落，尝试重建 reAuth 上下文后重试');
+      await warmupReauth(followRedirects: true);
+      final secondRound = await runAttempts(1);
+      if (secondRound != null) {
+        return secondRound;
+      }
+    }
+
+    if (sawLoginRedirect) {
+      return {
+        'res': 'fail',
+        'returnMessage': '动态码服务需要有效登录态，请返回后重新发起畅课登录',
+        'mobile': '',
+      };
+    }
+
+    return {
+      'res': 'fail',
+      'returnMessage': '动态码服务返回异常，请稍后重试',
+      'mobile': '',
+    };
+  }
+
+  static Future<Map<String, dynamic>> _reAuthCheck(
+    String code, {
+    String? service,
+  }) async {
+    final casCookieHeader = await _buildCasCookieHeader();
     final resp = await ApiService.sendRequest(
       'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthSubmit.do',
       method: 'POST',
-      headers: {'content-type': 'application/x-www-form-urlencoded'},
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'accept': 'application/json, text/javascript, */*; q=0.01',
+        'x-requested-with': 'XMLHttpRequest',
+        if (service != null && service.isNotEmpty)
+          'referer': 'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthLoginView.do?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}',
+        if (casCookieHeader != null && casCookieHeader.isNotEmpty)
+          'cookie': casCookieHeader,
+      },
       body: {
-        'service': '',
+        'service': service ?? '',
         'reAuthType': 3,
         'isMultifactor': true,
         'password': '',
@@ -683,11 +1033,122 @@ class TCLoginApi {
       allowRedirects: false,
     );
 
-    final data = resp.data;
-    if (data is Map<String, dynamic>) {
-      return data;
+    final parsed = _tryParseJsonMap(resp.data);
+    if (parsed != null) {
+      _trace('[TC][reAuthCheck] status=${resp.statusCode} parsed=ok code=${parsed['code']}');
+      return parsed;
     }
-    return jsonDecode(data.toString()) as Map<String, dynamic>;
+    _trace('[TC][reAuthCheck] invalid response: ${resp.data}');
+    return {'code': 'reAuth_failed', 'msg': '动态码验证服务返回异常'};
+  }
+
+  static Future<Map<String, dynamic>> _handleMfaChallenge(
+    String username, {
+    Future<String?> Function(String? mobileHint, String? tip)? mfaCodeProvider,
+    String? reauthEntryUrl,
+    String? service,
+  }) async {
+    if (mfaCodeProvider == null) {
+      return {
+        'ok': false,
+        'requireMfa': true,
+        'message': '当前账号需要多因子动态验证码，请输入短信动态码后重试。',
+      };
+    }
+
+    final dynamicCodeInfo = await _sendDynamicCodeWithContext(
+      username,
+      reauthEntryUrl: reauthEntryUrl,
+      service: service,
+    );
+
+    final mobileHint =
+      dynamicCodeInfo['mobile']?.toString() ??
+      dynamicCodeInfo['phone']?.toString() ??
+      dynamicCodeInfo['mobileMask']?.toString() ??
+      dynamicCodeInfo['mobilePhone']?.toString();
+    final tip =
+      dynamicCodeInfo['returnMessage']?.toString() ??
+      dynamicCodeInfo['msg']?.toString() ??
+      dynamicCodeInfo['message']?.toString();
+
+    final codeField = dynamicCodeInfo['code']?.toString().toLowerCase();
+    final statusField = dynamicCodeInfo['status']?.toString().toLowerCase();
+    final resField = dynamicCodeInfo['res']?.toString().toLowerCase();
+    final resultField = dynamicCodeInfo['result']?.toString().toLowerCase();
+
+    final codeSuccess =
+      codeField == '0' || codeField == '200' || codeField == 'success';
+    final statusSuccess =
+      statusField == '0' ||
+      statusField == '200' ||
+      statusField == 'true' ||
+      statusField == 'success';
+    final resultSuccess =
+      resultField == '0' ||
+      resultField == '200' ||
+      resultField == 'true' ||
+      resultField == 'success';
+    final sendOk =
+      resField == 'success' ||
+      resField == '0' ||
+      resField == '200' ||
+      codeSuccess ||
+      statusSuccess ||
+      resultSuccess ||
+        (tip?.contains('已发送') ?? false);
+
+    _trace(
+      '[TC][dynamicCode] decision sendOk=$sendOk code=$codeField status=$statusField res=$resField result=$resultField tip=${tip ?? ''}',
+    );
+
+    if (!sendOk) {
+      final message =
+          (tip?.isNotEmpty == true ? tip : '动态码服务返回异常，请稍后重试')!;
+      return {
+        'ok': false,
+        'message': message,
+        'debug': lastLoginTrace,
+      };
+    }
+
+    final mfaCode = await mfaCodeProvider(mobileHint, tip);
+    if (mfaCode == null || mfaCode.trim().isEmpty) {
+      return {
+        'ok': false,
+        'message': '短信动态码已发送，但你取消了输入；请重新发起畅课登录后再验证',
+        'debug': lastLoginTrace,
+      };
+    }
+
+    final mfaResult = await _reAuthCheck(mfaCode.trim(), service: service);
+    if (mfaResult['code']?.toString() != 'reAuth_success') {
+      return {
+        'ok': false,
+        'message': (mfaResult['msg'] ?? '动态码验证失败').toString(),
+        'debug': lastLoginTrace,
+      };
+    }
+
+    final authAfterMfaResp = await ApiService.sendRequest(
+      _identityAuthUrl,
+      params: _authQueryParams(),
+      responseType: ResponseType.plain,
+      allowRedirects: true,
+    );
+
+    final codeAfterMfa =
+        _extractAuthCode(authAfterMfaResp) ??
+        authAfterMfaResp.requestOptions.uri.queryParameters['code'];
+    if (codeAfterMfa == null || codeAfterMfa.isEmpty) {
+      return {
+        'ok': false,
+        'message': '动态码验证成功，但未获取到畅课授权码',
+        'debug': lastLoginTrace,
+      };
+    }
+
+    return completeWithAuthCode(codeAfterMfa);
   }
 
   static Future<Map<String, dynamic>> completeWithAuthCode(String code) async {
@@ -974,6 +1435,19 @@ class TCLoginApi {
           return actionService;
         }
       }
+
+      // 常见场景3：页面脚本里存在 var service = ["..."]
+      final html = htmlContent.toString();
+      final scriptServiceRegex = RegExp(
+        r'''var\s+service\s*=\s*\[\s*"([^"]+)"\s*\]''',
+        caseSensitive: false,
+      );
+      final serviceMatch = scriptServiceRegex.firstMatch(html);
+      final rawService = serviceMatch?.group(1);
+      if (rawService != null && rawService.isNotEmpty) {
+        final unescaped = rawService.replaceAll(r'\/', '/');
+        return Uri.decodeFull(unescaped);
+      }
     } catch (_) {
       // ignore parse error
     }
@@ -1049,8 +1523,56 @@ class TCLoginApi {
 
   static Map<String, String?> _parseLoginHtml(String html) {
     final doc = html_parser.parse(html);
-    final aesKey = doc.getElementById('pwdEncryptSalt')?.attributes['value'];
-    final execution = doc.getElementById('execution')?.attributes['value'];
+
+    String? extractFieldValue(String fieldName) {
+      final selectors = <String>[
+        '#$fieldName',
+        'input#$fieldName',
+        'input[name="$fieldName"]',
+        "input[name='$fieldName']",
+        '[name="$fieldName"]',
+        "[name='$fieldName']",
+      ];
+
+      for (final selector in selectors) {
+        final element = doc.querySelector(selector);
+        final value = element?.attributes['value'];
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
+      }
+
+      final patterns = <RegExp>[
+        RegExp(
+          r'''(?:var\s+)?FIELD\s*=\s*['"]([^'"]+)['"]'''
+              .replaceAll('FIELD', RegExp.escape(fieldName)),
+          caseSensitive: false,
+        ),
+        RegExp(
+          r'''name=['"]FIELD['"][^>]*value=['"]([^'"]+)['"]'''
+              .replaceAll('FIELD', RegExp.escape(fieldName)),
+          caseSensitive: false,
+        ),
+        RegExp(
+          r'''['"]FIELD['"]\s*:\s*['"]([^'"]+)['"]'''
+              .replaceAll('FIELD', RegExp.escape(fieldName)),
+          caseSensitive: false,
+        ),
+      ];
+
+      for (final pattern in patterns) {
+        final match = pattern.firstMatch(html);
+        final value = match?.group(1);
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
+      }
+
+      return null;
+    }
+
+    final aesKey = extractFieldValue('pwdEncryptSalt');
+    final execution = extractFieldValue('execution');
     return {'aesKey': aesKey, 'execution': execution};
   }
 
@@ -1092,7 +1614,9 @@ class TCLoginApi {
     Future<String?> Function(String? mobileHint, String? tip)? mfaCodeProvider,
   }) async {
     try {
+      _resetTrace();
       CookieManager.isLoggingIn = true;
+      _trace('[TC] 请求 identity auth');
 
       final authResp = await ApiService.sendRequest(
         _identityAuthUrl,
@@ -1109,9 +1633,27 @@ class TCLoginApi {
       service ??= _extractServiceFromRawUrl(
         authResp.requestOptions.uri.toString(),
       );
+      _trace('[TC] authResp uri=${authResp.requestOptions.uri} code=${code != null} service=${service != null && service.isNotEmpty}');
       String probeUriInfo = authResp.requestOptions.uri.toString();
 
       if (code == null || code.isEmpty) {
+        String? aesKey;
+        String? execution;
+        Uri loginSubmitUri = Uri.parse('https://cas.guet.edu.cn/authserver/login');
+
+        // 优先复用首跳链路落到的 CAS 登录页，避免二次拼接 service 导致参数失真。
+        if (_isCasLoginUrl(authResp.requestOptions.uri.toString())) {
+          final parsedFromAuth = _parseLoginHtml(authResp.data.toString());
+          final candidateAesKey = parsedFromAuth['aesKey'];
+          final candidateExecution = parsedFromAuth['execution'];
+          if (candidateAesKey != null && candidateExecution != null) {
+            aesKey = candidateAesKey;
+            execution = candidateExecution;
+            loginSubmitUri = authResp.requestOptions.uri;
+            _trace('[TC] 首跳已拿到 aesKey/execution');
+          }
+        }
+
         if (service == null || service.isEmpty) {
           // Keycloak broker 场景：首跳可能停在 /broker/cas-client/login，需要继续跟进 HTML/JS 跳转。
           final visited = <String>{authResp.requestOptions.uri.toString()};
@@ -1159,6 +1701,7 @@ class TCLoginApi {
                     chaseResp.headers.value('location'),
                   );
               probeUriInfo = chaseResp.requestOptions.uri.toString();
+              _trace('[TC] chase uri=${chaseResp.requestOptions.uri} code=${code != null} service=${service != null && service.isNotEmpty}');
               advanced = true;
               if (service != null && service.isNotEmpty) {
                 break;
@@ -1197,29 +1740,58 @@ class TCLoginApi {
               probeResp.requestOptions.uri.toString();
         }
 
-        if (service == null || service.isEmpty) {
+        if ((aesKey == null || execution == null) &&
+            (service == null || service.isEmpty)) {
           final webHint = kIsWeb
               ? '（当前为Web调试，浏览器可能拦截跨域重定向；建议用 Windows/Android 运行）'
               : '';
           return {
             'ok': false,
+            'debug': lastLoginTrace,
             'message':
                 '未获取到畅课登录服务地址（CAS缺少service）$webHint。authUri=${authResp.requestOptions.uri} probeUri=$probeUriInfo',
           };
         }
 
-        final loginPageResp = await ApiService.sendRequest(
-          'https://cas.guet.edu.cn/authserver/login',
-          params: {'service': service},
-          responseType: ResponseType.plain,
-          allowRedirects: false,
-        );
-
-        final parsed = _parseLoginHtml(loginPageResp.data.toString());
-        final aesKey = parsed['aesKey'];
-        final execution = parsed['execution'];
         if (aesKey == null || execution == null) {
-          return {'ok': false, 'message': '解析畅课登录参数失败'};
+          final loginPageResp = await ApiService.sendRequest(
+            'https://cas.guet.edu.cn/authserver/login',
+            params: {'service': service!},
+            responseType: ResponseType.plain,
+            allowRedirects: false,
+          );
+
+          Response resolvedLoginResp = loginPageResp;
+          for (int i = 0; i < 3; i++) {
+            loginSubmitUri = resolvedLoginResp.requestOptions.uri;
+            final parsed = _parseLoginHtml(resolvedLoginResp.data.toString());
+            aesKey = parsed['aesKey'];
+            execution = parsed['execution'];
+            if (aesKey != null && execution != null) {
+              _trace('[TC] redirect#$i 后拿到 aesKey/execution');
+              break;
+            }
+
+            final location = resolvedLoginResp.headers.value('location');
+            final nextUrl = _resolveUrlWithBase(
+              resolvedLoginResp.requestOptions.uri,
+              location,
+            );
+            if (nextUrl == null || nextUrl.isEmpty) {
+              break;
+            }
+
+            resolvedLoginResp = await ApiService.sendRequest(
+              nextUrl,
+              responseType: ResponseType.plain,
+              allowRedirects: false,
+            );
+          }
+        }
+
+        if (aesKey == null || execution == null) {
+          _trace('[TC] 解析参数失败: aesKey/execution 为空');
+          return {'ok': false, 'message': '解析畅课登录参数失败', 'debug': lastLoginTrace};
         }
 
         final checkNeedCaptchaResp = await ApiService.sendRequest(
@@ -1231,11 +1803,14 @@ class TCLoginApi {
           responseType: ResponseType.plain,
           allowRedirects: false,
         );
-        final checkNeedCaptcha = jsonDecode(
-          checkNeedCaptchaResp.data.toString(),
-        );
+        final checkNeedCaptcha =
+            _tryParseJsonMap(checkNeedCaptchaResp.data) ?? const {};
+        _trace('[TC] checkNeedCaptcha=${checkNeedCaptcha.toString()}');
         String captcha = '';
-        if (checkNeedCaptcha['isNeed'] == true) {
+        final needCaptcha =
+            checkNeedCaptcha['isNeed'] == true ||
+            checkNeedCaptcha['isNeed']?.toString().toLowerCase() == 'true';
+        if (needCaptcha) {
           if (captchaProvider == null) {
             return {'ok': false, 'message': '当前账号需图形验证码，但未提供验证码处理器'};
           }
@@ -1263,10 +1838,9 @@ class TCLoginApi {
           captcha = inputCaptcha.trim();
         }
 
-        final loginResp = await ApiService.sendRequest(
-          'https://cas.guet.edu.cn/authserver/login',
+        Response loginResp = await ApiService.sendRequest(
+          loginSubmitUri.toString(),
           method: 'POST',
-          params: {'service': service},
           headers: {'content-type': 'application/x-www-form-urlencoded'},
           body: {
             'username': username,
@@ -1280,66 +1854,120 @@ class TCLoginApi {
             'execution': execution,
           },
           responseType: ResponseType.plain,
+          allowRedirects: false,
         );
 
         code =
             _extractAuthCode(loginResp) ??
             loginResp.requestOptions.uri.queryParameters['code'];
 
-        if ((code == null || code.isEmpty) &&
-            _isReAuthUrl(loginResp.requestOptions.uri.toString())) {
-          if (mfaCodeProvider == null) {
-            return {
-              'ok': false,
-              'requireMfa': true,
-              'message': '当前账号需要多因子动态验证码，请输入短信动态码后重试。',
-            };
-          }
+        if ((code == null || code.isEmpty) && _isReAuthResponse(loginResp)) {
+          _trace('[TC] 命中多因子认证分支');
+          final reauthEntryUrl = _extractReauthEntryUrl(
+            loginResp,
+            service: service,
+          );
+          _trace('[TC] reauthEntryUrl=${reauthEntryUrl ?? 'null'}');
+          return _handleMfaChallenge(
+            username,
+            mfaCodeProvider: mfaCodeProvider,
+            reauthEntryUrl: reauthEntryUrl,
+            service: service,
+          );
+        }
 
-          final dynamicCodeInfo = await _sendDynamicCode(username);
-          final mobileHint = dynamicCodeInfo['mobile']?.toString();
-          final tip = dynamicCodeInfo['returnMessage']?.toString();
-
-          final mfaCode = await mfaCodeProvider(mobileHint, tip);
-          if (mfaCode == null || mfaCode.trim().isEmpty) {
-            return {'ok': false, 'message': '已取消动态码验证'};
-          }
-
-          final mfaResult = await _reAuthCheck(mfaCode.trim());
-          if (mfaResult['code']?.toString() != 'reAuth_success') {
-            return {
-              'ok': false,
-              'message': (mfaResult['msg'] ?? '动态码验证失败').toString(),
-            };
-          }
-
-          final authAfterMfaResp = await ApiService.sendRequest(
+        if (code == null || code.isEmpty) {
+          // CAS在高并发或重定向链波动时，可能已登录但当前响应未携带code，先回探一次授权链路。
+          final retryAuthResp = await ApiService.sendRequest(
             _identityAuthUrl,
             params: _authQueryParams(),
             responseType: ResponseType.plain,
             allowRedirects: true,
           );
-
-          final codeAfterMfa =
-              _extractAuthCode(authAfterMfaResp) ??
-              authAfterMfaResp.requestOptions.uri.queryParameters['code'];
-          if (codeAfterMfa == null || codeAfterMfa.isEmpty) {
-            return {'ok': false, 'message': '动态码验证成功，但未获取到畅课授权码'};
+          final retryCode =
+              _extractAuthCode(retryAuthResp) ??
+              retryAuthResp.requestOptions.uri.queryParameters['code'];
+          if (retryCode != null && retryCode.isNotEmpty) {
+            return completeWithAuthCode(retryCode);
           }
 
-          return completeWithAuthCode(codeAfterMfa);
-        }
+          // 极少数情况下服务端未提前声明需要验证码，这里补一次验证码重试，减少误报账号密码错误。
+          if (captcha.isEmpty && captchaProvider != null) {
+            final captchaImageResp = await ApiService.sendRequest(
+              'https://cas.guet.edu.cn/authserver/getCaptcha.htl?${DateTime.now().millisecondsSinceEpoch}',
+              responseType: ResponseType.bytes,
+              allowRedirects: false,
+            );
 
-        if (code == null || code.isEmpty) {
+            final rawData = captchaImageResp.data;
+            final Uint8List? imageBytes = switch (rawData) {
+              Uint8List data => data,
+              List<int> data => Uint8List.fromList(data),
+              _ => null,
+            };
+
+            if (imageBytes != null) {
+              final forcedCaptcha = await captchaProvider(imageBytes);
+              if (forcedCaptcha != null && forcedCaptcha.trim().isNotEmpty) {
+                loginResp = await ApiService.sendRequest(
+                  loginSubmitUri.toString(),
+                  method: 'POST',
+                  headers: {
+                    'content-type': 'application/x-www-form-urlencoded',
+                  },
+                  body: {
+                    'username': username,
+                    'password': _encryptPassword(password, utf8.encode(aesKey)),
+                    'rememberMe': true,
+                    'captcha': forcedCaptcha.trim(),
+                    '_eventId': 'submit',
+                    'cllt': 'userNameLogin',
+                    'dllt': 'generalLogin',
+                    'lt': '',
+                    'execution': execution,
+                  },
+                  responseType: ResponseType.plain,
+                  allowRedirects: false,
+                );
+
+                code =
+                    _extractAuthCode(loginResp) ??
+                    loginResp.requestOptions.uri.queryParameters['code'];
+                if (code != null && code.isNotEmpty) {
+                  return completeWithAuthCode(code);
+                }
+
+                if (_isReAuthResponse(loginResp)) {
+                  final reauthEntryUrl = _extractReauthEntryUrl(
+                    loginResp,
+                    service: service,
+                  );
+                  _trace('[TC] retry reauthEntryUrl=${reauthEntryUrl ?? 'null'}');
+                  return _handleMfaChallenge(
+                    username,
+                    mfaCodeProvider: mfaCodeProvider,
+                    reauthEntryUrl: reauthEntryUrl,
+                    service: service,
+                  );
+                }
+              }
+            }
+          }
+
           final loginErrorTip = _extractLoginErrorTip(loginResp.data);
-          return {'ok': false, 'message': loginErrorTip ?? '未获取到畅课授权码'};
+          _trace('[TC] 未获取到授权码，errorTip=${loginErrorTip ?? ''}');
+          return {
+            'ok': false,
+            'message': loginErrorTip ?? '未获取到畅课授权码',
+            'debug': lastLoginTrace,
+          };
         }
       }
 
       return completeWithAuthCode(code);
     } catch (e) {
-      debugPrint('tronclass login error: $e');
-      return {'ok': false, 'message': '畅课登录失败：$e'};
+      _trace('[TC] login exception=$e');
+      return {'ok': false, 'message': '畅课登录失败：$e', 'debug': lastLoginTrace};
     } finally {
       CookieManager.isLoggingIn = false;
     }

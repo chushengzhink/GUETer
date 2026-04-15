@@ -7,6 +7,7 @@ import'package:dio/dio.dart';
 import'./pages/accounts.dart';
 import'./pages/courses.dart';
 import'./pages/login.dart';
+import'./pages/reading.dart';
 import'./pages/settings.dart';
 import'./api/api_service.dart';
 import'./session/cookie.dart';
@@ -95,6 +96,7 @@ class MyApp extends StatelessWidget {
               routes: {
                 '/accounts': (context) => const AccountsPage(),
                 '/login': (context) => const LoginPage(),
+                '/reading': (context) => const ReadingPage(),
                 '/settings': (context) => const SettingsPage(),
               },
             );
@@ -239,6 +241,7 @@ class _MainPageState extends State<MainPage> {
         children: [
           CoursesPage(key: coursesPageKey),
           const AccountsPage(),
+          const ReadingPage(),
           const SettingsPage(),
         ]
       ),
@@ -251,6 +254,10 @@ class _MainPageState extends State<MainPage> {
           BottomNavigationBarItem(
             icon: Icon(Icons.account_circle),
             label: '账号',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.menu_book_outlined),
+            label: '阅读',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.tune),
