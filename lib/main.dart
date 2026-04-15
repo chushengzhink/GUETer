@@ -9,6 +9,7 @@ import'./pages/courses.dart';
 import'./pages/login.dart';
 import'./pages/reading.dart';
 import'./pages/settings.dart';
+import'./pages/tools_page.dart';
 import'./api/api_service.dart';
 import'./session/cookie.dart';
 import'./session/account.dart';
@@ -154,7 +155,7 @@ class _MainPageState extends State<MainPage> {
       final currentVersion = packageInfo.version;
 
       final dio = Dio();
-      final response = await dio.get('https://api.github.com/repos/AneryCoft/course_helper/releases/latest');
+      final response = await dio.get('https://api.github.com/repos/chushengzhink/GUETer/releases/latest');
       final data = response.data;
       final latestVersion = data['tag_name']?.toString().replaceAll('v', '') ?? '';
 
@@ -162,7 +163,7 @@ class _MainPageState extends State<MainPage> {
         _showUpdateDialog(
           latestVersion: latestVersion,
           releaseNotes: data['body'] ?? '暂无更新说明',
-          downloadUrl: data['html_url'] ?? 'https://github.com/AneryCoft/course_helper/releases/latest',
+          downloadUrl: data['html_url'] ?? 'https://github.com/chushengzhink/GUETer/releases/latest',
         );
       }
     } catch (e) {
@@ -241,7 +242,7 @@ class _MainPageState extends State<MainPage> {
         children: [
           CoursesPage(key: coursesPageKey),
           const AccountsPage(),
-          const ReadingPage(),
+          const ToolsPage(),
           const SettingsPage(),
         ]
       ),
@@ -263,8 +264,8 @@ class _MainPageState extends State<MainPage> {
             label: '账号',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.menu_book_outlined),
-            label: '阅读',
+            icon: Icon(Icons.handyman_outlined),
+            label: '工具',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.tune),

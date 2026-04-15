@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AppSettings {
   static const String autoCheckUpdateKey = 'app_auto_check_update';
-  static const String enableHapticsKey = 'app_enable_haptics';
   static const String autoCloseWebLoginKey = 'app_auto_close_web_login';
   static const String showBeginnerGuideKey = 'app_show_beginner_guide';
   static const String tronclassPortalOpenModeKey =

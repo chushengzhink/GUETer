@@ -122,6 +122,10 @@ class ApiService {
   static const int _requestJitterMs = 120;
   static const int _highRiskSignIntervalMs = 1400;
   static const int _maxRetryCount = 2;
+  static const bool _enableVerboseLogsInRelease = true;
+  static const int _maxConsoleLogLines = 800;
+  static final List<String> _consoleLogs = <String>[];
+  static final ValueNotifier<int> consoleLogVersion = ValueNotifier<int>(0);
 
   /// 获取雨课堂服务器对应的 baseUrl
   static const _serverBaseUrlMap = {
@@ -130,6 +134,42 @@ class ApiService {
     RainClassroomServerType.changjiang: 'https://changjiang.yuketang.cn',
     RainClassroomServerType.huanghe: 'https://huanghe.yuketang.cn',
   };
+
+  static void _logRequest(String stage, String url, {Object? extra}) {
+    final now = DateTime.now();
+    final hh = now.hour.toString().padLeft(2, '0');
+    final mm = now.minute.toString().padLeft(2, '0');
+    final ss = now.second.toString().padLeft(2, '0');
+    final line = extra == null
+        ? '[$hh:$mm:$ss] [$stage] $url'
+        : '[$hh:$mm:$ss] [$stage] $url $extra';
+    _appendConsoleLog(line);
+
+    if (extra == null) {
+      debugPrint('[ApiService][$stage] $url');
+    } else {
+      debugPrint('[ApiService][$stage] $url $extra');
+    }
+  }
+
+  static void _appendConsoleLog(String line) {
+    _consoleLogs.add(line);
+    if (_consoleLogs.length > _maxConsoleLogLines) {
+      final overflow = _consoleLogs.length - _maxConsoleLogLines;
+      _consoleLogs.removeRange(0, overflow);
+    }
+    consoleLogVersion.value++;
+  }
+
+  static List<String> getConsoleLogs() {
+    return List<String>.unmodifiable(_consoleLogs);
+  }
+
+  static void clearConsoleLogs() {
+    if (_consoleLogs.isEmpty) return;
+    _consoleLogs.clear();
+    consoleLogVersion.value++;
+  }
 
   // 初始化平台变化回调函数
   static void _setupPlatformChangeCallback() {
@@ -195,7 +235,7 @@ class ApiService {
         error: true,
         compact: false,
         maxWidth: 90,
-        enabled: kDebugMode,
+        enabled: kDebugMode || _enableVerboseLogsInRelease,
         filter: (options, args) {
           if (args.data.toString().contains('<html>')) {
             return false;
@@ -224,6 +264,15 @@ class ApiService {
       method: method,
       headers: headers,
       responseType: responseType,
+    );
+
+    _logRequest(
+      'request',
+      url,
+      extra:
+          'method=${method.toUpperCase()} platform=${PlatformManager().currentPlatformName} '
+          'server=${PlatformManager().isRainClassroom ? PlatformManager().serverName : '-'} '
+          'baseUrl=${_dio.options.baseUrl.isEmpty ? '<relative>' : _dio.options.baseUrl}',
     );
 
     var response = await _requestWithRetry(
@@ -286,6 +335,12 @@ class ApiService {
         response.data = jsonDecode(response.data);
       }
     } // dio 的 json 解析有问题
+
+    _logRequest(
+      'response',
+      url,
+      extra: 'status=${response.statusCode} uri=${response.requestOptions.uri}',
+    );
 
     return response;
   }
@@ -367,6 +422,11 @@ class ApiService {
     for (var attempt = 0; attempt <= _maxRetryCount; attempt++) {
       await _throttleRequest(url, options.method ?? 'GET');
       try {
+        _logRequest(
+          'attempt',
+          url,
+          extra: 'try=${attempt + 1}/${_maxRetryCount + 1} method=${options.method ?? 'GET'}',
+        );
         final response = await _dio.request(
           url,
           queryParameters: queryParameters,
@@ -376,6 +436,11 @@ class ApiService {
 
         if (_shouldRetryByStatus(response.statusCode) &&
             attempt < _maxRetryCount) {
+          _logRequest(
+            'retry-status',
+            url,
+            extra: 'status=${response.statusCode} nextTry=${attempt + 2}/${_maxRetryCount + 1}',
+          );
           await _backoffDelay(attempt);
           lastResponse = response;
           continue;
@@ -384,8 +449,14 @@ class ApiService {
       } catch (e) {
         lastError = e;
         if (attempt >= _maxRetryCount || !_shouldRetryByError(e)) {
+          _logRequest('fail', url, extra: 'attempt=${attempt + 1} error=$e');
           rethrow;
         }
+        _logRequest(
+          'retry-error',
+          url,
+          extra: 'attempt=${attempt + 1} error=$e nextTry=${attempt + 2}/${_maxRetryCount + 1}',
+        );
         await _backoffDelay(attempt);
       }
     }

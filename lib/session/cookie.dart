@@ -182,10 +182,10 @@ class CookieManager {
 
   static Uri getDomainUri() {
     if (PlatformManager().isChaoxing) {
-      return Uri.parse('https://$cxDomain');
+      return Uri.parse('https://${_normalizeCookieHost(cxDomain)}');
     }
     if (PlatformManager().isRainClassroom) {
-      return Uri.parse('https://$rcDomain');
+      return Uri.parse('https://${_normalizeCookieHost(rcDomain)}');
     }
     return Uri.parse('https://$tcDomain');
   }
@@ -358,17 +358,47 @@ class CookieManager {
     }
 
     final targetJar = await getCookieJarForUser(userId);
-    final domainUri = getDomainUri();
-    final tempCookies = await tempJar.loadForRequest(domainUri);
+    final probeUris = <Uri>[];
+    if (PlatformManager().isRainClassroom) {
+      probeUris.addAll([
+        Uri.parse('https://www.yuketang.cn/'),
+        Uri.parse('https://pro.yuketang.cn/'),
+        Uri.parse('https://changjiang.yuketang.cn/'),
+        Uri.parse('https://huanghe.yuketang.cn/'),
+        Uri.parse('https://yuketang.cn/'),
+      ]);
+    } else if (PlatformManager().isChaoxing) {
+      probeUris.addAll([
+        Uri.parse('https://chaoxing.com/'),
+        Uri.parse('https://passport2.chaoxing.com/'),
+        Uri.parse('https://i.chaoxing.com/'),
+      ]);
+    } else {
+      probeUris.add(getDomainUri());
+    }
 
-    for (var cookie in tempCookies) {
-      if (cookie.domain != null && cookie.domain!.isNotEmpty) {
-        final host = _normalizeCookieHost(cookie.domain);
-        if (host.isNotEmpty) {
-          final uri = Uri.parse('https://$host');
-          await targetJar.saveFromResponse(uri, [cookie]);
-        }
+    final merged = <String, Cookie>{};
+    for (final probe in probeUris) {
+      final cookies = await tempJar.loadForRequest(probe);
+      for (final cookie in cookies) {
+        final host = _normalizeCookieHost(cookie.domain) == ''
+            ? probe.host
+            : _normalizeCookieHost(cookie.domain);
+        final key = '${cookie.name}@$host';
+        merged[key] = cookie;
       }
+    }
+
+    if (merged.isEmpty) {
+      debugPrint('临时 Cookie 迁移失败：未在探测域名中读取到有效 cookie');
+      clearTempCookies();
+      return;
+    }
+
+    for (final cookie in merged.values) {
+      final host = _normalizeCookieHost(cookie.domain);
+      final uri = Uri.parse('https://${host.isNotEmpty ? host : getDomainUri().host}');
+      await targetJar.saveFromResponse(uri, [cookie]);
     }
 
     await saveCookiesForUser(userId);

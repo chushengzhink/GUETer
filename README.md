@@ -1,103 +1,98 @@
 # GUETer
 
-GUETer 是一个面向多教学平台的课程辅助应用，目前支持学习通、雨课堂、畅课、课堂派（以及微助教能力接入）。
+GUETer 是一个面向多教学平台的课程辅助应用，当前覆盖学习通、雨课堂、畅课、课堂派，并预留微助教接入能力。
 
-当前版本已内置阅读模块，可在应用内直接打开打包进安装包的 PDF 文档，并记录阅读进度。
+项目仓库（新）：https://github.com/chushengzhink/GUETer
 
-## 平台能力
+## 主要功能
 
-- 多账号管理与账号切换
-- 课程列表与活动入口
-- 平台签到相关能力（按平台差异化支持）
-- 畅课门户打开策略、重认证策略
-- 一键健康检查、诊断包、常见问题修复
-- 内置阅读页（书架 + 阅读器 + 搜索 + 目录 + 阅读设置）
+### 1. 课程与签到能力
+- 多平台课程列表获取与展示
+- 多账号批量扫码签到（雨课堂/课堂派）
+- 课堂派共享签到房间（单次扫码，多账号并行签到）
+- 雨课堂课程详情页与课堂入口串联
 
-## 各平台参考源码来源
+### 2. 账号与平台管理
+- 多账号保存、切换、登录态检查
+- 平台地址管理（恢复默认地址、健康检测）
+- 畅课门户策略与重认证策略
+- 请求控制台（查看请求结果、重试、错误日志）
 
-为尊重开源社区，本项目在相关页面和许可说明中保留了参考来源：
+### 3. 工具分区
+底部导航第三栏为工具，包含两个子分区：
+- 阅读
+- PDF 工具
 
-- 学习通 / 雨课堂参考：<https://github.com/AneryCoft>
-- 畅课参考：<https://github.com/wilinz/tronclass_plus>
-- 畅课登录美化接口参考：<https://github.com/chongzi/guethub>
-- 课堂派参考：<https://github.com/roselle-luo/fuckketangpai_app>
-- 微助教参考：<https://github.com/zn-cn/wzj-sign-in-weixin>
+### 4. PDF 工具合集
+- PDF 转图片
+- 图片合并 PDF
+- PDF 压缩
+- PDF 提取页面
+- 加水印（防篡改）
 
-## 本地使用方法
+增强能力：
+- 输出目录可自定义
+- 输出文件可直接打开/分享
+- 最近任务记录（时间、输入、输出、状态）
 
-### 1. 环境准备
+### 5. 阅读功能
+- 内置 PDF 文档阅读
+- 目录/书签导航
+- 搜索、页码跳转
+- 夜间模式、阅读设置
+- 阅读进度持久化
 
-- Flutter SDK: `>=3.35.x`
-- Dart SDK: `>=3.9.x`
-- Windows 构建请安装 Visual Studio C++ 桌面开发组件
+## 代码来源与参考说明
 
-### 2. 拉取与安装依赖
+本项目包含三类代码来源：
 
+### A. 原项目继承代码
+- 本仓库历史版本中原有模块与逻辑
+- 包括基础页面结构、平台接入骨架、会话与网络基础设施
+
+### B. 开源项目参考实现（按模块）
+- 学习通 / 雨课堂： https://github.com/AneryCoft
+- 畅课： https://github.com/wilinz/tronclass_plus
+- 畅课登录美化接口参考： https://github.com/chongzi/guethub
+- 课堂派： https://github.com/roselle-luo/fuckketangpai_app
+- 微助教： https://github.com/zn-cn/wzj-sign-in-weixin
+
+说明：以上为“参考与借鉴来源”，并非逐文件完全拷贝；本项目已结合当前工程结构做了二次整合与改造。
+
+### C. 当前版本新增实现（本仓库）
+- 工具分区（阅读 + PDF 工具）
+- PDF 工具链与任务记录
+- 请求控制台入口
+- 设置页分组重构（外观主题前置）
+- 更新检查地址切换到本仓库
+
+## 开发与运行
+
+### 环境
+- Flutter: >= 3.35.x
+- Dart: >= 3.9.x
+
+### 安装依赖
 ```bash
 flutter pub get
 ```
 
-### 3. 运行（开发模式）
-
+### 运行
 ```bash
 flutter run
 ```
 
-指定平台示例：
-
+### 静态检查
 ```bash
-flutter run -d windows
+flutter analyze
 ```
 
-### 4. 构建发布包（64 位）
-
-Windows 64 位发布：
-
+### Android Release 构建
 ```bash
-flutter build windows --release
+flutter build apk --release --target-platform android-arm64
 ```
 
-产物目录：
+## 许可与免责声明
 
-- `build/windows/x64/runner/Release/`
-
-## 阅读模块说明
-
-- 底部导航包含“阅读”入口
-- 示例内置文档：`pdf/上海交通大学生存手册.pdf`
-- 支持能力：
-	- 书架入口与最近阅读
-	- PDF 页码跳转
-	- 全文搜索与结果跳转
-	- 目录/书签导航
-	- 夜间模式、单页/连续布局、横纵向滚动、缩放
-	- 每本书独立保存阅读页码与最近打开时间
-
-如需新增内置文档，可在 `lib/pages/reading_catalog.dart` 添加书籍条目，并在 `pubspec.yaml` 的 assets 中追加 PDF 路径。
-
-## GitHub 轻量发布建议（只发源码）
-
-仓库体积通常被以下目录拉大：
-
-- `build/`
-- `.dart_tool/`
-- 本地缓存目录
-
-本项目已在 `.gitignore` 中忽略大部分构建与缓存目录。发布到 GitHub 时，建议只提交源码与必要配置文件（`lib/`, `android/`, `ios/`, `windows/`, `pubspec.yaml`, `README.md` 等）。
-
-## 安全与签名说明
-
-- Windows 安装包“自动签名”需要有效代码签名证书（通常为组织证书）。
-- 无证书时只能生成未签名二进制，可能触发 SmartScreen 或杀毒软件误报。
-- 若需降低误报，请使用正式代码签名证书对发布包签名后再分发。
-
-## 许可证
-
-本项目采用 **GNU General Public License v3.0 (GPL-3.0)**。
-
-- 许可证全文见 [LICENSE](LICENSE)
-- 分发二进制时需同时遵守 GPL-3.0 对对应源代码与版权声明的要求
-
-## 免责声明
-
-本项目仅用于学习与技术研究，请在遵守学校与平台相关规定的前提下使用。
+- License: GPL-3.0，详见 LICENSE
+- 本项目仅用于学习交流，请遵守学校与平台相关规定

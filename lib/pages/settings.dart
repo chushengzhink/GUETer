@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../platform.dart';
 import '../session/account.dart';
 import '../session/app_settings.dart';
+import 'request_console_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -22,7 +23,6 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _loading = true;
   bool _autoCheckUpdate = true;
-  bool _enableHaptics = true;
   bool _autoCloseWebLogin = true;
   bool _strictSecurityMode = false;
   bool _showBeginnerGuide = true;
@@ -121,7 +121,6 @@ class _SettingsPageState extends State<SettingsPage> {
     final prefs = await SharedPreferences.getInstance();
 
     final autoCheck = prefs.getBool(AppSettings.autoCheckUpdateKey) ?? true;
-    final haptics = prefs.getBool(AppSettings.enableHapticsKey) ?? true;
     final autoClose = prefs.getBool(AppSettings.autoCloseWebLoginKey) ?? true;
     final strictMode =
         prefs.getBool(AppSettings.strictSecurityModeKey) ?? false;
@@ -142,7 +141,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
     setState(() {
       _autoCheckUpdate = autoCheck;
-      _enableHaptics = haptics;
       _autoCloseWebLogin = autoClose;
       _strictSecurityMode = strictMode;
       _showBeginnerGuide = showBeginnerGuide;
@@ -703,6 +701,14 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Future<void> _openRequestConsole() async {
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const RequestConsolePage()),
+    );
+  }
+
   Future<void> _showBeginnerGuideDialog() async {
     await showDialog<void>(
       context: context,
@@ -758,7 +764,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ..writeln('- 畅课重认证策略: $_tronclassReauthMode')
       ..writeln('- 严格安全模式: ${_strictSecurityMode ? '开启' : '关闭'}')
       ..writeln('- 网页登录自动返回: ${_autoCloseWebLogin ? '开启' : '关闭'}')
-      ..writeln('- 触感反馈: ${_enableHaptics ? '开启' : '关闭'}');
+      ..writeln('- 触感反馈: 已移除');
 
     await Clipboard.setData(ClipboardData(text: summary.toString().trim()));
     if (!mounted) return;
@@ -978,37 +984,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 10),
           _buildFoldSection(
-            icon: Icons.tune,
-            title: '常用设置',
-            subtitle: '更新、触感、网页登录返回、主题模式',
+            icon: Icons.palette_outlined,
+            title: '外观与主题（推荐先设置）',
+            subtitle: '全局配色、盲盒配色、主题模式',
             children: [
-              SwitchListTile(
-                value: _autoCheckUpdate,
-                title: const Text('自动检查更新'),
-                subtitle: const Text('启动后自动检查是否有新版本'),
-                onChanged: (v) async {
-                  setState(() => _autoCheckUpdate = v);
-                  await AppSettings.setBool(AppSettings.autoCheckUpdateKey, v);
-                },
-              ),
-              SwitchListTile(
-                value: _enableHaptics,
-                title: const Text('启用触感反馈'),
-                subtitle: const Text('按钮点击时使用轻微触感反馈（后续页面逐步接入）'),
-                onChanged: (v) async {
-                  setState(() => _enableHaptics = v);
-                  await AppSettings.setBool(AppSettings.enableHapticsKey, v);
-                },
-              ),
-              SwitchListTile(
-                value: _autoCloseWebLogin,
-                title: const Text('网页登录成功后自动返回'),
-                subtitle: const Text('畅课网页登录拿到会话后自动关闭页面'),
-                onChanged: (v) async {
-                  setState(() => _autoCloseWebLogin = v);
-                  await AppSettings.setBool(AppSettings.autoCloseWebLoginKey, v);
-                },
-              ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: DropdownButtonFormField<ThemeMode>(
@@ -1035,6 +1014,100 @@ class _SettingsPageState extends State<SettingsPage> {
                     await AppSettings.setThemeMode(mode);
                   },
                 ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.casino_outlined),
+                title: const Text('盲盒随机配色'),
+                subtitle: const Text('随机切换到一套不同的全局配色'),
+                onTap: _applyRandomColorScheme,
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: _colorSchemeItems.map((item) {
+                    final id = item['id'] as String;
+                    final selected = _globalColorScheme == id;
+                    final primary = item['primary'] as Color;
+                    final secondary = item['secondary'] as Color;
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () async {
+                        setState(() {
+                          _globalColorScheme = id;
+                        });
+                        await _saveGlobalColorScheme();
+                      },
+                      child: Container(
+                        width: 150,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: selected ? primary : Colors.black26,
+                            width: selected ? 2 : 1,
+                          ),
+                          gradient: LinearGradient(
+                            colors: [
+                              primary.withValues(alpha: 0.95),
+                              secondary.withValues(alpha: 0.95),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                item['name'] as String,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            if (selected)
+                              const Icon(
+                                Icons.check_circle,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildFoldSection(
+            icon: Icons.tune,
+            title: '常用设置',
+            subtitle: '更新、网页登录返回',
+            children: [
+              SwitchListTile(
+                value: _autoCheckUpdate,
+                title: const Text('自动检查更新'),
+                subtitle: const Text('启动后自动检查是否有新版本'),
+                onChanged: (v) async {
+                  setState(() => _autoCheckUpdate = v);
+                  await AppSettings.setBool(AppSettings.autoCheckUpdateKey, v);
+                },
+              ),
+              SwitchListTile(
+                value: _autoCloseWebLogin,
+                title: const Text('网页登录成功后自动返回'),
+                subtitle: const Text('畅课网页登录拿到会话后自动关闭页面'),
+                onChanged: (v) async {
+                  setState(() => _autoCloseWebLogin = v);
+                  await AppSettings.setBool(AppSettings.autoCloseWebLoginKey, v);
+                },
               ),
             ],
           ),
@@ -1258,6 +1331,13 @@ class _SettingsPageState extends State<SettingsPage> {
                 onTap: _runBatchSignPrecheck,
               ),
               const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.terminal_outlined),
+                title: const Text('请求控制台'),
+                subtitle: const Text('查看最近请求结果、重试与错误日志'),
+                onTap: _openRequestConsole,
+              ),
+              const Divider(height: 1),
               SwitchListTile(
                 value: _showBeginnerGuide,
                 title: const Text('启用新手引导'),
@@ -1335,17 +1415,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 10),
           _buildFoldSection(
-            icon: Icons.palette_outlined,
-            title: '外观与趣味功能',
-            subtitle: '全局配色、盲盒配色、设置摘要复制、通用小工具',
+            icon: Icons.extension_outlined,
+            title: '趣味与辅助工具',
+            subtitle: '设置摘要复制、通用小工具',
             children: [
-              ListTile(
-                leading: const Icon(Icons.casino_outlined),
-                title: const Text('盲盒随机配色'),
-                subtitle: const Text('随机切换到一套不同的全局配色'),
-                onTap: _applyRandomColorScheme,
-              ),
-              const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.password_outlined),
                 title: const Text('随机密码生成器'),
@@ -1358,67 +1431,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: const Text('复制当前设置摘要'),
                 subtitle: const Text('快速分享当前关键设置组合'),
                 onTap: _copySetupSummary,
-              ),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: _colorSchemeItems.map((item) {
-                    final id = item['id'] as String;
-                    final selected = _globalColorScheme == id;
-                    final primary = item['primary'] as Color;
-                    final secondary = item['secondary'] as Color;
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () async {
-                        setState(() {
-                          _globalColorScheme = id;
-                        });
-                        await _saveGlobalColorScheme();
-                      },
-                      child: Container(
-                        width: 150,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: selected ? primary : Colors.black26,
-                            width: selected ? 2 : 1,
-                          ),
-                          gradient: LinearGradient(
-                            colors: [
-                              primary.withValues(alpha: 0.95),
-                              secondary.withValues(alpha: 0.95),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                item['name'] as String,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            if (selected)
-                              const Icon(
-                                Icons.check_circle,
-                                color: Colors.white,
-                                size: 18,
-                              ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
               ),
             ],
           ),

@@ -11,6 +11,35 @@ import '../session/cookie.dart';
 import '../models/user.dart';
 import '../platform.dart';
 
+String _loginPayloadSummary(dynamic data) {
+  if (data is Map<String, dynamic>) {
+    final code =
+        data['code'] ?? data['result'] ?? data['status'] ?? data['success'];
+    final msg = data['msg'] ?? data['message'] ?? data['mes'];
+    final keys = data.keys.take(8).join(',');
+    return 'code=$code msg=$msg keys=[$keys]';
+  }
+  if (data is List) {
+    return 'listLength=${data.length}';
+  }
+  return 'type=${data.runtimeType}';
+}
+
+void _logLoginEndpoint(
+  String tag,
+  String stage,
+  String endpoint, {
+  dynamic data,
+  Object? error,
+}) {
+  final prefix = '[$tag][Login][$stage] $endpoint';
+  if (error != null) {
+    debugPrint('$prefix error=$error');
+    return;
+  }
+  debugPrint('$prefix ${_loginPayloadSummary(data)}');
+}
+
 class CXLoginApi {
   /// Web登录
   static Future<Map<String, dynamic>?> loginWeb(
@@ -42,8 +71,10 @@ class CXLoginApi {
         method: "POST",
         body: formData,
       );
+      _logLoginEndpoint('CX', 'response', url, data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'fanyalogin', error: e);
       debugPrint('Login error: $e');
     }
     return null;
@@ -71,8 +102,10 @@ class CXLoginApi {
         method: "POST",
         body: formData,
       );
+      _logLoginEndpoint('CX', 'response', url, data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'api/sendcaptcha', error: e);
       debugPrint('sendCaptcha error: $e');
     }
     return null;
@@ -110,9 +143,11 @@ class CXLoginApi {
         method: "POST",
         body: formData,
       );
+      _logLoginEndpoint('CX', 'response', url, data: response.data);
       return response.data;
       // {"mes":"验证通过","type":1,"url":"https://sso.chaoxing.com/apis/login/userLogin4Uname.do","status":true}
     } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'v11/loginregister', error: e);
       debugPrint('Login error: $e');
     } finally {
       CookieManager.isLoggingIn = false;
@@ -154,6 +189,7 @@ class CXLoginApi {
       */
 
       final response = await ApiService.sendRequest(url);
+      _logLoginEndpoint('CX', 'response', url, data: response.data);
       // final response = await ApiService.sendRequest(url, method: "POST", body: formData);
 
       final data = response.data['msg'];
@@ -167,6 +203,7 @@ class CXLoginApi {
       );
       return user;
     } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'userLogin4Uname.do', error: e);
       debugPrint('getUserInfo error: $e');
     }
     return null;
@@ -223,8 +260,10 @@ class CXLoginApi {
         method: "POST",
         body: formData,
       );
+      _logLoginEndpoint('CX', 'response', authStatusUrl, data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'getauthstatus/v2', error: e);
       debugPrint('checkQRAuthStatus error: $e');
     } finally {
       CookieManager.isLoggingIn = false;
@@ -255,9 +294,11 @@ class RCLoginApi {
         method: 'POST',
         body: jsonData,
       );
+      _logLoginEndpoint('RC', 'response', url, data: response.data);
       debugPrint('[RC][API.sendCaptcha] request=$jsonData response=${response.data}');
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('RC', 'error', 'user/code/send', error: e);
       debugPrint('[RC][API.sendCaptcha] error=$e');
       debugPrint('sendCaptcha error: $e');
     }
@@ -279,8 +320,10 @@ class RCLoginApi {
         method: 'POST',
         body: jsonData,
       );
+      _logLoginEndpoint('RC', 'response', url, data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('RC', 'error', 'user/code/verify', error: e);
       debugPrint('verifyCaptcha error: $e');
     }
     return null;
@@ -326,8 +369,10 @@ class RCLoginApi {
         method: 'POST',
         body: jsonData,
       );
+      _logLoginEndpoint('RC', 'response', url, data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('RC', 'error', 'user/login/app', error: e);
       debugPrint('login error: $e');
     } finally {
       CookieManager.isLoggingIn = false;
@@ -341,6 +386,7 @@ class RCLoginApi {
       final url = '/v/course_meta/user_info';
 
       final response = await ApiService.sendRequest(url);
+      _logLoginEndpoint('RC', 'response', url, data: response.data);
 
       final userProfile = response.data['data']['user_profile'];
       final user = User(
@@ -355,6 +401,7 @@ class RCLoginApi {
       );
       return user;
     } catch (e) {
+      _logLoginEndpoint('RC', 'error', 'course_meta/user_info', error: e);
       debugPrint('getUserInfo error: $e');
     }
     return null;
@@ -479,8 +526,10 @@ class KTLoginApi {
         method: 'POST',
         body: requestBody,
       );
+      _logLoginEndpoint('KT', 'response', '/UserApi/login', data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('KT', 'error', '/UserApi/login', error: e);
       debugPrint('KTLoginApi.loginPassword error: $e');
     }
     return null;
@@ -503,8 +552,10 @@ class KTLoginApi {
         method: 'POST',
         body: requestBody,
       );
+      _logLoginEndpoint('KT', 'response', '/UserApi/loginByMobile', data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('KT', 'error', '/UserApi/loginByMobile', error: e);
       debugPrint('KTLoginApi.loginByMobile error: $e');
     }
     return null;
@@ -552,8 +603,10 @@ class KTLoginApi {
         method: 'POST',
         body: body,
       );
+      _logLoginEndpoint('KT', 'response', '/UserApi/sendCode', data: response.data);
       return response.data;
     } catch (e) {
+      _logLoginEndpoint('KT', 'error', '/UserApi/sendCode', error: e);
       debugPrint('KTLoginApi.sendCaptcha error: $e');
     }
     return null;
@@ -568,12 +621,14 @@ class KTLoginApi {
         body: body,
         headers: {'token': token},
       );
+      _logLoginEndpoint('KT', 'response', '/UserApi/getUserBasinInfo', data: basinResponse.data);
       final userResponse = await ApiService.sendRequest(
         '/UserApi/getUserInfo',
         method: 'POST',
         body: body,
         headers: {'token': token},
       );
+      _logLoginEndpoint('KT', 'response', '/UserApi/getUserInfo', data: userResponse.data);
 
       final basinData = basinResponse.data['data'] ?? {};
       final userData = userResponse.data['data'] ?? {};
@@ -597,6 +652,7 @@ class KTLoginApi {
         token: token,
       );
     } catch (e) {
+      _logLoginEndpoint('KT', 'error', 'getUserInfo aggregate', error: e);
       debugPrint('KTLoginApi.getUserInfo error: $e');
     }
     return null;

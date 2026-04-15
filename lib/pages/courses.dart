@@ -22,7 +22,7 @@ import 'actives/evaluate.dart';
 import 'actives/vote.dart';
 import 'actives/questionnaire.dart';
 import 'accounts.dart';
-import 'presentation.dart';
+import 'rainclassroom_course_detail.dart';
 import 'tronclass_sign_in.dart';
 import 'tronclass_web_login.dart';
 import 'ketangpai_course_struct.dart';
@@ -268,6 +268,7 @@ final GlobalKey coursesPageKey = GlobalKey();
 class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   List<Course> _courses = [];
   bool _isLoading = true;
+  String? _emptyHint;
   StreamSubscription? _accountChangeSubscription;
   StreamSubscription? _platformChangeSubscription;
   Timer? _refreshTimer;
@@ -276,9 +277,340 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   Color _globalPrimary = const Color(0xFF1F9EA8);
   Color _globalSecondary = const Color(0xFF157B88);
   Color _globalAccent = const Color(0xFF59BE30);
+  DateTime? _lastRefreshAt;
+  String? _lastRefreshMessage;
 
-  void refreshCourses() {
-    _loadCourses();
+  Future<void> refreshCourses() {
+    return _refreshCourses();
+  }
+
+  String _formatClock(DateTime value) {
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    final second = value.second.toString().padLeft(2, '0');
+    return '$hour:$minute:$second';
+  }
+
+  Future<void> _refreshCourses({bool showFeedback = false}) async {
+    await _loadCourses();
+    if (mounted) {
+      _lastRefreshAt = DateTime.now();
+      _lastRefreshMessage = _courses.isEmpty
+          ? '未获取到课程数据'
+          : '已更新 ${_courses.length} 门课程';
+      setState(() {});
+    }
+    if (!mounted || !showFeedback) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('课程已刷新 · ${_formatClock(DateTime.now())}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
+  Widget _buildRefreshStatusBar(BuildContext context) {
+    final lastRefreshText = _lastRefreshAt == null
+        ? '尚未手动刷新'
+        : '最近刷新：${_formatClock(_lastRefreshAt!)}';
+    final statusText = _lastRefreshMessage ?? '下拉或点击右下角按钮刷新课程';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              _globalPrimary.withValues(alpha: 0.95),
+              _globalSecondary.withValues(alpha: 0.95),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: _globalPrimary.withValues(alpha: 0.16),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.sync, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    statusText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    lastRefreshText,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.88),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${_courses.length}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  '门课程',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCourseListBody({required bool isTronclass}) {
+    if (isTronclass) {
+      return RefreshIndicator(
+        onRefresh: _refreshCourses,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(child: _buildRefreshStatusBar(context)),
+            SliverToBoxAdapter(child: _buildTronclassHeaderPanel()),
+            if (_courses.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _buildTronclassEmptyState(context),
+              )
+            else
+              SliverList.builder(
+                itemCount: _courses.length,
+                itemBuilder: (context, index) {
+                  final course = _courses[index];
+                  return _buildTronclassCourseCard(course);
+                },
+              ),
+            const SliverToBoxAdapter(child: SizedBox(height: 20)),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _refreshCourses,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          _buildRefreshStatusBar(context),
+          if (_courses.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+              child: Text(
+                _emptyHint ?? '暂无课程数据',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16, color: Colors.grey, height: 1.5),
+              ),
+            )
+          else
+            ..._courses.map((course) {
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: InkWell(
+                  onTap: () {
+                    if (PlatformManager().isChaoxing) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => CourseContentPage(
+                            courseId: course.courseId,
+                            courseName: course.name,
+                            classId: course.classId,
+                            cpi: course.cpi!,
+                          ),
+                        ),
+                      );
+                    } else if (PlatformManager().isRainClassroom) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => RainClassroomCourseDetailPage(course: course),
+                        ),
+                      );
+                    } else {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => KetangpaiCourseStructPage(course: course),
+                        ),
+                      );
+                    }
+                  },
+                  child: Stack(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Builder(
+                                  builder: (context) {
+                                    final title = course.name.trim();
+                                    final firstChar =
+                                        title.isEmpty ? '课' : title.substring(0, 1);
+                                    if (course.image.isNotEmpty) {
+                                      return AvatarWidget(
+                                        imageUrl: course.image,
+                                        size: 50,
+                                        borderRadius: 6,
+                                        iconSize: 25,
+                                      );
+                                    }
+                                    return Container(
+                                      width: 50,
+                                      height: 50,
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            _globalPrimary,
+                                            _globalSecondary.withValues(alpha: 0.92),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          firstChar,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        course.name,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        course.teacher,
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 5),
+                            if (course.note != null)
+                              Text(
+                                course.note!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            if (course.schools != null)
+                              Text(
+                                course.schools!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            if (course.beginDate != null && course.endDate != null)
+                              Text(
+                                '开课时间：${course.beginDate} 至 ${course.endDate}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Positioned(
+                        right: 16,
+                        top: 0,
+                        bottom: 0,
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: Icon(
+                            Icons.chevron_right,
+                            color: Colors.grey[400],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
   }
 
   void onVisibilityChanged(bool visible) {
@@ -375,13 +707,16 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCourses([Map<String, dynamic>? onLessonCourses]) async {
+    final currentPlatform = PlatformManager().currentPlatformName;
     setState(() {
       _isLoading = true;
+      _emptyHint = null;
     });
 
     if (!AccountManager.hasActiveSession()) {
       setState(() {
         _isLoading = false;
+        _emptyHint = '当前未登录，请先到账号页登录';
       });
       return; // 没有登录账号时不加载课程
     }
@@ -402,17 +737,32 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         setState(() {
           _courses = coursesData!;
           _isLoading = false;
+          _emptyHint = null;
         });
       } else {
+        final rainServerInfo = PlatformManager().isRainClassroom
+            ? '服务器：${PlatformManager().serverName}\n'
+                '账号状态：${AccountManager.hasActiveSession() ? '已登录' : '未登录'}\n'
+                '在线课堂：${_lastOnLessonCourses == null ? '未拉取' : '已拉取'}\n'
+                '最近在线课堂 keys：${_lastOnLessonCourses == null ? '无' : _lastOnLessonCourses!.keys.take(6).join(', ')}\n'
+                '请对照控制台里的 [ApiService] / [RC] 日志查看具体请求结果'
+            : '';
         setState(() {
           _courses =  [];
           _isLoading = false;
+          _emptyHint = PlatformManager().isRainClassroom
+              ? '未获取到雨课堂课程数据\n平台：$currentPlatform\n$rainServerInfo'
+              : '暂无课程数据';
         });
       }
     } catch (e) {
+      debugPrint('[Courses] load failed: $e');
       setState(() {
         _courses = [];
         _isLoading = false;
+        _emptyHint = PlatformManager().isRainClassroom
+            ? '课程加载失败\n平台：$currentPlatform\n服务器：${PlatformManager().serverName}\n登录状态：${AccountManager.hasActiveSession() ? '已登录' : '未登录'}\n请先检查账号和服务器，再看控制台日志'
+            : '课程加载失败，请下拉刷新重试';
       });
     }
   }
@@ -822,9 +1172,23 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   
     if (result.startsWith('http')) {
       try {
-        final uri = Uri.parse(result);
+        Uri uri = Uri.parse(result);
+
+        // RainClassroom QR often comes as a WeChat short link.
+        uri = await _resolveScannedUri(uri, result);
+        final extractedRainUri = _extractRainQrUriFromCandidates(
+          uri,
+          rawCandidates: <String>[result, uri.toString()],
+        );
+        if (extractedRainUri != null) {
+          uri = extractedRainUri;
+        }
+
         final baseUrl = uri.origin + uri.path;
         final params = uri.queryParameters;
+        final isRainQrPath =
+            uri.path == '/api/v3/lesson/check-in/dynamic-qr-code' &&
+            uri.host.endsWith('yuketang.cn');
   
         // 判断是否为签到 URL
         if (baseUrl == 'https://mobilelearn.chaoxing.com/widget/sign/e') {
@@ -906,7 +1270,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
               );
             }
           }
-        } else if (baseUrl == 'https://www.yuketang.cn/api/v3/lesson/check-in/dynamic-qr-code'){
+        } else if (isRainQrPath){
           if (!PlatformManager().isRainClassroom) {
             await PlatformManager().setPlatform(PlatformType.rainClassroom);
             if (!mounted) return;
@@ -933,10 +1297,10 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             return;
           }
   
-          // https://www.yuketang.cn/api/v3/lesson/check-in/dynamic-qr-code?
+          // https://*.yuketang.cn/api/v3/lesson/check-in/dynamic-qr-code?
           // c=fL5xO1crTr6AC1Re3BaUEurgVNpZL0zydLypc0f2m2A&t=1772409038563&s=B53F5736FCCAF827&v=2
   
-            await _multiScan(result);
+            await _multiScan(uri.toString());
           } else if (params.containsKey('ticketid') &&
               params.containsKey('expire') &&
               params.containsKey('sign')) {
@@ -949,6 +1313,10 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             }
 
             await _multiScan(result);
+        } else if (PlatformManager().isRainClassroom &&
+            _looksLikeRainClassroomQrCandidate(result, uri)) {
+          // In RainClassroom mode, WeChat short links should still attempt sign-in first.
+          await _multiScan(result);
         } else {
           // 其他 URL 处理
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -981,6 +1349,194 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         SnackBar(content: Text('扫描结果：$result')),
       );
     }
+  }
+
+  bool _looksLikeRainClassroomQrCandidate(String raw, Uri uri) {
+    final lowerRaw = raw.toLowerCase();
+    final host = uri.host.toLowerCase();
+    final path = uri.path.toLowerCase();
+
+    if (_isRainQrUri(uri)) {
+      return true;
+    }
+
+    // WeChat short-link codes are common for RainClassroom dynamic sign-in.
+    if (host.contains('weixin.qq.com') && path.startsWith('/q/')) {
+      return true;
+    }
+
+    if (host.endsWith('yuketang.cn') &&
+        (path.contains('/lesson/check-in/dynamic-qr-code') ||
+            lowerRaw.contains('dynamic-qr-code'))) {
+      return true;
+    }
+
+    final qp = uri.queryParameters;
+    if (qp.containsKey('c') && qp.containsKey('t') && qp.containsKey('s')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  Future<Uri> _resolveScannedUri(Uri uri, String rawUrl) async {
+    if (!(uri.host.contains('weixin.qq.com') && uri.path.startsWith('/q/'))) {
+      return uri;
+    }
+
+    // 1) Try existing request chain first.
+    try {
+      final resolvedResp = await ApiService.sendRequest(
+        rawUrl,
+        responseType: ResponseType.plain,
+        allowRedirects: true,
+      );
+      final resolved = resolvedResp.requestOptions.uri;
+      final fromBody = _extractRainQrUriFromCandidates(
+        resolved,
+        rawCandidates: <String>[resolvedResp.data?.toString() ?? ''],
+      );
+      if (fromBody != null) {
+        return fromBody;
+      }
+      if (!(resolved.host.contains('weixin.qq.com') && resolved.path.startsWith('/q/'))) {
+        return resolved;
+      }
+    } catch (_) {
+      // continue with raw resolver fallback
+    }
+
+    // 2) Fallback: resolve redirects without platform interceptors/cookies.
+    try {
+      return await _resolveRedirectWithRawDio(rawUrl);
+    } catch (_) {
+      return uri;
+    }
+  }
+
+  Future<Uri> _resolveRedirectWithRawDio(String url) async {
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 10),
+        followRedirects: false,
+        validateStatus: (status) => status != null && status < 400,
+      ),
+    );
+
+    var current = url;
+    for (int i = 0; i < 8; i++) {
+      final resp = await dio.get(
+        current,
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: const {
+            'User-Agent':
+                'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36',
+          },
+        ),
+      );
+
+      final location = resp.headers.value('location');
+      if (location == null || location.isEmpty) {
+        final bodyUri = _extractRainQrUriFromCandidates(
+          resp.requestOptions.uri,
+          rawCandidates: <String>[resp.data?.toString() ?? ''],
+        );
+        return bodyUri ?? resp.requestOptions.uri;
+      }
+
+      final currentUri = Uri.parse(current);
+      final locationUri = Uri.parse(location);
+      current = locationUri.hasScheme
+          ? locationUri.toString()
+          : currentUri.resolveUri(locationUri).toString();
+
+      final nestedUri = _extractRainQrUriFromCandidates(
+        Uri.parse(current),
+        rawCandidates: <String>[current, location],
+      );
+      if (nestedUri != null) {
+        return nestedUri;
+      }
+    }
+
+    return Uri.parse(current);
+  }
+
+  Uri? _extractRainQrUriFromCandidates(
+    Uri baseUri, {
+    required List<String> rawCandidates,
+  }) {
+    if (_isRainQrUri(baseUri)) {
+      return baseUri;
+    }
+
+    for (final raw in rawCandidates) {
+      final fromText = _extractRainQrUriFromText(raw);
+      if (fromText != null) {
+        return fromText;
+      }
+    }
+
+    for (final value in baseUri.queryParameters.values) {
+      final fromQuery = _extractRainQrUriFromText(value);
+      if (fromQuery != null) {
+        return fromQuery;
+      }
+      try {
+        final decoded = Uri.decodeComponent(value);
+        final fromDecoded = _extractRainQrUriFromText(decoded);
+        if (fromDecoded != null) {
+          return fromDecoded;
+        }
+      } catch (_) {
+        // skip malformed query component
+      }
+    }
+    return null;
+  }
+
+  bool _isRainQrUri(Uri uri) {
+    return uri.path == '/api/v3/lesson/check-in/dynamic-qr-code' &&
+        uri.host.contains('yuketang.cn');
+  }
+
+  Uri? _extractRainQrUriFromText(String? input) {
+    final text = input?.trim() ?? '';
+    if (text.isEmpty) {
+      return null;
+    }
+
+    final normalized = text.replaceAll('&amp;', '&');
+    final regex = RegExp(
+      "https?://[^\\s\"']+/api/v3/lesson/check-in/dynamic-qr-code\\?[^\\s\"']+",
+      caseSensitive: false,
+    );
+    final match = regex.firstMatch(normalized);
+    if (match != null) {
+      final candidate = match.group(0)!;
+      try {
+        return Uri.parse(candidate);
+      } catch (_) {
+        // try decoded form below
+      }
+      try {
+        return Uri.parse(Uri.decodeFull(candidate));
+      } catch (_) {
+        return null;
+      }
+    }
+
+    try {
+      final decoded = Uri.decodeComponent(normalized);
+      if (decoded != normalized) {
+        return _extractRainQrUriFromText(decoded);
+      }
+    } catch (_) {
+      // keep null
+    }
+    return null;
   }
 
   /// 为所有用户扫描
@@ -1182,205 +1738,17 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _isLoading ? null : () => _refreshCourses(showFeedback: true),
+        backgroundColor: _globalPrimary,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.refresh),
+        label: const Text('刷新'),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : isTronclass
-          ? RefreshIndicator(
-              onRefresh: _loadCourses,
-              child: CustomScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [
-                  SliverToBoxAdapter(child: _buildTronclassHeaderPanel()),
-                  if (_courses.isEmpty)
-                    SliverFillRemaining(
-                      hasScrollBody: false,
-                      child: _buildTronclassEmptyState(context),
-                    )
-                  else
-                    SliverList.builder(
-                      itemCount: _courses.length,
-                      itemBuilder: (context, index) {
-                        final course = _courses[index];
-                        return _buildTronclassCourseCard(course);
-                      },
-                    ),
-                  const SliverToBoxAdapter(child: SizedBox(height: 20)),
-                ],
-              ),
-            )
-          : RefreshIndicator(
-              onRefresh: _loadCourses,
-              child: _courses.isEmpty
-                  ? const Center(
-                      child: Text(
-                        '暂无课程数据',
-                        style: TextStyle(fontSize: 18, color: Colors.grey),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: _courses.length,
-                      itemBuilder: (context, index) {
-                        var course = _courses[index];
-                        return Card(
-                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          child: InkWell(
-                            onTap: () {
-                              if (PlatformManager().isChaoxing) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => CourseContentPage(
-                                      courseId: course.courseId,
-                                      courseName: course.name,
-                                      classId: course.classId,
-                                      cpi: course.cpi!,
-                                    ),
-                                  ),
-                                );
-                              } else if (PlatformManager().isRainClassroom) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => PresentationPage(
-                                      lessonId: course.lessonId!,
-                                      title: course.name,
-                                    ),
-                                  ),
-                                );
-                              } else {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => KetangpaiCourseStructPage(course: course),
-                                  ),
-                                );
-                              }
-                            },
-                            child: Stack(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Builder(
-                                            builder: (context) {
-                                              final title = course.name.trim();
-                                              final firstChar =
-                                                  title.isEmpty ? '课' : title.substring(0, 1);
-                                              if (course.image.isNotEmpty) {
-                                                return AvatarWidget(
-                                                  imageUrl: course.image,
-                                                  size: 50,
-                                                  borderRadius: 6,
-                                                  iconSize: 25,
-                                                );
-                                              }
-                                              return Container(
-                                                width: 50,
-                                                height: 50,
-                                                decoration: BoxDecoration(
-                                                  gradient: LinearGradient(
-                                                    colors: [
-                                                      _globalPrimary,
-                                                      _globalSecondary.withValues(alpha: 0.92),
-                                                    ],
-                                                    begin: Alignment.topLeft,
-                                                    end: Alignment.bottomRight,
-                                                  ),
-                                                  borderRadius: BorderRadius.circular(6),
-                                                ),
-                                                child: Center(
-                                                  child: Text(
-                                                    firstChar,
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 22,
-                                                      fontWeight: FontWeight.w700,
-                                                    ),
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  course.name,
-                                                  style: const TextStyle(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  course.teacher,
-                                                  style: const TextStyle(
-                                                    fontSize: 14,
-                                                    color: Colors.grey,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-
-                                      const SizedBox(height: 5),
-                                      if (course.note != null)
-                                        Text(
-                                          course.note!,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey,
-                                          ),
-                                        ),
-                                      if (course.schools != null)
-                                        Text(
-                                          course.schools!,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey,
-                                          ),
-                                        ),
-                                      if (course.beginDate != null && course.endDate != null)
-                                        Text(
-                                          '开课时间：${course.beginDate} 至 ${course.endDate}',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                                Positioned(
-                                  right: 16,
-                                  top: 0,
-                                  bottom: 0,
-                                  child: Align(
-                                    alignment: Alignment.center,
-                                    child: Icon(
-                                      Icons.chevron_right,
-                                      color: Colors.grey[400],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
+          : _buildCourseListBody(isTronclass: isTronclass),
     );
   }
 

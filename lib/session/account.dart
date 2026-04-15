@@ -102,19 +102,23 @@ class AccountManager {
   /// 添加账户（如果已存在则更新）
   static Future<void> addAccount(User user) async {
     final accounts = _accounts;
+    final hasTempCookies = CookieManager.getTempCookieJar() != null;
     final index = accounts.indexWhere((acc) => acc.uid == user.uid);
     if (index != -1) {
       accounts[index] = user;
     } else {
       accounts.add(user);
-      // 将临时Cookie迁移到该账号
-      await CookieManager.saveTempCookies(user.uid);
-
       // 如果没有当前会话，自动设置为当前账户
       if (!hasActiveSession()) {
         await setCurrentSession(user.uid);
       }
     }
+
+    // 登录成功后不论账号是新增还是更新，都迁移临时 Cookie。
+    if (hasTempCookies) {
+      await CookieManager.saveTempCookies(user.uid);
+    }
+
     await _saveAccounts(accounts);
   }
 

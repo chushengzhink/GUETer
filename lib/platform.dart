@@ -129,6 +129,9 @@ class PlatformManager {
       
       // 触发平台变化回调，初始化 headers
       ApiService.onPlatformChange!();
+      debugPrint(
+        '[Platform] initialized platform=$_currentPlatform server=$serverName tronclass=$_tronclassBaseUrl ketangpai=$_ketangpaiBaseUrl',
+      );
     } catch (e) {
       debugPrint('加载平台失败：$e');
     }
@@ -158,6 +161,7 @@ class PlatformManager {
   /// 设置雨课堂服务器
   Future<void> setServer(RainClassroomServerType server) async {
     if (_currentServer != server) {
+      final oldServer = _currentServer;
       _currentServer = server;
       try {
         await _prefs.setString(_serverKey, serverName);
@@ -165,6 +169,9 @@ class PlatformManager {
         debugPrint('保存服务器失败：$e');
       }
       ApiService.onPlatformChange?.call();
+      debugPrint('[Platform] rainclassroom server switched $oldServer -> $_currentServer');
+      // Reuse platform change stream to force page-level refresh after server switch.
+      _platformChangeController.add(_currentPlatform);
     }
   }
 

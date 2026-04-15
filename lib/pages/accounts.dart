@@ -159,15 +159,43 @@ class _AccountsPageState extends State<AccountsPage>
     List<User> accounts,
   ) async {
     final state = <String, bool>{};
+    const probeUris = <String>[
+      'https://www.yuketang.cn/',
+      'https://pro.yuketang.cn/',
+      'https://changjiang.yuketang.cn/',
+      'https://huanghe.yuketang.cn/',
+      'https://yuketang.cn/',
+    ];
+
+    bool hasAuthCookies(List<dynamic> cookies) {
+      if (cookies.isEmpty) {
+        return false;
+      }
+      final names = cookies
+          .map((c) => c?.name?.toString().toLowerCase() ?? '')
+          .where((name) => name.isNotEmpty)
+          .toSet();
+      return names.contains('sessionid') ||
+          names.contains('university_id') ||
+          names.contains('csrftoken') ||
+          names.contains('xtbz');
+    }
+
     for (final user in accounts) {
       if (!user.isRainClassroom) {
         continue;
       }
+
       final jar = await CookieManager.getCookieJarForUser(user.uid);
-      final cookies = await jar.loadForRequest(
-        Uri.parse('https://${CookieManager.rcDomain}'),
-      );
-      state[user.uid] = cookies.isNotEmpty;
+      var loggedIn = false;
+      for (final uri in probeUris) {
+        final cookies = await jar.loadForRequest(Uri.parse(uri));
+        if (hasAuthCookies(cookies)) {
+          loggedIn = true;
+          break;
+        }
+      }
+      state[user.uid] = loggedIn;
     }
     return state;
   }
@@ -1076,6 +1104,12 @@ class _AccountsPageState extends State<AccountsPage>
               tooltip: '切换服务器',
               onSelected: (RainClassroomServerType server) async {
                 await PlatformManager().setServer(server);
+                if (!mounted) return;
+                await _loadAccounts();
+                if (!mounted) return;
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  SnackBar(content: Text('已切换到 ${PlatformManager().serverName} 服务器')),
+                );
               },
               itemBuilder: (BuildContext context) => [
                 PopupMenuItem<RainClassroomServerType>(
@@ -1092,6 +1126,12 @@ class _AccountsPageState extends State<AccountsPage>
                                 setPopupState(() {});
                                 Navigator.pop(context);
                                 await PlatformManager().setServer(value);
+                                if (!mounted) return;
+                                await _loadAccounts();
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(this.context).showSnackBar(
+                                  SnackBar(content: Text('已切换到 ${PlatformManager().serverName} 服务器')),
+                                );
                               }
                             },
                             child: Column(

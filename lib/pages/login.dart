@@ -464,45 +464,11 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<String?> _showKetangpaiCaptchaDialog(Uint8List imageBytes) async {
-    final captchaController = TextEditingController();
     final result = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('请输入课堂派图形验证码'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.memory(imageBytes, fit: BoxFit.cover),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: captchaController,
-                autofocus: true,
-                decoration: const InputDecoration(hintText: '请输入图中结果'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(
-                dialogContext,
-              ).pop(captchaController.text.trim()),
-              child: const Text('确定'),
-            ),
-          ],
-        );
-      },
+      builder: (dialogContext) => _KetangpaiCaptchaDialog(imageBytes: imageBytes),
     );
-
-    captchaController.dispose();
     return result;
   }
 
@@ -609,8 +575,10 @@ class _LoginPageState extends State<LoginPage> {
 
       if (PlatformManager().isKetangpai) {
         final sessionId = DateTime.now().microsecondsSinceEpoch.toString();
+        debugPrint('[KT][sendCaptcha][request] sessionId=$sessionId account=$account');
         final imageBytes = await KTLoginApi.getCaptchaImage(sessionId);
         if (imageBytes == null || imageBytes.isEmpty) {
+          debugPrint('[KT][sendCaptcha][response] captcha image empty');
           if (mounted) {
             ScaffoldMessenger.of(
               context,
@@ -621,9 +589,11 @@ class _LoginPageState extends State<LoginPage> {
 
         final verify = await _showKetangpaiCaptchaDialog(imageBytes);
         if (verify == null || verify.isEmpty) {
+          debugPrint('[KT][sendCaptcha][dialog] user cancelled captcha input');
           return;
         }
 
+        debugPrint('[KT][sendCaptcha][submit] verifyLen=${verify.length} sessionId=$sessionId');
         final result = await KTLoginApi.sendCaptcha(
           account,
           verify: verify,
@@ -1179,6 +1149,63 @@ class _LoginPageState extends State<LoginPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _KetangpaiCaptchaDialog extends StatefulWidget {
+  final Uint8List imageBytes;
+
+  const _KetangpaiCaptchaDialog({required this.imageBytes});
+
+  @override
+  State<_KetangpaiCaptchaDialog> createState() => _KetangpaiCaptchaDialogState();
+}
+
+class _KetangpaiCaptchaDialogState extends State<_KetangpaiCaptchaDialog> {
+  late final TextEditingController _captchaController;
+
+  @override
+  void initState() {
+    super.initState();
+    _captchaController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _captchaController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('请输入课堂派图形验证码'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.memory(widget.imageBytes, fit: BoxFit.cover),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _captchaController,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: '请输入图中结果'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_captchaController.text.trim()),
+          child: const Text('确定'),
+        ),
+      ],
     );
   }
 }

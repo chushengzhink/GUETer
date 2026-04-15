@@ -10,6 +10,37 @@ import '../utils/coord_transform.dart';
 import '../models/active.dart';
 import '../models/course.dart';
 
+String _apiPayloadSummary(dynamic data) {
+  if (data is Map<String, dynamic>) {
+    final code =
+        data['code'] ?? data['result'] ?? data['success'] ?? data['status'];
+    final msg = data['msg'] ?? data['message'] ?? data['mes'];
+    final keys = data.keys.take(8).join(',');
+    return 'code=$code msg=$msg keys=[$keys]';
+  }
+
+  if (data is List) {
+    return 'listLength=${data.length}';
+  }
+
+  return 'type=${data.runtimeType}';
+}
+
+void _logApiEndpoint(
+  String tag,
+  String stage,
+  String endpoint, {
+  dynamic data,
+  Object? error,
+}) {
+  final prefix = '[$tag][Endpoint][$stage] $endpoint';
+  if (error != null) {
+    debugPrint('$prefix error=$error');
+    return;
+  }
+  debugPrint('$prefix ${_apiPayloadSummary(data)}');
+}
+
 class CXCourseApi {
   /// 获取课程列表
   static Future<Map<String, dynamic>?> getCourses() async {
@@ -17,9 +48,12 @@ class CXCourseApi {
       final url =
           'https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&getTchClazzType=1&mcode=';
 
+      _logApiEndpoint('CX', 'request', url);
       final response = await ApiService.sendRequest(url);
+      _logApiEndpoint('CX', 'response', url, data: response.data);
       return response.data;
     } catch (e) {
+      _logApiEndpoint('CX', 'error', 'mycourse/backclazzdata', error: e);
       debugPrint('getCourses error: $e');
     }
     return null;
@@ -72,6 +106,7 @@ class CXCourseApi {
       };
 
       final response = await ApiService.sendRequest(url, params: params);
+      _logApiEndpoint('CX', 'response', '$url?courseid=$courseId&clazzid=$classId', data: response.data);
 
       final joinClassTime = response.data['data'][0]['createtime'];
       return joinClassTime;
@@ -88,6 +123,7 @@ class CXCourseApi {
       }
        */
     } catch (e) {
+      _logApiEndpoint('CX', 'error', 'gas/clazzperson', error: e);
       debugPrint('getJoinClassTime error: $e');
     }
     return null;
@@ -119,8 +155,10 @@ class CXCourseApi {
         method: 'GET',
         params: params,
       );
+      _logApiEndpoint('CX', 'response', '$url?courseId=$courseId&classId=$classId', data: response.data);
       return response.data;
     } catch (e) {
+      _logApiEndpoint('CX', 'error', 'ppt/activeAPI/taskactivelist', error: e);
       debugPrint('getTaskActivityList error: $e');
     }
     return null;
@@ -151,8 +189,10 @@ class CXCourseApi {
         method: 'GET',
         params: params,
       );
+      _logApiEndpoint('CX', 'response', '$url?courseId=$courseId&classId=$classId', data: response.data);
       return response.data;
     } catch (e) {
+      _logApiEndpoint('CX', 'error', 'v2/apis/active/student/activelist', error: e);
       debugPrint('getTaskActivityList error: $e');
     }
     return null;
@@ -230,6 +270,10 @@ class RCCourseApi {
   // userId -> [bearerToken, lessonToken]
   static final Map<String, List<String>> _tokens = {};
 
+  static void _logRc(String message) {
+    debugPrint('[RC][Course] $message');
+  }
+
   static String get _currentSessionId => AccountManager.currentSessionId!;
 
   /// 获取当前用户的 bearerToken
@@ -255,6 +299,7 @@ class RCCourseApi {
         method: 'POST',
         body: jsonData,
       );
+      _logApiEndpoint('RC', 'response', tokenUrl, data: tokenResponse.data);
 
       if (tokenResponse.data == null ||
           tokenResponse.data['success'] != true ||
@@ -284,6 +329,7 @@ class RCCourseApi {
         method: 'POST',
         body: formData,
       );
+      _logApiEndpoint('RC', 'response', uploadUrl, data: uploadResponse.data);
 
       if (uploadResponse.data == null ||
           uploadResponse.data['success'] != true) {
@@ -301,28 +347,275 @@ class RCCourseApi {
   }
 
   static Future<Map<String, dynamic>?> getCourses() async {
-    try {
-      final response = await ApiService.sendRequest(
-        '/v/course_meta/learning_list/',
-      );
-      return response.data;
-    } catch (e) {
-      debugPrint('getCourses error: $e');
+    const relativeCandidates = <String>[
+      '/v/course_meta/learning_list/',
+      '/api/v3/course_meta/learning_list/',
+      '/api/v3/lesson/learning/list',
+    ];
+    const hosts = <String>[
+      'https://www.yuketang.cn',
+      'https://pro.yuketang.cn',
+      'https://changjiang.yuketang.cn',
+      'https://huanghe.yuketang.cn',
+    ];
+
+    final candidates = <String>[...relativeCandidates];
+    for (final host in hosts) {
+      for (final path in relativeCandidates) {
+        candidates.add('$host$path');
+      }
     }
+
+    for (final path in candidates) {
+      try {
+        _logRc('getCourses try: $path');
+        final response = await ApiService.sendRequest(path);
+        final data = response.data;
+        _logApiEndpoint('RC', 'response', path, data: data);
+        if (data is Map<String, dynamic> && data.isNotEmpty) {
+          _logRc('getCourses success: $path keys=${data.keys.take(6).join(',')}');
+          return data;
+        }
+      } catch (e) {
+        _logApiEndpoint('RC', 'error', path, error: e);
+        _logRc('getCourses failed: $path error=$e');
+      }
+    }
+    _logRc('getCourses all candidates failed');
     return null;
   }
 
   static Future<Map<String, dynamic>?> getOnLessonAndUpcomingExam() async {
-    try {
-      final response = await ApiService.sendRequest(
-        '/api/v3/classroom/on-lesson-upcoming-exam',
-      );
-      return response.data;
-    } catch (e) {
-      debugPrint('getOnLessonAndUpcomingExam error: $e');
+    const candidates = <String>[
+      '/api/v3/classroom/on-lesson-upcoming-exam',
+      'https://www.yuketang.cn/api/v3/classroom/on-lesson-upcoming-exam',
+      'https://pro.yuketang.cn/api/v3/classroom/on-lesson-upcoming-exam',
+      'https://changjiang.yuketang.cn/api/v3/classroom/on-lesson-upcoming-exam',
+      'https://huanghe.yuketang.cn/api/v3/classroom/on-lesson-upcoming-exam',
+    ];
+
+    for (final path in candidates) {
+      try {
+        _logRc('getOnLessonAndUpcomingExam try: $path');
+        final response = await ApiService.sendRequest(path);
+        final data = response.data;
+        _logApiEndpoint('RC', 'response', path, data: data);
+        if (data is Map<String, dynamic> && data.isNotEmpty) {
+          _logRc('getOnLessonAndUpcomingExam success: $path keys=${data.keys.take(6).join(',')}');
+          return data;
+        }
+      } catch (e) {
+        _logApiEndpoint('RC', 'error', path, error: e);
+        _logRc('getOnLessonAndUpcomingExam failed: $path error=$e');
+      }
     }
+
+    _logRc('getOnLessonAndUpcomingExam all candidates failed');
     return null;
   }
+
+  static List<dynamic> _extractCourseItems(Map<String, dynamic>? courses) {
+    if (courses == null) {
+      return const [];
+    }
+
+    final data = courses['data'];
+    if (data is List) {
+      return data;
+    }
+    if (data is Map<String, dynamic>) {
+      final keys = <String>[
+        'list',
+        'course_list',
+        'courseList',
+        'courses',
+        'learningList',
+        'learning_list',
+      ];
+      for (final key in keys) {
+        final value = data[key];
+        if (value is List) {
+          return value;
+        }
+      }
+    }
+
+    final keys = <String>['list', 'course_list', 'courseList', 'courses'];
+    for (final key in keys) {
+      final value = courses[key];
+      if (value is List) {
+        return value;
+      }
+    }
+
+    final recursive = _findCourseLikeList(courses);
+    if (recursive.isNotEmpty) {
+      return recursive;
+    }
+
+    return const [];
+  }
+
+  static bool _looksLikeCourseItem(Map<String, dynamic> map) {
+    return map.containsKey('course_id') ||
+        map.containsKey('courseId') ||
+        map.containsKey('course_name') ||
+        map.containsKey('courseName') ||
+        map.containsKey('classroom_id') ||
+        map.containsKey('classroomId') ||
+        map.containsKey('teacher') ||
+        map.containsKey('teacher_name');
+  }
+
+  static List<dynamic> _findCourseLikeList(dynamic node, {int depth = 0}) {
+    if (depth > 4 || node == null) {
+      return const [];
+    }
+
+    if (node is List) {
+      if (node.isNotEmpty && node.first is Map) {
+        final mapItems = node.whereType<Map>().take(20).map((e) {
+          return e.map((k, v) => MapEntry(k.toString(), v));
+        }).toList();
+        if (mapItems.isNotEmpty && mapItems.any(_looksLikeCourseItem)) {
+          return node;
+        }
+      }
+
+      for (final item in node.take(20)) {
+        final found = _findCourseLikeList(item, depth: depth + 1);
+        if (found.isNotEmpty) {
+          return found;
+        }
+      }
+      return const [];
+    }
+
+    if (node is Map<String, dynamic>) {
+      for (final key in node.keys) {
+        final value = node[key];
+        final found = _findCourseLikeList(value, depth: depth + 1);
+        if (found.isNotEmpty) {
+          return found;
+        }
+      }
+    }
+
+    return const [];
+  }
+
+  static List<dynamic> _extractOnLessonItems(Map<String, dynamic>? payload) {
+    if (payload == null) {
+      return const [];
+    }
+
+    final data = payload['data'];
+    if (data is Map<String, dynamic>) {
+      final keys = <String>[
+        'onLessonClassrooms',
+        'on_lesson_classrooms',
+        'onLessonCourses',
+        'on_lesson_courses',
+        'classrooms',
+        'lessons',
+      ];
+      for (final key in keys) {
+        final value = data[key];
+        if (value is List) {
+          return value;
+        }
+      }
+
+      final recursive = _findCourseLikeList(data);
+      if (recursive.isNotEmpty) {
+        return recursive;
+      }
+    }
+
+    final recursive = _findCourseLikeList(payload);
+    if (recursive.isNotEmpty) {
+      return recursive;
+    }
+    return const [];
+  }
+
+  static Map<String, dynamic> _normalizeRcCourseItem(Map<String, dynamic> raw) {
+    final teacherRaw = raw['teacher'];
+    final teacher = teacherRaw is Map<String, dynamic>
+        ? teacherRaw
+        : <String, dynamic>{
+            'name': raw['teacher_name'] ?? raw['teacherName'] ?? raw['teacher'],
+            'avatar': raw['teacher_avatar'] ?? raw['teacherAvatar'],
+          };
+
+    return <String, dynamic>{
+      ...raw,
+      'course_id': raw['course_id'] ?? raw['courseId'] ?? raw['id'] ?? '',
+      'classroom_id':
+          raw['classroom_id'] ?? raw['classroomId'] ?? raw['lesson_id'] ?? '',
+      'course_name': raw['course_name'] ?? raw['courseName'] ?? raw['name'] ?? '未知课程',
+      'classroom_name': raw['classroom_name'] ?? raw['classroomName'] ?? raw['class_name'],
+      'lesson_id': raw['lesson_id'] ?? raw['lessonId'],
+      'teacher': teacher,
+    };
+  }
+
+      static Map<String, dynamic> _normalizeRcOnLessonItem(Map<String, dynamic> raw) {
+      final courseRaw = raw['course'];
+      final course = courseRaw is Map<String, dynamic>
+        ? courseRaw
+        : <String, dynamic>{};
+
+      final teacherRaw = raw['teacher'] ?? course['teacher'];
+      final teacher = teacherRaw is Map<String, dynamic>
+        ? teacherRaw
+        : <String, dynamic>{
+          'name': raw['teacherName'] ??
+            raw['teacher_name'] ??
+            raw['lecturer_name'] ??
+            course['teacher_name'] ??
+            course['teacherName'] ??
+            raw['teacher'] ??
+            course['teacher'],
+          'avatar': raw['teacherAvatar'] ??
+            raw['teacher_avatar'] ??
+            course['teacher_avatar'] ??
+            course['teacherAvatar'],
+          };
+
+      return <String, dynamic>{
+        ...raw,
+        'course_id': raw['courseId'] ??
+          raw['course_id'] ??
+          course['id'] ??
+          course['course_id'] ??
+          raw['id'] ??
+          '',
+        'classroom_id': raw['classroomId'] ??
+          raw['classroom_id'] ??
+          raw['lessonId'] ??
+          raw['lesson_id'] ??
+          raw['id'] ??
+          '',
+        'course_name': raw['courseName'] ??
+          raw['course_name'] ??
+          course['name'] ??
+          course['course_name'] ??
+          raw['name'] ??
+          '未知课程',
+        'classroom_name': raw['classroomName'] ??
+          raw['classroom_name'] ??
+          raw['class_name'] ??
+          raw['name'] ??
+          '',
+        'lesson_id': raw['lessonId'] ??
+            raw['lesson_id'] ??
+            raw['lessonid'] ??
+            raw['currentLessonId'] ??
+            raw['current_lesson_id'],
+        'teacher': teacher,
+      };
+      }
 
   /// 获取处理后的课程列表
   static Future<List<Course>?> getCoursesList([
@@ -341,42 +634,97 @@ class RCCourseApi {
         courses = await getCourses();
       }
 
-      if (courses == null || onLessonCourses == null) {
+      if (courses == null) {
+        _logRc('getCoursesList abort: courses payload is null');
         return null;
       }
 
-      Map<String, dynamic> coursesMap = {
-        for (var courseItem in courses['data'])
-          courseItem['course_id'].toString(): courseItem,
-      };
+      final school =
+          AccountManager.getAccountById(AccountManager.currentSessionId!)?.school;
 
-      List<Course> contentList = [];
+      final courseItems = _extractCourseItems(courses);
+      final onLessonItems = _extractOnLessonItems(onLessonCourses);
+      _logRc('getCoursesList parsed courseItems=${courseItems.length} onLessonItems=${onLessonItems.length}');
 
-      final school = AccountManager.getAccountById(
-        AccountManager.currentSessionId!,
-      )!.school;
-
-      for (var onLessonCourseItem
-          in onLessonCourses['data']['onLessonClassrooms']) {
-        final String courseId = onLessonCourseItem['courseId'];
-        if (coursesMap.containsKey(courseId)) {
-          var courseItem = coursesMap[courseId];
-          courseItem['lesson_id'] = onLessonCourseItem['lessonId'];
-          final courseObject = Course.fromRCJson(courseItem);
-          courseObject.schools = school;
-          contentList.add(courseObject);
+      final lessonByCourseId = <String, dynamic>{};
+      for (final item in onLessonItems) {
+        if (item is! Map) {
+          continue;
+        }
+        final map = item.map((k, v) => MapEntry(k.toString(), v));
+        final cid = (map['courseId'] ?? map['course_id'] ?? map['id'])?.toString();
+        final lessonId = (map['lessonId'] ?? map['lesson_id'])?.toString();
+        if (cid != null && cid.isNotEmpty && lessonId != null && lessonId.isNotEmpty) {
+          lessonByCourseId[cid] = lessonId;
         }
       }
 
+      final seen = <String>{};
+      final contentList = <Course>[];
+      for (final item in courseItems) {
+        if (item is! Map) {
+          continue;
+        }
+        final normalized = _normalizeRcCourseItem(
+          item.map((k, v) => MapEntry(k.toString(), v)),
+        );
+
+        final cid = normalized['course_id']?.toString() ?? '';
+        if (cid.isEmpty || seen.contains(cid)) {
+          continue;
+        }
+        seen.add(cid);
+
+        final merged = <String, dynamic>{...normalized};
+        if ((merged['lesson_id'] == null || merged['lesson_id'].toString().isEmpty) &&
+            lessonByCourseId.containsKey(cid)) {
+          merged['lesson_id'] = lessonByCourseId[cid];
+        }
+
+        final course = Course.fromRCJson(merged);
+        course.schools = school;
+        contentList.add(course);
+      }
+
+      if (contentList.isEmpty && onLessonItems.isNotEmpty) {
+        _logRc('getCoursesList fallback: build from onLessonItems');
+        for (final item in onLessonItems) {
+          if (item is! Map) {
+            continue;
+          }
+          final normalized = _normalizeRcOnLessonItem(
+            item.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          final cid = normalized['course_id']?.toString() ?? '';
+          if (cid.isEmpty || seen.contains(cid)) {
+            continue;
+          }
+          seen.add(cid);
+
+          final merged = <String, dynamic>{...normalized};
+          if ((merged['lesson_id'] == null || merged['lesson_id'].toString().isEmpty) &&
+              lessonByCourseId.containsKey(cid)) {
+            merged['lesson_id'] = lessonByCourseId[cid];
+          }
+
+          final course = Course.fromRCJson(merged);
+          course.schools = school;
+          contentList.add(course);
+        }
+      }
+
+      _logRc('getCoursesList result count=${contentList.length}');
+
       return contentList;
     } catch (e, stackTrace) {
-      debugPrint('getCoursesList error: $e\n$stackTrace');
+      _logRc('getCoursesList error: $e\n$stackTrace');
       return null;
     }
   }
 
   static Future<int?> checkIn(String lessonId) async {
     try {
+      _logRc('checkIn start lessonId=$lessonId');
       final url = '/api/v3/lesson/checkin';
       final jsonData = {
         'source': 21, // 21: 扫码跳转 23: 点击课堂
@@ -389,6 +737,7 @@ class RCCourseApi {
         body: jsonData,
       );
       final data = response.data;
+      _logApiEndpoint('RC', 'response', url, data: data);
 
       final int code = data['code'];
       if (code == 0) {
@@ -396,42 +745,209 @@ class RCCourseApi {
         final bearerToken = response.headers.value('set-auth')!;
         final lessonToken = data['data']['lessonToken'];
         _setToken(bearerToken, lessonToken);
+        _logRc('checkIn success lessonId=$lessonId');
         return 0;
       } else {
         // {"code":50070,"msg":"DYNAMIC_QR_CHECK_IN_REFUSED","data":null}
+        _logRc('checkIn failed lessonId=$lessonId code=$code msg=${data['msg']}');
         return code;
       }
     } catch (e) {
-      debugPrint('checkIn error: $e');
+      _logRc('checkIn error lessonId=$lessonId error=$e');
     }
     return null;
   }
 
   static Future<int?> scan(String qrCodeUrl) async {
     try {
-      final url = '/api/v3/app/scan';
-      final jsonData = {'url': qrCodeUrl};
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: jsonData,
-      );
-      final data = response.data;
+      final scanUrl = '/api/v3/app/scan';
+      final candidates = <String>{};
 
-      final int code = data['code'];
-      if (code == 0) {
-        // {"code":0,"msg":"OK","data":{"type":"checkin","value":"1632189922935066880"}}
-        final lessonId = data['data']['value'];
-        final response = await checkIn(lessonId);
-        return response;
-      } else {
-        // {"code":51203,"msg":"动态二维码过期","data":{"type":"default","value":""}}
-        return code;
+      final normalizedInput = qrCodeUrl.trim();
+      candidates.add(normalizedInput);
+      if (normalizedInput.startsWith('http://')) {
+        candidates.add('https://${normalizedInput.substring('http://'.length)}');
       }
+
+      final resolved = await _resolveRainQrUrl(normalizedInput);
+      if (resolved != null && resolved.isNotEmpty) {
+        candidates.add(resolved);
+        if (resolved.startsWith('http://')) {
+          candidates.add('https://${resolved.substring('http://'.length)}');
+        }
+      }
+
+      _logRc('scan start candidateCount=${candidates.length} raw=${normalizedInput.length > 90 ? '${normalizedInput.substring(0, 90)}...' : normalizedInput}');
+
+      int? lastCode;
+      for (final candidate in candidates) {
+        _logRc('scan try candidate=${candidate.length > 120 ? '${candidate.substring(0, 120)}...' : candidate}');
+        final response = await ApiService.sendRequest(
+          scanUrl,
+          method: 'POST',
+          body: {'url': candidate},
+        );
+        final data = response.data;
+        _logApiEndpoint('RC', 'response', '$scanUrl -> $candidate', data: data);
+        final code = data['code'] as int?;
+        lastCode = code;
+        _logRc('scan response code=$code msg=${data['msg']}');
+
+        if (code == 0) {
+          // {"code":0,"msg":"OK","data":{"type":"checkin","value":"1632189922935066880"}}
+          final lessonId = data['data']?['value']?.toString();
+          if (lessonId != null && lessonId.isNotEmpty) {
+            _logRc('scan parsed lessonId=$lessonId');
+            final checkResult = await checkIn(lessonId);
+            if (checkResult == 0) {
+              _logRc('scan final success lessonId=$lessonId');
+              return 0;
+            }
+            // If checkIn failed but we still have alternative candidate URLs, keep trying.
+            lastCode = checkResult ?? lastCode;
+            _logRc('scan continue after checkIn failure checkResult=$checkResult');
+            continue;
+          }
+        }
+      }
+
+      // {"code":51203,"msg":"动态二维码过期","data":{"type":"default","value":""}}
+      _logRc('scan finished failed lastCode=$lastCode');
+      return lastCode;
     } catch (e) {
-      debugPrint('scan error: $e');
+      _logRc('scan error: $e');
     }
     return null;
+  }
+
+  static bool _isRainQrUri(Uri uri) {
+    return uri.path == '/api/v3/lesson/check-in/dynamic-qr-code' &&
+        uri.host.contains('yuketang.cn');
+  }
+
+  static Uri? _extractRainQrUriFromText(String? input) {
+    final text = input?.trim() ?? '';
+    if (text.isEmpty) {
+      return null;
+    }
+
+    final normalized = text.replaceAll('&amp;', '&');
+    final regex = RegExp(
+      "https?://[^\\s\"']+/api/v3/lesson/check-in/dynamic-qr-code\\?[^\\s\"']+",
+      caseSensitive: false,
+    );
+    final match = regex.firstMatch(normalized);
+    if (match != null) {
+      final candidate = match.group(0)!;
+      try {
+        return Uri.parse(candidate);
+      } catch (_) {
+        try {
+          return Uri.parse(Uri.decodeFull(candidate));
+        } catch (_) {
+          return null;
+        }
+      }
+    }
+
+    try {
+      final decoded = Uri.decodeComponent(normalized);
+      if (decoded != normalized) {
+        return _extractRainQrUriFromText(decoded);
+      }
+    } catch (_) {
+      // ignore malformed encoding
+    }
+    return null;
+  }
+
+  static Future<String?> _resolveRainQrUrl(String rawUrl) async {
+    Uri? uri;
+    try {
+      uri = Uri.parse(rawUrl);
+    } catch (_) {
+      return null;
+    }
+
+    if (_isRainQrUri(uri)) {
+      return uri.toString();
+    }
+
+    // Try API service redirect chain first.
+    try {
+      final resp = await ApiService.sendRequest(
+        rawUrl,
+        responseType: ResponseType.plain,
+        allowRedirects: true,
+      );
+      final finalUri = resp.requestOptions.uri;
+      if (_isRainQrUri(finalUri)) {
+        return finalUri.toString();
+      }
+      final fromBody = _extractRainQrUriFromText(resp.data?.toString());
+      if (fromBody != null) {
+        return fromBody.toString();
+      }
+    } catch (_) {
+      // continue with raw resolver
+    }
+
+    // Raw redirect resolver fallback, independent from app interceptors.
+    try {
+      final dio = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 10),
+          followRedirects: false,
+          validateStatus: (status) => status != null && status < 400,
+        ),
+      );
+      var current = rawUrl;
+      for (int i = 0; i < 8; i++) {
+        final resp = await dio.get(
+          current,
+          options: Options(
+            responseType: ResponseType.plain,
+            headers: const {
+              'User-Agent':
+                  'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36',
+            },
+          ),
+        );
+
+        final reqUri = resp.requestOptions.uri;
+        if (_isRainQrUri(reqUri)) {
+          return reqUri.toString();
+        }
+
+        final fromBody = _extractRainQrUriFromText(resp.data?.toString());
+        if (fromBody != null) {
+          return fromBody.toString();
+        }
+
+        final location = resp.headers.value('location');
+        if (location == null || location.isEmpty) {
+          break;
+        }
+
+        final currentUri = Uri.parse(current);
+        final locationUri = Uri.parse(location);
+        current = locationUri.hasScheme
+            ? locationUri.toString()
+            : currentUri.resolveUri(locationUri).toString();
+
+        final fromLocation = _extractRainQrUriFromText(location);
+        if (fromLocation != null) {
+          return fromLocation.toString();
+        }
+      }
+    } catch (_) {
+      // keep null on failure
+    }
+
+    // Last fallback: attempt extraction from original raw content.
+    final fromRaw = _extractRainQrUriFromText(rawUrl);
+    return fromRaw?.toString();
   }
 
   static Future<Map<String, dynamic>?> getPresentation(
@@ -447,8 +963,10 @@ class RCCourseApi {
       }
       final headers = {'authorization': 'Bearer $bearerToken'};
       final response = await ApiService.sendRequest(url, headers: headers);
+      _logApiEndpoint('RC', 'response', url, data: response.data);
       return response.data['data'];
     } catch (e) {
+      _logApiEndpoint('RC', 'error', 'lesson/presentation/fetch', error: e);
       debugPrint('getPresentation error: $e');
     }
     return null;
@@ -523,8 +1041,10 @@ class RCCourseApi {
         headers: headers,
         body: jsonData,
       );
+      _logApiEndpoint('RC', 'response', url, data: response.data);
       return response.data;
     } catch (e) {
+      _logApiEndpoint('RC', 'error', 'lesson/problem/answer', error: e);
       debugPrint('answer error: $e');
     }
     return null;
@@ -532,14 +1052,22 @@ class RCCourseApi {
 }
 
 class TCCourseApi {
+  static void _logTc(String stage, String endpoint, {dynamic data, Object? error}) {
+    _logApiEndpoint('TC', stage, endpoint, data: data, error: error);
+  }
+
   static Future<Map<String, dynamic>?> getRollcalls() async {
     try {
+      const endpoint = '/api/radar/rollcalls';
+      _logTc('request', endpoint);
       final response = await ApiService.sendRequest(
-        '/api/radar/rollcalls',
+        endpoint,
         params: {'api_version': '1.1.0'},
       );
+      _logTc('response', endpoint, data: response.data);
       return response.data;
     } catch (e) {
+      _logTc('error', '/api/radar/rollcalls', error: e);
       debugPrint('getRollcalls error: $e');
     }
     return null;
@@ -745,17 +1273,21 @@ class TCCourseApi {
     String? lastError;
     for (final req in candidates) {
       try {
+        final endpoint = req['url'].toString();
+        _logTc('request', endpoint, data: req['body']);
         final response = await ApiService.sendRequest(
-          req['url'].toString(),
+          endpoint,
           method: req['method'].toString(),
           body: req['body'],
         );
         final data = response.data;
+        _logTc('response', endpoint, data: data);
         if (_isSignSuccess(data)) {
           return {'ok': true, 'message': '签到成功'};
         }
         lastError = _extractSignErrorMessage(data) ?? '签到失败';
       } catch (e) {
+        _logTc('error', req['url'].toString(), error: e);
         lastError = e.toString();
       }
     }
@@ -928,6 +1460,10 @@ class KTCourseApi {
       <String, Map<String, dynamic>>{};
   static final Map<String, int> _courseDetailCacheTs = <String, int>{};
   static const int _courseDetailCacheTtlMs = 8 * 60 * 1000;
+
+  static void _logKt(String stage, String endpoint, {dynamic data, Object? error}) {
+    _logApiEndpoint('KT', stage, endpoint, data: data, error: error);
+  }
 
   static String _text(dynamic value, [String fallback = '']) {
     if (value == null) return fallback;
@@ -1129,13 +1665,18 @@ class KTCourseApi {
     String isStudy = '1',
   }) async {
     try {
+      const endpoint = '/CourseApi/semesterCourseList';
+      final body = {'semester': semester, 'term': term, 'isstudy': isStudy};
+      _logKt('request', endpoint, data: body);
       final response = await ApiService.sendRequest(
-        '/CourseApi/semesterCourseList',
+        endpoint,
         method: 'POST',
-        body: {'semester': semester, 'term': term, 'isstudy': isStudy},
+        body: body,
       );
+      _logKt('response', endpoint, data: response.data);
       return response.data;
     } catch (e) {
+      _logKt('error', '/CourseApi/semesterCourseList', error: e);
       debugPrint('KTCourseApi.getSemesterCourseList error: $e');
     }
     return null;
@@ -1143,13 +1684,17 @@ class KTCourseApi {
 
   static Future<Map<String, dynamic>?> getCourseStateAll() async {
     try {
+      const endpoint = '/CourseApi/getCourseStateAll';
+      _logKt('request', endpoint);
       final response = await ApiService.sendRequest(
-        '/CourseApi/getCourseStateAll',
+        endpoint,
         method: 'POST',
         body: const <String, dynamic>{},
       );
+      _logKt('response', endpoint, data: response.data);
       return response.data;
     } catch (e) {
+      _logKt('error', '/CourseApi/getCourseStateAll', error: e);
       debugPrint('KTCourseApi.getCourseStateAll error: $e');
     }
     return null;
@@ -1185,11 +1730,16 @@ class KTCourseApi {
     String? term,
   }) async {
     try {
+      _logKt('request', 'getCoursesList aggregate', data: {
+        'semester': semester,
+        'term': term,
+      });
       final items = await _collectCourseSourceItems(
         semester: semester,
         term: term,
       );
       if (items.isEmpty) {
+        _logKt('response', 'getCoursesList aggregate', data: const {'items': 0});
         return [];
       }
 
@@ -1228,8 +1778,14 @@ class KTCourseApi {
         return a.name.compareTo(b.name);
       });
 
+      _logKt('response', 'getCoursesList aggregate', data: {
+        'items': items.length,
+        'courses': courses.length,
+      });
+
       return courses;
     } catch (e) {
+      _logKt('error', 'getCoursesList aggregate', error: e);
       debugPrint('KTCourseApi.getCoursesList error: $e');
       return [];
     }
@@ -1260,14 +1816,17 @@ class KTCourseApi {
     String courseId,
   ) async {
     try {
+      const endpoint = '/AttenceApi/getNotFinishAttenceStudent';
+      _logKt('request', endpoint, data: {'courseid': courseId});
       final response = await ApiService.sendRequest(
-        '/AttenceApi/getNotFinishAttenceStudent',
+        endpoint,
         method: 'POST',
         body: {
           'courseid': courseId,
           'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
         },
       );
+      _logKt('response', endpoint, data: response.data);
       final data = response.data;
       final lists = data['data']?['lists'];
       if (lists is List) {
@@ -1277,6 +1836,7 @@ class KTCourseApi {
             .toList();
       }
     } catch (e) {
+      _logKt('error', '/AttenceApi/getNotFinishAttenceStudent', error: e);
       debugPrint('KTCourseApi.getNotFinishSign error: $e');
     }
     return [];
@@ -1284,16 +1844,20 @@ class KTCourseApi {
 
   static Future<Map<String, dynamic>?> getCourseDetail(String courseId) async {
     try {
+      const endpoint = '/CourseBigDataApi/getCourseBaseDataV2';
+      _logKt('request', endpoint, data: {'courseid': courseId});
       final response = await ApiService.sendRequest(
-        '/CourseBigDataApi/getCourseBaseDataV2',
+        endpoint,
         method: 'POST',
         body: {
           'courseid': courseId,
           'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
         },
       );
+      _logKt('response', endpoint, data: response.data);
       return response.data;
     } catch (e) {
+      _logKt('error', '/CourseBigDataApi/getCourseBaseDataV2', error: e);
       debugPrint('KTCourseApi.getCourseDetail error: $e');
     }
     return null;
