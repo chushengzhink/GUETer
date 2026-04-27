@@ -1,0 +1,155 @@
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class AppSettings {
+  static const String autoCheckUpdateKey = 'app_auto_check_update';
+  static const String autoCloseWebLoginKey = 'app_auto_close_web_login';
+  static const String showBeginnerGuideKey = 'app_show_beginner_guide';
+  static const String enableDiagnosticToolsKey = 'app_enable_diagnostic_tools';
+  static const String settingsAnnouncementSeenKey =
+      'app_settings_announcement_seen';
+  static const String settingsAnnouncementVersionKey =
+      'app_settings_announcement_version';
+  static const int settingsAnnouncementCurrentVersion = 2;
+  static const String tronclassPortalOpenModeKey =
+      'app_tronclass_portal_open_mode';
+  static const String tronclassReauthModeKey = 'app_tronclass_reauth_mode';
+  static const String strictSecurityModeKey = 'app_strict_security_mode';
+  static const String globalColorSchemeKey = 'app_global_color_scheme';
+  static const String appThemeModeKey = 'app_theme_mode';
+  static const String readingLastPageKey = 'app_reading_last_page';
+  static const String readingLastOpenAtKey = 'app_reading_last_open_at';
+  static const String readingNightModeKey = 'app_reading_night_mode';
+
+  static const String portalOpenModeExternalPreferred = 'external_preferred';
+  static const String portalOpenModeEmbeddedPreferred = 'embedded_preferred';
+  static const String portalOpenModeAskEveryTime = 'ask_every_time';
+
+  static const String reauthModeReuseSessionFirst = 'reuse_session_first';
+  static const String reauthModeForceWebReauth = 'force_web_reauth';
+  static const String reauthModeExternalBrowserOnly = 'external_browser_only';
+
+  static const String themeModeSystem = 'system';
+  static const String themeModeLight = 'light';
+  static const String themeModeDark = 'dark';
+
+  static const String colorSchemeAqua = 'aqua';
+  static const String colorSchemeOcean = 'ocean';
+  static const String colorSchemeForest = 'forest';
+  static const String colorSchemeAmber = 'amber';
+  static const String colorSchemeNight = 'night';
+  static const String colorSchemeRose = 'rose';
+  static const String colorSchemePurple = 'purple';
+  static const String colorSchemeCyan = 'cyan';
+  static const String colorSchemeOrange = 'orange';
+
+  static const String themeStyleModern = 'modern';
+  static const String themeStyleCompact = 'compact';
+  static const String themeStylePlayful = 'playful';
+  static const String themeStyleMinimal = 'minimal';
+  static const String themeStyleBold = 'bold';
+  static const String themeStyleSoft = 'soft';
+  static const String themeStyleKey = 'app_theme_style';
+
+  static final ValueNotifier<String> globalColorSchemeNotifier =
+      ValueNotifier<String>(colorSchemeAqua);
+  static final ValueNotifier<ThemeMode> appThemeModeNotifier =
+      ValueNotifier<ThemeMode>(ThemeMode.system);
+  static final ValueNotifier<bool> strictSecurityModeNotifier =
+      ValueNotifier<bool>(false);
+  static final ValueNotifier<String> themeStyleNotifier =
+      ValueNotifier<String>(themeStyleModern);
+
+  static Future<void> initialize() async {
+    globalColorSchemeNotifier.value = await getGlobalColorScheme();
+    appThemeModeNotifier.value = await getThemeMode();
+    strictSecurityModeNotifier.value = await getBool(
+      strictSecurityModeKey,
+      false,
+    );
+    themeStyleNotifier.value = await getThemeStyle();
+  }
+
+  static Future<bool> getBool(String key, bool defaultValue) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(key) ?? defaultValue;
+  }
+
+  static Future<void> setBool(String key, bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(key, value);
+    if (key == strictSecurityModeKey) {
+      strictSecurityModeNotifier.value = value;
+    }
+  }
+
+  static Future<String> getString(String key, String defaultValue) async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(key);
+    if (value == null || value.isEmpty) {
+      return defaultValue;
+    }
+    return value;
+  }
+
+  static Future<void> setString(String key, String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, value);
+  }
+
+  static Future<ThemeMode> getThemeMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(appThemeModeKey) ?? themeModeSystem;
+    switch (raw) {
+      case themeModeLight:
+        return ThemeMode.light;
+      case themeModeDark:
+        return ThemeMode.dark;
+      case themeModeSystem:
+      default:
+        return ThemeMode.system;
+    }
+  }
+
+  static Future<void> setThemeMode(ThemeMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    String raw = themeModeSystem;
+    if (mode == ThemeMode.light) {
+      raw = themeModeLight;
+    } else if (mode == ThemeMode.dark) {
+      raw = themeModeDark;
+    }
+    await prefs.setString(appThemeModeKey, raw);
+    appThemeModeNotifier.value = mode;
+  }
+
+  static Future<String> getGlobalColorScheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(globalColorSchemeKey);
+    if (value == null || value.isEmpty) {
+      return colorSchemeAqua;
+    }
+    return value;
+  }
+
+  static Future<void> setGlobalColorScheme(String scheme) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(globalColorSchemeKey, scheme);
+    globalColorSchemeNotifier.value = scheme;
+  }
+
+  static Future<String> getThemeStyle() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(themeStyleKey);
+    if (value == null || value.isEmpty) {
+      return themeStyleModern;
+    }
+    return value;
+  }
+
+  static Future<void> setThemeStyle(String style) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(themeStyleKey, style);
+    themeStyleNotifier.value = style;
+  }
+}
