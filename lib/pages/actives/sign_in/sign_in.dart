@@ -6,7 +6,9 @@ import '../../../api/sign_in.dart';
 import '../../../api/api_service.dart';
 import '../../../models/user.dart';
 import '../../../models/active.dart';
+import '../../../models/course.dart';
 import '../../../session/account.dart';
+import '../../../setting/course_setting.dart';
 import '../../widget/accounts_selector.dart';
 import '../../widget/captcha.dart';
 import 'normal.dart';
@@ -281,6 +283,16 @@ class SignInPageState extends State<SignInPage> {
 
     _currentStrategy = SignStrategyFactory.create(widget.active.signType);
 
+    // 自动填充课程设置的位置
+    if (widget.active.signType == SignType.location) {
+      final settings = await CourseSetting.getSettings(widget.courseId);
+      if (settings?.location != null) {
+        _signParams.address = settings!.location!.address;
+        _signParams.latitude = settings.location!.latitude;
+        _signParams.longitude = settings.location!.longitude;
+      }
+    }
+
     setState(() {
       _isLoading = false;
       _isDataLoaded = true;
@@ -296,8 +308,22 @@ class SignInPageState extends State<SignInPage> {
   }
 
   Future<void> _assignImages() async {
-    // 图片分配功能已禁用（依赖已移除的 CourseSetting）
-    return;
+    final settings = await CourseSetting.getSettings(widget.courseId);
+    if (settings?.imageObjectIds == null || settings!.imageObjectIds!.isEmpty) {
+      return;
+    }
+
+    final imageIds = settings.imageObjectIds!;
+    final objectIds = <String, String>{};
+
+    for (int i = 0; i < _selectedAccounts.length; i++) {
+      final user = _selectedAccounts[i];
+      final imageId = imageIds[i % imageIds.length];
+      objectIds[user.uid] = imageId;
+    }
+
+    _signParams.setUserObjectIds(objectIds);
+    if (mounted) setState(() {});
   }
 
   @override

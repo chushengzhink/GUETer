@@ -6,8 +6,6 @@ import '../api/login.dart';
 import '../models/course.dart';
 import '../models/user.dart';
 import '../session/account.dart';
-import 'ketangpai_add_user_page.dart';
-import 'ketangpai_number_sign_page.dart';
 import 'widget/scan.dart';
 
 /// 本地签到页面
@@ -125,11 +123,12 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
   }
 
   Future<void> _openAddUserPage() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const KetangpaiAddUserPage()),
-    );
-    await _load();
+    // 功能已移除：添加用户页面
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('添加用户功能暂不可用')),
+      );
+    }
   }
 
   Future<void> _signSelectedByScan(String url) async {
@@ -271,9 +270,33 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
 
   Future<void> _handleCourseSign(_SigningCourseEntry entry) async {
     if (entry.signType == 1) {
-      final code = await Navigator.push<String>(
-        context,
-        MaterialPageRoute(builder: (_) => const KetangpaiNumberSignPage()),
+      // 数字签到：弹出输入框
+      final code = await showDialog<String>(
+        context: context,
+        builder: (context) {
+          final controller = TextEditingController();
+          return AlertDialog(
+            title: const Text('数字签到'),
+            content: TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '请输入签到码',
+                hintText: '输入数字签到码',
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(controller.text),
+                child: const Text('确定'),
+              ),
+            ],
+          );
+        },
       );
       if (code != null && code.isNotEmpty) {
         await _signSelectedByNumber(code, entry.signId, entry.course.name);

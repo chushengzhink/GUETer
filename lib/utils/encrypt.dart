@@ -42,13 +42,18 @@ class Constant {
 
   // 雨课堂腾讯验证码
   static const tCaptchaAppId = '2091064951';
+
+  // 学习通人脸获取盐值
+  static const getFaceSalt = 'uWwjeEKsri';
 }
 
 class EncryptionUtil {
-  /// AES CBC加密
-  static String aesCbcEncrypt(String text, String key) {
+  /// AES CBC加密（支持自定义IV）
+  static String aesCbcEncrypt(String text, String key, [String? ivStr]) {
     final keyObj = encrypt.Key.fromUtf8(key);
-    final iv = encrypt.IV.fromUtf8(key);
+    final iv = ivStr != null
+        ? encrypt.IV.fromUtf8(ivStr)
+        : encrypt.IV.fromUtf8(key);
 
     final encrypter = encrypt.Encrypter(
       encrypt.AES(keyObj, mode: encrypt.AESMode.cbc, padding: 'PKCS7'),

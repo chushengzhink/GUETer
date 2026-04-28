@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'api_service.dart';
 import 'ketangpai_course.dart';
 import '../session/account.dart';
+import '../session/tronclass_auth.dart';
 import '../utils/encrypt.dart';
 import '../models/active.dart';
 import '../models/course.dart';
@@ -765,6 +766,12 @@ class TCCourseApi {
 
   static Future<Map<String, dynamic>?> getRollcalls() async {
     try {
+      final userId = AccountManager.currentSessionId;
+      debugPrint('[TCCourseApi.getRollcalls] 当前用户ID: $userId');
+
+      final sessionId = await TronclassAuthManager.getCurrentSessionId();
+      debugPrint('[TCCourseApi.getRollcalls] 畅课 Session ID: ${sessionId?.substring(0, 20)}...');
+
       final url = 'https://courses.guet.edu.cn/api/radar/rollcalls';
       final params = {'api_version': '1.1.0'};
 
@@ -773,7 +780,13 @@ class TCCourseApi {
         method: 'GET',
         params: params,
       );
+
+      debugPrint('[TCCourseApi.getRollcalls] 响应状态码: ${response.statusCode}');
+      debugPrint('[TCCourseApi.getRollcalls] 响应数据类型: ${response.data.runtimeType}');
+
       if (response.data is Map<String, dynamic>) {
+        final rollcalls = response.data['rollcalls'];
+        debugPrint('[TCCourseApi.getRollcalls] 签到列表数量: ${rollcalls is List ? rollcalls.length : 0}');
         return response.data;
       }
       return null;

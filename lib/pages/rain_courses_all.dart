@@ -34,15 +34,19 @@ class _RainCoursesPageState extends State<RainCoursesPage> {
 
       setState(() {
         _courses = courses;
-        _isLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
         _errorMessage = e.toString();
-        _isLoading = false;
       });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 

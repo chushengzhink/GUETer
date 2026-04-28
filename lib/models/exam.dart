@@ -64,14 +64,43 @@ class ExamInfo {
     return utcDate.add(const Duration(hours: 8));
   }
 
+  /// 检查 end_time 是否有效
+  bool get _isEndTimeValid {
+    // end_time 为 0 或小于 1970-01-02（时间戳 86400）视为无效
+    if (endTime <= 86400) {
+      return false;
+    }
+
+    // 检查是否为服务器默认值（如 0000-00-00 对应的时间戳）
+    final date = endTimeBeijing;
+    if (date.year < 2000) {
+      return false;
+    }
+
+    return true;
+  }
+
   /// 是否已过期
   bool get isExpired {
+    // 如果 end_time 无效，默认显示为进行中（未过期）
+    if (!_isEndTimeValid) {
+      print('[ExamInfo] 考试 "$title" (ID: $examId) end_time=$endTime 无效，默认显示为进行中');
+      return false;
+    }
+
     final now = DateTime.now();
-    return now.isAfter(endTimeBeijing);
+    final expired = now.isAfter(endTimeBeijing);
+    print('[ExamInfo] 考试 "$title" (ID: $examId) end_time=$endTime (${endTimeBeijing.toIso8601String()}) 当前时间=${now.toIso8601String()} 已过期=$expired');
+    return expired;
   }
 
   /// 剩余时间（秒）
   int get remainingSeconds {
+    // 如果 end_time 无效，返回一个较大的正数表示未过期
+    if (!_isEndTimeValid) {
+      return 999999999;
+    }
+
     final now = DateTime.now();
     return endTimeBeijing.difference(now).inSeconds;
   }

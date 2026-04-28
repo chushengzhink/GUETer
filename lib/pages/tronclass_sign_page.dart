@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import '../api/course.dart';
+import '../api/tronclass_sign_api.dart';
 import '../models/active.dart';
-import '../platform.dart';
 import 'tronclass_sign_detail_page.dart';
 
 class TronclassSignPage extends StatefulWidget {
@@ -29,19 +28,14 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
     });
 
     try {
-      final originalPlatform = PlatformManager().currentPlatform;
-      await PlatformManager().setPlatform(PlatformType.tronclass);
-
-      final data = await TCCourseApi.getRollcalls();
-
-      await PlatformManager().setPlatform(originalPlatform);
+      final response = await TronclassSignApi.getRollcalls();
+      final data = response.data;
 
       if (!mounted) return;
 
       if (data == null || data['rollcalls'] is! List) {
         setState(() {
           _signActivities = [];
-          _isLoading = false;
         });
         return;
       }
@@ -56,49 +50,55 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
         if (rollcallId.isEmpty) continue;
 
         final title = (item['course_title'] ?? '课堂签到').toString();
-        final description = (item['class_name'] ?? item['created_by_name'] ?? '').toString();
+        final description =
+            (item['class_name'] ?? item['created_by_name'] ?? '').toString();
 
-        final signTypeIndex = int.tryParse((item['sign_type'] ?? 0).toString()) ?? 0;
+        final signTypeIndex =
+            int.tryParse((item['sign_type'] ?? 0).toString()) ?? 0;
         final bool signed = _detectSigned(item);
         final String mode = _detectSignMode(item);
 
-        final rollcallStatus = (item['rollcall_status'] ?? '').toString().toLowerCase();
+        final rollcallStatus = (item['rollcall_status'] ?? '')
+            .toString()
+            .toLowerCase();
         final bool isExpired = item['is_expired'] == true;
-        final bool isOpenByStatus = rollcallStatus == 'in_progress' ||
-                                     rollcallStatus == 'open' ||
-                                     rollcallStatus == 'opened';
+        final bool isOpenByStatus =
+            rollcallStatus == 'in_progress' ||
+            rollcallStatus == 'open' ||
+            rollcallStatus == 'opened';
         final bool open = !isExpired && isOpenByStatus;
 
-        activities.add(Active(
-          type: 2,
-          id: rollcallId,
-          name: title,
-          description: description,
-          startTime: 0,
-          url: '',
-          status: open,
-          extras: {
-            ...item,
-            '_signed': signed,
-            '_open': open,
-            '_mode': mode,
-          },
-          signType: getSignTypeFromIndex(signTypeIndex),
-        ));
+        activities.add(
+          Active(
+            type: 2,
+            id: rollcallId,
+            name: title,
+            description: description,
+            startTime: 0,
+            url: '',
+            status: open,
+            extras: {...item, '_signed': signed, '_open': open, '_mode': mode},
+            signType: getSignTypeFromIndex(signTypeIndex),
+          ),
+        );
       }
 
       activities.sort((a, b) => b.id.compareTo(a.id));
 
       setState(() {
         _signActivities = activities;
-        _isLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _errorMessage = '加载失败: $e';
-        _isLoading = false;
       });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -207,7 +207,7 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
   }
 
   Widget _buildSignCard(Active activity) {
-    final extras = activity.extras ?? {};
+    final extras = activity.extras;
     final mode = extras['_mode'] ?? 'qrcode';
     final signed = extras['_signed'] == true;
     final open = extras['_open'] == true;
@@ -257,7 +257,10 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
                   ),
                   if (signed)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.grey[200],
                         borderRadius: BorderRadius.circular(12),
@@ -280,7 +283,10 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: modeColor,
                       borderRadius: BorderRadius.circular(12),
@@ -292,7 +298,10 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
                         const SizedBox(width: 4),
                         Text(
                           modeText,
-                          style: const TextStyle(color: Colors.white, fontSize: 10),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                          ),
                         ),
                       ],
                     ),
@@ -300,7 +309,10 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
                   const SizedBox(width: 8),
                   if (!open)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.grey[300],
                         borderRadius: BorderRadius.circular(12),

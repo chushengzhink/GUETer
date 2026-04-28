@@ -35,8 +35,8 @@ class TodoPlatformData {
     this.lastRefreshTime,
     this.isLoading = false,
     this.requestLock = false,
-  })  : pendingTodos = pendingTodos ?? [],
-        completedTodos = completedTodos ?? [];
+  }) : pendingTodos = pendingTodos ?? [],
+       completedTodos = completedTodos ?? [];
 }
 
 class TodosPage extends StatefulWidget {
@@ -121,24 +121,27 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     setState(() => _isInitializing = true);
     await NotificationService().initialize();
     await _checkAndRequestNotificationPermission();
-    
+
     // 先加载本地持久化数据
     await _loadPersistedTodos();
-    
+
     if (mounted) {
       setState(() => _isInitializing = false);
     }
-    
+
     // 后台静默刷新
     _loadAllTodos().catchError((e) {
-      ApiService.appendExternalConsoleLog('TodosPage', 'Background refresh failed: $e');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Background refresh failed: $e',
+      );
     });
   }
 
   Future<void> _loadPersistedTodos() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       for (final platform in [
         PlatformType.tronclass,
         PlatformType.chaoxing,
@@ -147,58 +150,73 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       ]) {
         final key = 'todos_${platform.name}';
         final jsonStr = prefs.getString(key);
-        
+
         if (jsonStr != null) {
           final decoded = jsonDecode(jsonStr) as Map<String, dynamic>;
           final data = _platformData[platform]!;
-          
-          data.pendingTodos = (decoded['pending'] as List?)
-              ?.map((e) => Map<String, dynamic>.from(e as Map))
-              .toList() ?? [];
-          data.completedTodos = (decoded['completed'] as List?)
-              ?.map((e) => Map<String, dynamic>.from(e as Map))
-              .toList() ?? [];
-          
+
+          data.pendingTodos =
+              (decoded['pending'] as List?)
+                  ?.map((e) => Map<String, dynamic>.from(e as Map))
+                  .toList() ??
+              [];
+          data.completedTodos =
+              (decoded['completed'] as List?)
+                  ?.map((e) => Map<String, dynamic>.from(e as Map))
+                  .toList() ??
+              [];
+
           if (decoded['lastRefreshTime'] != null) {
-            data.lastRefreshTime = DateTime.parse(decoded['lastRefreshTime'] as String);
+            data.lastRefreshTime = DateTime.parse(
+              decoded['lastRefreshTime'] as String,
+            );
           }
-          
+
           ApiService.appendExternalConsoleLog(
             'TodosPage',
             '${platform.name}: loaded ${data.pendingTodos.length} pending todos from cache',
           );
         }
       }
-      
+
       if (mounted) {
         setState(() {});
       }
     } catch (e) {
-      ApiService.appendExternalConsoleLog('TodosPage', 'Failed to load persisted todos: $e');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Failed to load persisted todos: $e',
+      );
     }
   }
 
   Future<void> _persistTodos() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       for (final entry in _platformData.entries) {
         final platform = entry.key;
         final data = entry.value;
         final key = 'todos_${platform.name}';
-        
+
         final json = jsonEncode({
           'pending': data.pendingTodos,
           'completed': data.completedTodos,
           'lastRefreshTime': data.lastRefreshTime?.toIso8601String(),
         });
-        
+
         await prefs.setString(key, json);
       }
-      
-      ApiService.appendExternalConsoleLog('TodosPage', 'Todos persisted to local storage');
+
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Todos persisted to local storage',
+      );
     } catch (e) {
-      ApiService.appendExternalConsoleLog('TodosPage', 'Failed to persist todos: $e');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Failed to persist todos: $e',
+      );
     }
   }
 
@@ -293,20 +311,29 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
   /// 刷新所有已登录平台的待办
   Future<void> _refreshAllPlatformAccounts() async {
-    ApiService.appendExternalConsoleLog('TodosPage', 'Manual refresh all platforms triggered');
+    ApiService.appendExternalConsoleLog(
+      'TodosPage',
+      'Manual refresh all platforms triggered',
+    );
     await _loadAllTodos();
     await _scheduleNotificationsForAllPlatforms();
   }
 
   /// 刷新单个平台的待办
   Future<void> _refreshSinglePlatform(PlatformType platform) async {
-    ApiService.appendExternalConsoleLog('TodosPage', 'Manual refresh platform ${platform.name} triggered');
+    ApiService.appendExternalConsoleLog(
+      'TodosPage',
+      'Manual refresh platform ${platform.name} triggered',
+    );
 
     final platformAccounts = _getAllPlatformAccounts();
     final userId = platformAccounts[platform];
 
     if (userId == null) {
-      ApiService.appendExternalConsoleLog('TodosPage', 'No account found for platform ${platform.name}');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'No account found for platform ${platform.name}',
+      );
       return;
     }
 
@@ -357,7 +384,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     final data = _platformData[PlatformType.tronclass]!;
 
     if (data.requestLock) {
-      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: request already in progress, skipping');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: request already in progress, skipping',
+      );
       return;
     }
 
@@ -373,45 +403,58 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         userId: userId,
       );
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: requesting GET /api/todos');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: requesting GET /api/todos',
+      );
       final response = await context.sendRequest('/api/todos');
 
       if (!mounted) {
-        ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: widget unmounted, discarding response');
+        ApiService.appendExternalConsoleLog(
+          'TodosPage',
+          'Tronclass: widget unmounted, discarding response',
+        );
         return;
       }
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: response status=${response.statusCode}');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: response status=${response.statusCode}',
+      );
 
       final todos = <Map<String, dynamic>>[];
       if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
         final responseData = response.data as Map<String, dynamic>;
         if (responseData['todo_list'] is List) {
-          todos.addAll((responseData['todo_list'] as List).cast<Map<String, dynamic>>());
+          todos.addAll(
+            (responseData['todo_list'] as List).cast<Map<String, dynamic>>(),
+          );
         }
       }
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: parsed ${todos.length} todos');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: parsed ${todos.length} todos',
+      );
 
       setState(() {
         data.pendingTodos = todos;
         data.lastRefreshTime = DateTime.now();
-        data.isLoading = false;
-        data.requestLock = false;
       });
-      
+
       await _persistTodos();
 
       // 新增：获取课程内的作业、测试、互动
       await _loadTronclassCourseItems(userId, context, data);
     } catch (e) {
       ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: error = $e');
-      if (!mounted) return;
-      setState(() {
-        data.isLoading = false;
-        data.requestLock = false;
-      });
     } finally {
+      if (mounted) {
+        setState(() {
+          data.isLoading = false;
+          data.requestLock = false;
+        });
+      }
       context?.dispose();
     }
   }
@@ -423,7 +466,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     TodoPlatformData data,
   ) async {
     try {
-      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetching course items (exams, homeworks, interactions)');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: fetching course items (exams, homeworks, interactions)',
+      );
 
       // 获取课程列表
       final coursesResponse = await context.sendRequest(
@@ -438,7 +484,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       if (coursesData is! List) return;
 
       final courseItems = <Map<String, dynamic>>[];
-      final existingIds = data.pendingTodos.map((t) => t['id']?.toString() ?? '').toSet();
+      final existingIds = data.pendingTodos
+          .map((t) => t['id']?.toString() ?? '')
+          .toSet();
 
       for (final course in coursesData) {
         if (course is! Map<String, dynamic>) continue;
@@ -453,7 +501,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             params: {
               'page': '1',
               'page_size': '10',
-              'conditions': '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
+              'conditions':
+                  '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
             },
           );
 
@@ -481,7 +530,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             }
           }
         } catch (e) {
-          ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetch exams for course $courseId error: $e');
+          ApiService.appendExternalConsoleLog(
+            'TodosPage',
+            'Tronclass: fetch exams for course $courseId error: $e',
+          );
         }
 
         // 获取作业列表
@@ -491,7 +543,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             params: {
               'page': '1',
               'page_size': '10',
-              'conditions': '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
+              'conditions':
+                  '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
             },
           );
 
@@ -520,7 +573,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             }
           }
         } catch (e) {
-          ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetch homeworks for course $courseId error: $e');
+          ApiService.appendExternalConsoleLog(
+            'TodosPage',
+            'Tronclass: fetch homeworks for course $courseId error: $e',
+          );
         }
 
         // 获取互动列表
@@ -553,13 +609,19 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             }
           }
         } catch (e) {
-          ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetch interactions for course $courseId error: $e');
+          ApiService.appendExternalConsoleLog(
+            'TodosPage',
+            'Tronclass: fetch interactions for course $courseId error: $e',
+          );
         }
       }
 
       if (!mounted) return;
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: found ${courseItems.length} course items');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: found ${courseItems.length} course items',
+      );
 
       // 合并原有待办和课程待办
       final allTodos = [...data.pendingTodos, ...courseItems];
@@ -579,7 +641,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
       await _persistTodos();
     } catch (e) {
-      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: load course items error: $e');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: load course items error: $e',
+      );
     }
   }
 
@@ -602,7 +667,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         userId: userId,
       );
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Chaoxing: fetching courses and todos');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Chaoxing: fetching courses and todos',
+      );
 
       final coursesData = await CXCourseApi.getCourses();
       if (!mounted) return;
@@ -624,13 +692,19 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           if (courseId.isEmpty || clazzId.isEmpty) continue;
 
           try {
-            final homeworks = await ChaoxingHomeworkApi.getHomeworkList(courseId, clazzId);
+            final homeworks = await ChaoxingHomeworkApi.getHomeworkList(
+              courseId,
+              clazzId,
+            );
             for (final homework in homeworks) {
               final status = homework['status']?.toString() ?? '';
               if (status == '1' || status == 'completed') continue;
 
               allTodos.add({
-                'id': homework['workId']?.toString() ?? homework['id']?.toString() ?? '',
+                'id':
+                    homework['workId']?.toString() ??
+                    homework['id']?.toString() ??
+                    '',
                 'title': homework['title']?.toString() ?? '作业',
                 'platform': '学习通',
                 'course_name': courseName,
@@ -640,10 +714,17 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
               });
             }
 
-            final unfinishedTasks = await ChaoxingChapterApi.getUnfinishedTasks(courseId, clazzId, cpi);
+            final unfinishedTasks = await ChaoxingChapterApi.getUnfinishedTasks(
+              courseId,
+              clazzId,
+              cpi,
+            );
             for (final task in unfinishedTasks) {
               allTodos.add({
-                'id': task['objectId']?.toString() ?? task['jobId']?.toString() ?? '',
+                'id':
+                    task['objectId']?.toString() ??
+                    task['jobId']?.toString() ??
+                    '',
                 'title': task['title']?.toString() ?? '学习任务',
                 'platform': '学习通',
                 'course_name': courseName,
@@ -653,14 +734,20 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
               });
             }
           } catch (e) {
-            ApiService.appendExternalConsoleLog('TodosPage', 'Chaoxing: error fetching todos for course $courseId: $e');
+            ApiService.appendExternalConsoleLog(
+              'TodosPage',
+              'Chaoxing: error fetching todos for course $courseId: $e',
+            );
           }
         }
       }
 
       if (!mounted) return;
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Chaoxing: found ${allTodos.length} todos');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Chaoxing: found ${allTodos.length} todos',
+      );
 
       setState(() {
         data.pendingTodos = allTodos;
@@ -700,16 +787,27 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         userId: userId,
       );
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: requesting GET /api/v3/classroom/on-lesson-upcoming-exam');
-      final response = await context.sendRequest('/api/v3/classroom/on-lesson-upcoming-exam');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'RainClassroom: requesting GET /api/v3/classroom/on-lesson-upcoming-exam',
+      );
+      final response = await context.sendRequest(
+        '/api/v3/classroom/on-lesson-upcoming-exam',
+      );
 
       if (!mounted) return;
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: response status=${response.statusCode}');
-      
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'RainClassroom: response status=${response.statusCode}',
+      );
+
       // 打印完整响应体用于调试
       if (response.data != null) {
-        ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: full response body = ${response.data.toString()}');
+        ApiService.appendExternalConsoleLog(
+          'TodosPage',
+          'RainClassroom: full response body = ${response.data.toString()}',
+        );
       }
 
       List<Map<String, dynamic>> todos = [];
@@ -720,18 +818,27 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         final msg = responseData['msg']?.toString() ?? '';
 
         if (code == 50000 || msg.toUpperCase().contains('UNAUTHENTICATED')) {
-          ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: auth expired');
+          ApiService.appendExternalConsoleLog(
+            'TodosPage',
+            'RainClassroom: auth expired',
+          );
         } else if (code == 0 && responseData['data'] != null) {
           final dataMap = responseData['data'] as Map<String, dynamic>;
-          
+
           // 打印 data 字段的所有 key
-          ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: data keys = ${dataMap.keys.join(", ")}');
-          
+          ApiService.appendExternalConsoleLog(
+            'TodosPage',
+            'RainClassroom: data keys = ${dataMap.keys.join(", ")}',
+          );
+
           final upcomingExam = dataMap['upcomingExam'];
 
           if (upcomingExam is List) {
-            ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: upcomingExam list length = ${upcomingExam.length}');
-            
+            ApiService.appendExternalConsoleLog(
+              'TodosPage',
+              'RainClassroom: upcomingExam list length = ${upcomingExam.length}',
+            );
+
             final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
             for (var exam in upcomingExam) {
@@ -743,7 +850,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                 final startTime = exam['start_time'];
                 final endTime = exam['end_time'];
 
-                ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: exam item - id=$examId, title=$title, start=$startTime, end=$endTime');
+                ApiService.appendExternalConsoleLog(
+                  'TodosPage',
+                  'RainClassroom: exam item - id=$examId, title=$title, start=$startTime, end=$endTime',
+                );
 
                 if (startTime != null && endTime != null) {
                   if (startTime <= now && now <= endTime) {
@@ -763,12 +873,18 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
               }
             }
           } else {
-            ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: upcomingExam is not a List, type = ${upcomingExam.runtimeType}');
+            ApiService.appendExternalConsoleLog(
+              'TodosPage',
+              'RainClassroom: upcomingExam is not a List, type = ${upcomingExam.runtimeType}',
+            );
           }
         }
       }
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: parsed ${todos.length} todos');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'RainClassroom: parsed ${todos.length} todos',
+      );
 
       setState(() {
         data.pendingTodos = todos;
@@ -776,10 +892,13 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         data.isLoading = false;
         data.requestLock = false;
       });
-      
+
       await _persistTodos();
     } catch (e) {
-      ApiService.appendExternalConsoleLog('TodosPage', 'RainClassroom: error = $e');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'RainClassroom: error = $e',
+      );
       if (!mounted) return;
       setState(() {
         data.isLoading = false;
@@ -809,7 +928,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         userId: userId,
       );
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Ketangpai: requesting POST /Futurev2/Todo/getTodoList');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Ketangpai: requesting POST /Futurev2/Todo/getTodoList',
+      );
       final response = await context.sendRequest(
         '/Futurev2/Todo/getTodoList',
         method: 'POST',
@@ -817,19 +939,29 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Ketangpai: response status=${response.statusCode}');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Ketangpai: response status=${response.statusCode}',
+      );
 
       final todos = <Map<String, dynamic>>[];
       if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
         final responseData = response.data as Map<String, dynamic>;
         if (responseData['status'] == 1 && responseData['data'] is List) {
-          todos.addAll((responseData['data'] as List).cast<Map<String, dynamic>>());
+          todos.addAll(
+            (responseData['data'] as List).cast<Map<String, dynamic>>(),
+          );
         } else if (responseData['data'] is List) {
-          todos.addAll((responseData['data'] as List).cast<Map<String, dynamic>>());
+          todos.addAll(
+            (responseData['data'] as List).cast<Map<String, dynamic>>(),
+          );
         }
       }
 
-      ApiService.appendExternalConsoleLog('TodosPage', 'Ketangpai: loaded ${todos.length} todos');
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Ketangpai: loaded ${todos.length} todos',
+      );
 
       setState(() {
         data.pendingTodos = todos;
@@ -837,7 +969,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         data.isLoading = false;
         data.requestLock = false;
       });
-      
+
       await _persistTodos();
     } catch (e) {
       ApiService.appendExternalConsoleLog('TodosPage', 'Ketangpai: error = $e');
@@ -857,11 +989,17 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   }
 
   int _getTotalTodos() {
-    return _platformData.values.fold(0, (sum, data) => sum + data.pendingTodos.length);
+    return _platformData.values.fold(
+      0,
+      (sum, data) => sum + data.pendingTodos.length,
+    );
   }
 
   int _getCompletedTodos() {
-    return _platformData.values.fold(0, (sum, data) => sum + data.completedTodos.length);
+    return _platformData.values.fold(
+      0,
+      (sum, data) => sum + data.completedTodos.length,
+    );
   }
 
   Map<String, List<Map<String, dynamic>>> _groupTodosByDate() {
@@ -877,7 +1015,11 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         final deadline = _extractDeadlineFromTodo(todo, platform);
         if (deadline == null) continue;
 
-        final deadlineDate = DateTime(deadline.year, deadline.month, deadline.day);
+        final deadlineDate = DateTime(
+          deadline.year,
+          deadline.month,
+          deadline.day,
+        );
         final diffDays = deadlineDate.difference(today).inDays;
 
         if (diffDays < 0 || diffDays > 6) continue;
@@ -891,7 +1033,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     return grouped;
   }
 
-  DateTime? _extractDeadlineFromTodo(Map<String, dynamic> todo, PlatformType platform) {
+  DateTime? _extractDeadlineFromTodo(
+    Map<String, dynamic> todo,
+    PlatformType platform,
+  ) {
     if (platform == PlatformType.tronclass) {
       final endTimeStr = todo['end_time']?.toString() ?? '';
       if (endTimeStr.isNotEmpty) {
@@ -945,7 +1090,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final totalTodos = _getTotalTodos();
     final completedTodos = _getCompletedTodos();
-    final palette = resolveGlobalPalette(AppSettings.globalColorSchemeNotifier.value);
+    final palette = resolveGlobalPalette(
+      AppSettings.globalColorSchemeNotifier.value,
+    );
     final groupedByDate = _groupTodosByDate();
 
     return Scaffold(
@@ -973,7 +1120,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(48),
           child: Container(
-            padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+            padding: EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.sm,
+            ),
             child: Row(
               children: [
                 _buildCompactStatBadge(
@@ -1119,7 +1269,11 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildTimelineSection(BuildContext context, Map<String, List<Map<String, dynamic>>> groupedByDate, dynamic palette) {
+  Widget _buildTimelineSection(
+    BuildContext context,
+    Map<String, List<Map<String, dynamic>>> groupedByDate,
+    dynamic palette,
+  ) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final dates = List.generate(7, (index) => today.add(Duration(days: index)));
@@ -1225,13 +1379,13 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     final bgColor = isSelected
         ? palette.primary
         : hasDeadline
-            ? palette.primary.withValues(alpha: 0.1)
-            : Theme.of(context).colorScheme.surfaceContainerHighest;
+        ? palette.primary.withValues(alpha: 0.1)
+        : Theme.of(context).colorScheme.surfaceContainerHighest;
     final textColor = isSelected
         ? Colors.white
         : hasDeadline
-            ? palette.primary
-            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5);
+        ? palette.primary
+        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5);
 
     return GestureDetector(
       onTap: hasDeadline ? onTap : null,
@@ -1245,8 +1399,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             color: isSelected
                 ? palette.primary
                 : hasDeadline
-                    ? palette.primary.withValues(alpha: 0.3)
-                    : Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
+                ? palette.primary.withValues(alpha: 0.3)
+                : Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -1380,21 +1534,25 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
               subtitle: Text(
                 hasAccount
                     ? loading
-                        ? '加载中...'
-                        : lastRefresh == null
-                            ? '点击刷新按钮加载待办'
-                            : isFiltered
-                                ? displayTodos.isEmpty
-                                    ? '筛选日期无待办'
-                                    : '${displayTodos.length} 个待办（已筛选）'
-                                : allTodos.isEmpty
-                                    ? '暂无待办 · 上次刷新: ${_formatRefreshTime(lastRefresh)}'
-                                    : '${allTodos.length} 个待办 · 上次刷新: ${_formatRefreshTime(lastRefresh)}'
+                          ? '加载中...'
+                          : lastRefresh == null
+                          ? '点击刷新按钮加载待办'
+                          : isFiltered
+                          ? displayTodos.isEmpty
+                                ? '筛选日期无待办'
+                                : '${displayTodos.length} 个待办（已筛选）'
+                          : allTodos.isEmpty
+                          ? '暂无待办 · 上次刷新: ${_formatRefreshTime(lastRefresh)}'
+                          : '${allTodos.length} 个待办 · 上次刷新: ${_formatRefreshTime(lastRefresh)}'
                     : '未登录账号',
                 style: TextStyle(
                   color: hasAccount
-                      ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)
-                      : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+                      ? Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.6)
+                      : Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.4),
                 ),
               ),
               trailing: Row(
@@ -1403,7 +1561,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                   if (hasAccount)
                     IconButton(
                       icon: const Icon(Icons.refresh_rounded, size: 20),
-                      onPressed: loading ? null : () => _refreshSinglePlatform(platform),
+                      onPressed: loading
+                          ? null
+                          : () => _refreshSinglePlatform(platform),
                       tooltip: '刷新此平台',
                     ),
                   if (hasAccount)
@@ -1446,7 +1606,11 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                   padding: const EdgeInsets.all(24),
                   child: Column(
                     children: [
-                      Icon(Icons.filter_alt_off, size: 48, color: Colors.grey[400]),
+                      Icon(
+                        Icons.filter_alt_off,
+                        size: 48,
+                        color: Colors.grey[400],
+                      ),
                       const SizedBox(height: 8),
                       Text(
                         '筛选日期无待办',
@@ -1462,15 +1626,14 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                     children: [
                       Icon(Icons.task_alt, size: 48, color: Colors.grey[400]),
                       const SizedBox(height: 8),
-                      Text(
-                        '暂无待办事项',
-                        style: TextStyle(color: Colors.grey[600]),
-                      ),
+                      Text('暂无待办事项', style: TextStyle(color: Colors.grey[600])),
                     ],
                   ),
                 )
               else
-                ...displayTodos.map((todo) => _buildTodoItem(todo, platform, color)),
+                ...displayTodos.map(
+                  (todo) => _buildTodoItem(todo, platform, color),
+                ),
             ],
           ],
         ),
@@ -1544,7 +1707,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
               courseName,
               style: TextStyle(
                 fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.6),
               ),
             ),
             if (endTime != null) ...[
@@ -1556,8 +1721,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                     color: isOverdue
                         ? Theme.of(context).colorScheme.error
                         : isUrgent
-                            ? Colors.orange
-                            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                        ? Colors.orange
+                        : Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.6),
                   ),
                   SizedBox(width: AppSpacing.xs),
                   Text(
@@ -1567,8 +1734,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                       color: isOverdue
                           ? Theme.of(context).colorScheme.error
                           : isUrgent
-                              ? Colors.orange
-                              : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                          ? Colors.orange
+                          : Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.6),
                     ),
                   ),
                   if (isOverdue) ...[
@@ -1597,8 +1766,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                   color: isOverdue
                       ? Theme.of(context).colorScheme.error
                       : isUrgent
-                          ? Colors.orange
-                          : Theme.of(context).colorScheme.primary,
+                      ? Colors.orange
+                      : Theme.of(context).colorScheme.primary,
                 ),
               ),
             ],
@@ -1608,11 +1777,15 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             ? Icon(
                 Icons.lock_outline,
                 size: 20,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.4),
               )
             : Icon(
                 Icons.chevron_right,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.4),
               ),
         onTap: isLocked
             ? null
@@ -1642,7 +1815,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
     final now = DateTime.now();
     final isOverdue = endDateTime != null && endDateTime.isBefore(now);
-    final isUrgent = endDateTime != null && endDateTime.difference(now).inHours < 24;
+    final isUrgent =
+        endDateTime != null && endDateTime.difference(now).inHours < 24;
 
     return Card(
       margin: EdgeInsets.symmetric(
@@ -1667,7 +1841,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                 classroomName,
                 style: TextStyle(
                   fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
               ),
             if (endDateTime != null) ...[
@@ -1679,8 +1855,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                     color: isOverdue
                         ? Theme.of(context).colorScheme.error
                         : isUrgent
-                            ? Colors.orange
-                            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                        ? Colors.orange
+                        : Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.6),
                   ),
                   SizedBox(width: AppSpacing.xs),
                   Text(
@@ -1690,8 +1868,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                       color: isOverdue
                           ? Theme.of(context).colorScheme.error
                           : isUrgent
-                              ? Colors.orange
-                              : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                          ? Colors.orange
+                          : Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.6),
                     ),
                   ),
                   if (isOverdue) ...[
@@ -1720,8 +1900,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                   color: isOverdue
                       ? Theme.of(context).colorScheme.error
                       : isUrgent
-                          ? Colors.orange
-                          : Theme.of(context).colorScheme.primary,
+                      ? Colors.orange
+                      : Theme.of(context).colorScheme.primary,
                 ),
               ),
             ],
@@ -1736,9 +1916,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           final classroomId = todo['classroom_id']?.toString() ?? '';
 
           if (examId.isEmpty || classroomId.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('考试信息不完整')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('考试信息不完整')));
             return;
           }
 
@@ -1750,13 +1930,11 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
               '/v/exam/gen_token',
               method: 'POST',
               headers: headers,
-              body: {
-                'exam_id': examId,
-                'classroom_id': classroomId,
-              },
+              body: {'exam_id': examId, 'classroom_id': classroomId},
             );
 
-            if (tokenResponse.data == null || tokenResponse.data['status'] != 200) {
+            if (tokenResponse.data == null ||
+                tokenResponse.data['status'] != 200) {
               throw Exception('生成考试token失败');
             }
 
@@ -1766,11 +1944,15 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             }
 
             final token = tokenData['token'];
-            final examHost = tokenData['exam_host'] ?? 'https://examination.xuetangx.com';
+            final examHost =
+                tokenData['exam_host'] ?? 'https://examination.xuetangx.com';
             final userId = tokenData['user_id']?.toString() ?? '';
 
-            final nextUrl = Uri.encodeComponent('$examHost/exam/$examId?isFrom=2&platform=mobile');
-            final examUrl = '$examHost/login?exam_id=$examId&user_id=$userId&crypt=${Uri.encodeComponent(token)}&next=$nextUrl&language=zh&platform=mobile';
+            final nextUrl = Uri.encodeComponent(
+              '$examHost/exam/$examId?isFrom=2&platform=mobile',
+            );
+            final examUrl =
+                '$examHost/login?exam_id=$examId&user_id=$userId&crypt=${Uri.encodeComponent(token)}&next=$nextUrl&language=zh&platform=mobile';
 
             final uri = Uri.parse(examUrl);
             if (await canLaunchUrl(uri)) {
@@ -1780,9 +1962,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             }
           } catch (e) {
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('打开考试失败: $e')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('打开考试失败: $e')));
             }
           }
         },
@@ -1861,7 +2043,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                     courseName,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.6),
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1877,8 +2061,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                     color: isOverdue
                         ? Theme.of(context).colorScheme.error
                         : isUrgent
-                            ? Colors.orange
-                            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                        ? Colors.orange
+                        : Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.6),
                   ),
                   SizedBox(width: AppSpacing.xs),
                   Text(
@@ -1888,8 +2074,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                       color: isOverdue
                           ? Theme.of(context).colorScheme.error
                           : isUrgent
-                              ? Colors.orange
-                              : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                          ? Colors.orange
+                          : Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.6),
                     ),
                   ),
                   if (isOverdue) ...[
@@ -1918,8 +2106,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                   color: isOverdue
                       ? Theme.of(context).colorScheme.error
                       : isUrgent
-                          ? Colors.orange
-                          : Theme.of(context).colorScheme.primary,
+                      ? Colors.orange
+                      : Theme.of(context).colorScheme.primary,
                 ),
               ),
             ],
@@ -1930,9 +2118,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
         ),
         onTap: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('课堂派详情页功能开发中')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('课堂派详情页功能开发中')));
         },
       ),
     );
