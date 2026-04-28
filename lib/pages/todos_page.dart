@@ -401,6 +401,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       });
       
       await _persistTodos();
+
+      // 新增：获取课程内的作业、测试、互动
+      await _loadTronclassCourseItems(userId, context, data);
     } catch (e) {
       ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: error = $e');
       if (!mounted) return;
@@ -410,6 +413,173 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       });
     } finally {
       context?.dispose();
+    }
+  }
+
+  /// 获取畅课课程内的作业、测试、互动
+  Future<void> _loadTronclassCourseItems(
+    String userId,
+    PlatformRequestContext context,
+    TodoPlatformData data,
+  ) async {
+    try {
+      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetching course items (exams, homeworks, interactions)');
+
+      // 获取课程列表
+      final coursesResponse = await context.sendRequest(
+        '/api/users/$userId/courses',
+        params: {'page': '1', 'per_page': '50'},
+      );
+
+      if (!mounted) return;
+
+      if (coursesResponse.data is! Map<String, dynamic>) return;
+      final coursesData = coursesResponse.data['data'];
+      if (coursesData is! List) return;
+
+      final courseItems = <Map<String, dynamic>>[];
+      final existingIds = data.pendingTodos.map((t) => t['id']?.toString() ?? '').toSet();
+
+      for (final course in coursesData) {
+        if (course is! Map<String, dynamic>) continue;
+        final courseId = course['id']?.toString() ?? '';
+        final courseName = course['name']?.toString() ?? '';
+        if (courseId.isEmpty) continue;
+
+        // 获取测试列表
+        try {
+          final examResponse = await context.sendRequest(
+            '/api/courses/$courseId/exam-list',
+            params: {
+              'page': '1',
+              'page_size': '10',
+              'conditions': '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
+            },
+          );
+
+          if (examResponse.data is Map<String, dynamic>) {
+            final exams = examResponse.data['exams'];
+            if (exams is List) {
+              for (final exam in exams) {
+                if (exam is! Map<String, dynamic>) continue;
+                final isClosed = exam['is_closed'] == true;
+                if (isClosed) continue;
+
+                final id = exam['id']?.toString() ?? '';
+                if (id.isEmpty || existingIds.contains(id)) continue;
+
+                existingIds.add(id);
+                courseItems.add({
+                  'id': id,
+                  'title': exam['title']?.toString() ?? '',
+                  'type': 'exam',
+                  'course_name': courseName,
+                  'end_time': exam['end_time']?.toString() ?? '',
+                  'is_locked': exam['is_started'] != true,
+                });
+              }
+            }
+          }
+        } catch (e) {
+          ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetch exams for course $courseId error: $e');
+        }
+
+        // 获取作业列表
+        try {
+          final homeworkResponse = await context.sendRequest(
+            '/api/courses/$courseId/homework-activities',
+            params: {
+              'page': '1',
+              'page_size': '10',
+              'conditions': '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
+            },
+          );
+
+          if (homeworkResponse.data is Map<String, dynamic>) {
+            final homeworks = homeworkResponse.data['homework_activities'];
+            if (homeworks is List) {
+              for (final homework in homeworks) {
+                if (homework is! Map<String, dynamic>) continue;
+                final isClosed = homework['is_closed'] == true;
+                final submitted = homework['submitted'] == true;
+                if (isClosed || submitted) continue;
+
+                final id = homework['id']?.toString() ?? '';
+                if (id.isEmpty || existingIds.contains(id)) continue;
+
+                existingIds.add(id);
+                courseItems.add({
+                  'id': id,
+                  'title': homework['title']?.toString() ?? '',
+                  'type': 'homework',
+                  'course_name': courseName,
+                  'end_time': homework['end_time']?.toString() ?? '',
+                  'is_locked': homework['is_in_progress'] != true,
+                });
+              }
+            }
+          }
+        } catch (e) {
+          ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetch homeworks for course $courseId error: $e');
+        }
+
+        // 获取互动列表
+        try {
+          final interactionResponse = await context.sendRequest(
+            '/api/courses/$courseId/interactions',
+          );
+
+          if (interactionResponse.data is Map<String, dynamic>) {
+            final interactions = interactionResponse.data['interactions'];
+            if (interactions is List) {
+              for (final interaction in interactions) {
+                if (interaction is! Map<String, dynamic>) continue;
+                final isFinished = interaction['is_finished'] == true;
+                if (isFinished) continue;
+
+                final id = interaction['id']?.toString() ?? '';
+                if (id.isEmpty || existingIds.contains(id)) continue;
+
+                existingIds.add(id);
+                courseItems.add({
+                  'id': id,
+                  'title': interaction['title']?.toString() ?? '',
+                  'type': 'questionnaire',
+                  'course_name': courseName,
+                  'end_time': interaction['end_time']?.toString() ?? '',
+                  'is_locked': false,
+                });
+              }
+            }
+          }
+        } catch (e) {
+          ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: fetch interactions for course $courseId error: $e');
+        }
+      }
+
+      if (!mounted) return;
+
+      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: found ${courseItems.length} course items');
+
+      // 合并原有待办和课程待办
+      final allTodos = [...data.pendingTodos, ...courseItems];
+
+      // 按截止时间排序
+      allTodos.sort((a, b) {
+        final aTime = a['end_time']?.toString() ?? '';
+        final bTime = b['end_time']?.toString() ?? '';
+        if (aTime.isEmpty) return 1;
+        if (bTime.isEmpty) return -1;
+        return aTime.compareTo(bTime);
+      });
+
+      setState(() {
+        data.pendingTodos = allTodos;
+      });
+
+      await _persistTodos();
+    } catch (e) {
+      ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: load course items error: $e');
     }
   }
 
