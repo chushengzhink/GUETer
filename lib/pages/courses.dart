@@ -32,6 +32,7 @@ import 'tronclass_sign_in.dart';
 import 'tronclass_web_login.dart';
 import 'tronclass_todos_page.dart';
 import 'tronclass_sign_in_list_page.dart';
+import 'tronclass_sign_page.dart';
 import 'ketangpai_course_struct.dart';
 import 'ketangpai_profile_page.dart';
 import 'ketangpai_shared_room_page.dart';
@@ -1742,8 +1743,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) =>
-                            ScanPage(onScanResult: handleScanContent),
+                        builder: (context) => const TronclassSignPage(),
                       ),
                     );
                   },
