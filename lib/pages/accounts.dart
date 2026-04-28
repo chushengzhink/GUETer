@@ -18,7 +18,6 @@ import 'widget/avatar.dart';
 import 'login.dart';
 import 'tronclass_web_login.dart';
 import 'ketangpai_main_struct.dart';
-import 'tronclass_sign_page.dart';
 
 class AccountChangeNotifier {
   static final AccountChangeNotifier _instance =
@@ -1670,19 +1669,6 @@ class _AccountsPageState extends State<AccountsPage>
               child: const Icon(Icons.block_outlined),
               label: '微助教功能正在完善中',
               onTap: _showWeizhuojiaoComingSoonNotice,
-            ),
-          if (_selectedPlatform == PlatformType.tronclass)
-            SpeedDialChild(
-              child: const Icon(Icons.how_to_reg),
-              label: '畅课签到',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const TronclassSignPage(),
-                  ),
-                );
-              },
             ),
           if (_selectedPlatform == PlatformType.tronclass)
             SpeedDialChild(
