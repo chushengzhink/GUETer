@@ -221,33 +221,38 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   }
 
   Future<void> _checkAndRequestNotificationPermission() async {
-    final prefs = await SharedPreferences.getInstance();
-    final hasAsked = prefs.getBool('notification_permission_asked') ?? false;
+    // 每次进入待办页都检查通知权限状态
+    final hasPermission = await NotificationService().checkPermissionStatus();
 
-    if (!hasAsked && mounted) {
-      final shouldEnable = await showDialog<bool>(
+    if (!hasPermission && mounted) {
+      final shouldOpenSettings = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('待办提醒'),
-          content: const Text('是否开启待办截止时间提醒？'),
+          title: const Text('开启通知权限'),
+          content: const Text('开启通知权限后，待办截止前我们会及时提醒你'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('暂不开启'),
+              child: const Text('暂不'),
             ),
             TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('立即开启'),
+              child: const Text('去开启'),
             ),
           ],
         ),
       );
 
-      await prefs.setBool('notification_permission_asked', true);
-
-      if (shouldEnable == true) {
-        await NotificationService().requestPermissions();
-        await NotificationService().setNotificationsEnabled(true);
+      if (shouldOpenSettings == true) {
+        // 跳转到系统通知权限设置页面
+        try {
+          await NotificationService().requestPermissions();
+        } catch (e) {
+          ApiService.appendExternalConsoleLog(
+            'TodosPage',
+            'Failed to open notification settings: $e',
+          );
+        }
       }
     }
   }
@@ -856,7 +861,24 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                 );
 
                 if (startTime != null && endTime != null) {
-                  if (startTime <= now && now <= endTime) {
+                  // end_time <= 0 表示老师没设截止时间，判定为进行中
+                  final bool isInProgress;
+                  if (endTime <= 0) {
+                    isInProgress = startTime <= now;
+                    ApiService.appendExternalConsoleLog(
+                      'TodosPage',
+                      'RainClassroom: exam "$title" end_time=$endTime (无截止时间), 判定为进行中',
+                    );
+                  } else {
+                    isInProgress = startTime <= now && now <= endTime;
+                    final status = isInProgress ? '进行中' : '已结束';
+                    ApiService.appendExternalConsoleLog(
+                      'TodosPage',
+                      'RainClassroom: exam "$title" end_time=$endTime, 状态=$status',
+                    );
+                  }
+
+                  if (isInProgress) {
                     todos.add({
                       'id': examId,
                       'title': title,
@@ -1074,16 +1096,45 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
   List<Map<String, dynamic>> _getFilteredTodos(PlatformType platform) {
     final data = _platformData[platform]!;
+    List<Map<String, dynamic>> todos;
+
     if (_selectedDateFilter == null) {
-      return data.pendingTodos;
+      todos = List.from(data.pendingTodos);
+    } else {
+      todos = data.pendingTodos.where((todo) {
+        final deadline = _extractDeadlineFromTodo(todo, platform);
+        if (deadline == null) return false;
+        final dateKey = DateFormat('yyyy-MM-dd').format(deadline);
+        return dateKey == _selectedDateFilter;
+      }).toList();
     }
 
-    return data.pendingTodos.where((todo) {
-      final deadline = _extractDeadlineFromTodo(todo, platform);
-      if (deadline == null) return false;
-      final dateKey = DateFormat('yyyy-MM-dd').format(deadline);
-      return dateKey == _selectedDateFilter;
-    }).toList();
+    // 按剩余时间升序排序（越紧急越靠前）
+    final now = DateTime.now();
+    todos.sort((a, b) {
+      final deadlineA = _extractDeadlineFromTodo(a, platform);
+      final deadlineB = _extractDeadlineFromTodo(b, platform);
+
+      // 无截止时间的排在最后
+      if (deadlineA == null && deadlineB == null) return 0;
+      if (deadlineA == null) return 1;
+      if (deadlineB == null) return -1;
+
+      final remainingA = deadlineA.difference(now).inSeconds;
+      final remainingB = deadlineB.difference(now).inSeconds;
+
+      // 已过期的排在最后，其他按截止时间升序
+      final isExpiredA = remainingA < 0;
+      final isExpiredB = remainingB < 0;
+
+      if (isExpiredA && !isExpiredB) return 1;
+      if (!isExpiredA && isExpiredB) return -1;
+
+      // 都已过期或都未过期，按截止时间升序
+      return deadlineA.compareTo(deadlineB);
+    });
+
+    return todos;
   }
 
   @override
@@ -1790,6 +1841,24 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         onTap: isLocked
             ? null
             : () {
+                // 检查当前平台是否为畅课
+                if (PlatformManager().currentPlatform != PlatformType.tronclass) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('提示'),
+                      content: const Text('请先在账号页切换到畅课平台，再打开畅课待办'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('知道了'),
+                        ),
+                      ],
+                    ),
+                  );
+                  return;
+                }
+
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -1807,16 +1876,22 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     final endTime = todo['end_time'];
 
     DateTime? endDateTime;
-    if (endTime != null) {
+    bool isOverdue = false;
+    bool isUrgent = false;
+
+    // end_time <= 0 表示老师没设截止时间，判定为进行中（未过期）
+    if (endTime != null && endTime > 0) {
       try {
         endDateTime = DateTime.fromMillisecondsSinceEpoch(endTime * 1000);
-      } catch (_) {}
-    }
+        final now = DateTime.now();
+        isOverdue = endDateTime.isBefore(now);
+        isUrgent = !isOverdue && endDateTime.difference(now).inHours < 24;
 
-    final now = DateTime.now();
-    final isOverdue = endDateTime != null && endDateTime.isBefore(now);
-    final isUrgent =
-        endDateTime != null && endDateTime.difference(now).inHours < 24;
+        print('[TodosPage] 雨课堂考试 "$title" end_time=$endTime 状态=${isOverdue ? "已过期" : "进行中"}');
+      } catch (_) {}
+    } else {
+      print('[TodosPage] 雨课堂考试 "$title" end_time=$endTime (无截止时间)，判定为进行中');
+    }
 
     return Card(
       margin: EdgeInsets.symmetric(

@@ -43,6 +43,30 @@ class NotificationService {
     ApiService.appendExternalConsoleLog('NotificationService', 'Initialized successfully');
   }
 
+  Future<bool> checkPermissionStatus() async {
+    if (!_initialized) await initialize();
+
+    final androidPlugin = _notifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin != null) {
+      final granted = await androidPlugin.areNotificationsEnabled();
+      ApiService.appendExternalConsoleLog('NotificationService', 'Android permission status: $granted');
+      return granted ?? false;
+    }
+
+    final iosPlugin = _notifications.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    if (iosPlugin != null) {
+      final granted = await iosPlugin.requestPermissions(
+        alert: false,
+        badge: false,
+        sound: false,
+      );
+      ApiService.appendExternalConsoleLog('NotificationService', 'iOS permission status: $granted');
+      return granted ?? false;
+    }
+
+    return true;
+  }
+
   Future<bool> requestPermissions() async {
     if (!_initialized) await initialize();
 
@@ -102,7 +126,6 @@ class NotificationService {
       final nearestTodo = allPendingTodos.first;
       final todoTitle = nearestTodo['title']?.toString() ?? '未知任务';
       final platform = nearestTodo['platform']?.toString() ?? '';
-      final account = nearestTodo['account']?.toString() ?? '';
 
       DateTime? deadline;
       if (nearestTodo['end_time'] != null) {
