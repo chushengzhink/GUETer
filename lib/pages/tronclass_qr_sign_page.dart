@@ -68,7 +68,7 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
       final hasVibration = await Vibration.hasCustomVibrationsSupport();
       if (mounted) {
         setState(() {
-          hasCustomVibrationsSupport = hasVibration ?? false;
+          hasCustomVibrationsSupport = hasVibration == true;
         });
       }
 
@@ -284,25 +284,19 @@ class _ScannerBoxState extends State<_ScannerBox>
 
 class _ScannerBoxPainter extends CustomPainter {
   final double position;
-  final double borderRadius;
-  final List<Color> gradientColors;
 
-  _ScannerBoxPainter(
-    this.position, {
-    this.borderRadius = 8.0,
-    this.gradientColors = const [Colors.blue, Colors.lightBlueAccent],
-  });
+  _ScannerBoxPainter(this.position);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final gradient = LinearGradient(
-      colors: gradientColors,
+    final gradient = const LinearGradient(
+      colors: [Colors.blue, Colors.lightBlueAccent],
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
     );
 
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(borderRadius));
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(8.0));
 
     final borderPaint = Paint()
       ..shader = gradient.createShader(rect)

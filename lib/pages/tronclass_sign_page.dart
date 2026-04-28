@@ -207,9 +207,10 @@ class _TronclassSignPageState extends State<TronclassSignPage> {
   }
 
   Widget _buildSignCard(Active activity) {
-    final mode = activity.extras?['_mode'] ?? 'qrcode';
-    final signed = activity.extras?['_signed'] == true;
-    final open = activity.extras?['_open'] == true;
+    final extras = activity.extras ?? {};
+    final mode = extras['_mode'] ?? 'qrcode';
+    final signed = extras['_signed'] == true;
+    final open = extras['_open'] == true;
 
     Color modeColor;
     IconData modeIcon;
