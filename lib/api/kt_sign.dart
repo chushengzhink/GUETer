@@ -1,5 +1,3 @@
-import 'package:flutter/foundation.dart';
-
 import 'api_service.dart';
 import 'platform_request_context.dart';
 import '../session/account.dart';
@@ -60,9 +58,6 @@ class KTSignApi {
     final sign = parsed['sign'] ?? '';
 
     if (ticketid.isEmpty || expire.isEmpty || sign.isEmpty) {
-      debugPrint(
-        'KTSignApi.scanToSign invalid params: ticketid=$ticketid expire=$expire sign=${sign.isNotEmpty}',
-      );
       ApiService.appendExternalConsoleLog(
         '课堂派',
         '二维码签到参数无效: ticketid=${ticketid.isEmpty ? "空" : "有"} expire=${expire.isEmpty ? "空" : "有"} sign=${sign.isEmpty ? "空" : "有"}',
@@ -101,12 +96,8 @@ class KTSignApi {
         '二维码签到结果: ${success ? "成功" : "失败"} $info',
       );
 
-      if (info.isNotEmpty) {
-        debugPrint(info);
-      }
       return success;
     } catch (e) {
-      debugPrint('KTSignApi.scanToSign error: $e');
       ApiService.appendExternalConsoleLog('课堂派', '二维码签到异常: $e');
       return false;
     }
@@ -145,7 +136,6 @@ class KTSignApi {
       }
       return null;
     } catch (e) {
-      debugPrint('KTSignApi.getNumberCode error: $e');
       ApiService.appendExternalConsoleLog('课堂派', '获取数字签到码失败: $e');
       return null;
     }
@@ -203,7 +193,6 @@ class KTSignApi {
 
       return success;
     } catch (e) {
-      debugPrint('KTSignApi.checkInOutSign error: $e');
       ApiService.appendExternalConsoleLog('课堂派', '签入签出异常: $e');
       return false;
     }
@@ -253,7 +242,6 @@ class KTSignApi {
 
       return success;
     } catch (e) {
-      debugPrint('KTSignApi.numberSign error: $e');
       ApiService.appendExternalConsoleLog('课堂派', '数字签到异常: $e');
       return false;
     }
@@ -295,7 +283,7 @@ class KTSignApi {
             }
           }
         } catch (e) {
-          debugPrint('KTSignApi.gpsSign: 读取课程设置失败: $e');
+          ApiService.appendExternalConsoleLog('课堂派', 'GPS签到: 读取课程设置失败: $e');
         }
       }
 
@@ -349,7 +337,6 @@ class KTSignApi {
 
       return success;
     } catch (e) {
-      debugPrint('KTSignApi.gpsSign error: $e');
       ApiService.appendExternalConsoleLog('课堂派', 'GPS签到异常: $e');
       return false;
     }

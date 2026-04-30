@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../../../api/sign_in.dart';
+import '../../../api/api_service.dart';
 import '../../../models/user.dart';
 import '../../../models/active.dart';
 import '../../../session/account.dart';
@@ -268,7 +269,7 @@ class SignInPageState extends State<SignInPage> {
         _assignImages();
       }
     } catch (e, stackTrace) {
-      debugPrint('签到信息解析失败：$e \n$stackTrace');
+      ApiService.appendExternalConsoleLog('学习通', '签到信息解析失败：$e');
     }
   }
 
@@ -516,7 +517,7 @@ class SignInPageState extends State<SignInPage> {
         await _handleSignResult(resignResult, user, failedAccounts);
       }
     } else if (result == 'success') {
-      debugPrint('${user.name} 签到成功');
+      ApiService.appendExternalConsoleLog('学习通', '${user.name} 签到成功');
     } else if (result == 'success2') {
       failedAccounts.add('${user.name} (已过截止时间)');
     } else {
