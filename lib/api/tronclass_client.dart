@@ -64,6 +64,7 @@ class TronclassClient {
           validateStatus: (status) => status != null,
           connectTimeout: const Duration(seconds: 30),
           receiveTimeout: const Duration(seconds: 30),
+          responseType: ResponseType.json,
         ),
       )..interceptors.addAll([
           _TronclassCookieInterceptor(instance._cookieJar),
@@ -180,7 +181,7 @@ class _TronclassAuthInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     final url = options.uri.toString();
-    if (url.contains('courses.guet.edu.cn')) {
+    if (url.contains('https://courses.guet.edu.cn/')) {
       final sessionId = getSessionId();
       if (sessionId != null) {
         options.headers['x-session-id'] = sessionId;
