@@ -242,9 +242,12 @@ class _PlatformCookieInterceptor extends Interceptor {
       }
 
       if (platform == PlatformType.tronclass) {
-        final sessionId = await TronclassAuthManager.getSessionIdForUser(userId);
-        if (sessionId != null && sessionId.isNotEmpty) {
-          options.headers['x-session-id'] = sessionId;
+        final url = options.uri.toString();
+        if (url.contains('https://courses.guet.edu.cn/')) {
+          final sessionId = await TronclassAuthManager.getSessionIdForUser(userId);
+          if (sessionId != null && sessionId.isNotEmpty) {
+            options.headers['x-session-id'] = sessionId;
+          }
         }
       }
 

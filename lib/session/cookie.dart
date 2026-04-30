@@ -105,13 +105,16 @@ class CookieInterceptor extends Interceptor {
 
       if (PlatformManager().isTronclass &&
           options.headers['x-session-id'] == null) {
-        final currentUserId = AccountManager.currentSessionId;
-        final sessionId = await TronclassAuthManager.getCurrentSessionId();
-        if (sessionId != null && sessionId.isNotEmpty) {
-          options.headers['x-session-id'] = sessionId;
-          debugPrint('[CookieInterceptor] 畅课请求已注入 x-session-id (userId=$currentUserId)');
-        } else {
-          debugPrint('[CookieInterceptor] 警告：畅课请求缺少 x-session-id (userId=$currentUserId)');
+        final url = options.uri.toString();
+        if (url.contains('https://courses.guet.edu.cn/')) {
+          final currentUserId = AccountManager.currentSessionId;
+          final sessionId = await TronclassAuthManager.getCurrentSessionId();
+          if (sessionId != null && sessionId.isNotEmpty) {
+            options.headers['x-session-id'] = sessionId;
+            debugPrint('[CookieInterceptor] 畅课请求已注入 x-session-id (userId=$currentUserId)');
+          } else {
+            debugPrint('[CookieInterceptor] 警告：畅课请求缺少 x-session-id (userId=$currentUserId)');
+          }
         }
       }
 
