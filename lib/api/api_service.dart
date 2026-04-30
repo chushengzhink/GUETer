@@ -127,7 +127,7 @@ class ApiService {
   static const int _maxRetryCount = 2;
   static const bool _enableVerboseLogsInRelease = true;
   static const int _maxConsoleLogLines = 800;
-  static final List<String> _consoleLogs = <String>[];
+  static final List<Map<String, String>> _consoleLogs = <Map<String, String>>[];
   static final ValueNotifier<int> consoleLogVersion = ValueNotifier<int>(0);
 
   /// 获取雨课堂服务器对应的 baseUrl
@@ -156,7 +156,11 @@ class ApiService {
   }
 
   static void _appendConsoleLog(String line) {
-    _consoleLogs.add(line);
+    _consoleLogs.add({
+      'timestamp': DateTime.now().toIso8601String(),
+      'platform': '通用',
+      'message': line,
+    });
     if (_consoleLogs.length > _maxConsoleLogLines) {
       final overflow = _consoleLogs.length - _maxConsoleLogLines;
       _consoleLogs.removeRange(0, overflow);
@@ -169,7 +173,30 @@ class ApiService {
     final hh = now.hour.toString().padLeft(2, '0');
     final mm = now.minute.toString().padLeft(2, '0');
     final ss = now.second.toString().padLeft(2, '0');
-    _appendConsoleLog('[$hh:$mm:$ss] [$tag] $message');
+
+    // 根据 tag 判断平台
+    String platform = '通用';
+    if (tag.contains('学习通') || tag == 'chaoxing') {
+      platform = '学习通';
+    } else if (tag.contains('雨课堂') || tag == 'yuketang' || tag == 'rainclassroom') {
+      platform = '雨课堂';
+    } else if (tag.contains('畅课') || tag == 'tronclass') {
+      platform = '畅课';
+    } else if (tag.contains('课堂派') || tag == 'ketangpai') {
+      platform = '课堂派';
+    }
+
+    _consoleLogs.add({
+      'timestamp': now.toIso8601String(),
+      'platform': platform,
+      'message': '[$hh:$mm:$ss] [$tag] $message',
+    });
+
+    if (_consoleLogs.length > _maxConsoleLogLines) {
+      final overflow = _consoleLogs.length - _maxConsoleLogLines;
+      _consoleLogs.removeRange(0, overflow);
+    }
+    consoleLogVersion.value++;
   }
 
   static String _responseSummary(dynamic data) {
@@ -189,8 +216,13 @@ class ApiService {
     return 'bodyType=${data.runtimeType}';
   }
 
-  static List<String> getConsoleLogs() {
-    return List<String>.unmodifiable(_consoleLogs);
+  static List<Map<String, String>> getConsoleLogs({String? platform}) {
+    if (platform == null || platform == '全部') {
+      return List<Map<String, String>>.unmodifiable(_consoleLogs);
+    }
+    return List<Map<String, String>>.unmodifiable(
+      _consoleLogs.where((log) => log['platform'] == platform).toList(),
+    );
   }
 
   static void clearConsoleLogs() {
