@@ -273,6 +273,7 @@ class SignInPageState extends State<SignInPage> {
   }
 
   Future<void> _loadActivityData() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
     });
@@ -291,6 +292,7 @@ class SignInPageState extends State<SignInPage> {
       }
     }
 
+    if (!mounted) return;
     setState(() {
       _isLoading = false;
       _isDataLoaded = true;
@@ -480,7 +482,9 @@ class SignInPageState extends State<SignInPage> {
       });
     }
 
-    _showMultiSignResult(totalCount, failedAccounts);
+    if (mounted) {
+      _showMultiSignResult(totalCount, failedAccounts);
+    }
   }
 
   Future<void> _handleSignResult(String? result, User user, List<String> failedAccounts) async {

@@ -95,6 +95,7 @@ class _VotePageState extends State<VotePage> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = '加载数据出错: $e';
         _isLoading = false;

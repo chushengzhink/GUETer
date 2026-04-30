@@ -70,6 +70,7 @@ class _RainClassroomExamListPageState extends State<RainClassroomExamListPage> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = '加载失败: $e';
         _loading = false;

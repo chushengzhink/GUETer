@@ -164,6 +164,7 @@ class _BaiduMapWidgetState extends State<BaiduMapWidget> {
       }
     } catch (e) {
       debugPrint('定位失败：$e');
+      if (!mounted) return;
       setState(() {
         _locationInfo = '定位失败：$e';
       });
@@ -215,7 +216,7 @@ class _BaiduMapWidgetState extends State<BaiduMapWidget> {
     await _mapController!.addMarker(marker);
 
     String address = await _getAddressFromCoordinate(position);
-
+    if (!mounted) return;
     setState(() {
       _markerPosition = position;
       _locationInfo =

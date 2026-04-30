@@ -119,6 +119,7 @@ class CaptchaPageState extends State<CaptchaPage> {
       }
     } catch (e) {
       _showError('加载验证码时出错: $e');
+      if (!mounted) return;
       setState(() => _isLoadingSlide = false);
     }
   }
@@ -163,6 +164,7 @@ class CaptchaPageState extends State<CaptchaPage> {
       } else {
         _showError('验证失败，请重试');
         await _loadSlideCaptcha();
+        if (!mounted) return;
         setState(() {
           _sliderPosition = 0.0;
           _hasSubmitted = false;

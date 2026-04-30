@@ -147,6 +147,7 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
         _showAuthExpiredDialog();
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = e.toString().replaceFirst('Exception: ', '');
         _loading = false;
@@ -217,6 +218,7 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = '开始考试失败: $e';
         _loading = false;

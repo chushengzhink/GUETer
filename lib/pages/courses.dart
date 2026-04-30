@@ -97,6 +97,7 @@ class _CourseContentPageState extends State<CourseContentPage> {
         }
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _activeList = [];
         _isContentLoading = false;
@@ -1652,6 +1653,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       }
     } catch (e) {
       debugPrint('[Courses] load failed: $e');
+      if (!mounted) return;
       setState(() {
         _courses = [];
         _onlineCourses = [];
@@ -2145,6 +2147,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                           );
                           if (confirmed == true && mounted) {
                             await AccountManager.setCurrentSession(null);
+                            if (!mounted) return;
                             setState(() {});
                             _loadCourses();
                             if (mounted) {

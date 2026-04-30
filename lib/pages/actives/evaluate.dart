@@ -76,6 +76,7 @@ class _EvaluatePageState extends State<EvaluatePage> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = '加载数据出错: $e';
         _isLoading = false;

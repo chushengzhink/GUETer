@@ -166,6 +166,7 @@ class _QuizPageState extends State<QuizPage> {
         await _loadQuizDataFromHtml(htmlContent);
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = '检查活动状态失败: $e';
         _isLoading = false;
@@ -305,6 +306,7 @@ class _QuizPageState extends State<QuizPage> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = '加载数据出错: $e';
         _isLoading = false;
@@ -391,6 +393,7 @@ class _QuizPageState extends State<QuizPage> {
           });
         }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = '加载数据出错: $e';
         _isLoading = false;

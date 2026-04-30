@@ -1060,6 +1060,7 @@ class _AccountsPageState extends State<AccountsPage>
                         : () async {
                             setState(() => qrState.isRefreshing = true);
                             await qrState.refreshQRCode();
+                            if (!mounted) return;
                             setState(() => qrState.isRefreshing = false);
                           },
                     child: qrState.isRefreshing

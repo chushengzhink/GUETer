@@ -565,6 +565,7 @@ class _PresentationPageState extends State<PresentationPage> {
       }
     } catch (e) {
       debugPrint('加载 PPT 失败：$e');
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });

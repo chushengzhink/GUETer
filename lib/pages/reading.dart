@@ -110,6 +110,7 @@ class _ReadingPageState extends State<ReadingPage> {
     }
     _controller.jumpToPage(page);
     await _saveLastPage(page);
+    if (!mounted) return;
     setState(() {
       _currentPage = page;
     });

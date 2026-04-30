@@ -279,6 +279,7 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
       NavigationDelegate(
         onPageStarted: (url) {
           if (!mounted) return;
+          if (!mounted) return;
           setState(() {
             _currentUrl = url;
             _isLoading = true;
