@@ -9,6 +9,8 @@ import 'package:path/path.dart' as path;
 import 'package:html/parser.dart' as html_parser;
 import 'package:encrypt/encrypt.dart' as encrypt_pkg;
 
+import 'api_service.dart';
+
 import '../session/tronclass_auth.dart';
 
 /// 畅课客户端 - 每用户独立实例管理
@@ -185,6 +187,15 @@ class _TronclassAuthInterceptor extends Interceptor {
       final sessionId = getSessionId();
       if (sessionId != null) {
         options.headers['x-session-id'] = sessionId;
+        ApiService.appendExternalConsoleLog(
+          '畅课',
+          '[TronclassAuthInterceptor] 已注入 x-session-id (长度=${sessionId.length}) url=$url',
+        );
+      } else {
+        ApiService.appendExternalConsoleLog(
+          '畅课',
+          '[TronclassAuthInterceptor] 警告：x-session-id 为空 url=$url',
+        );
       }
     }
     handler.next(options);

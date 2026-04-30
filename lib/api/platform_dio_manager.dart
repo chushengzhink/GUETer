@@ -75,6 +75,11 @@ class PlatformDioManager {
 
     debugPrint('[PlatformDioManager] Created isolated Dio: platform=$platformName userId=$userId baseUrl=$baseUrl');
 
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      '创建独立 Dio 实例: userId=$userId baseUrl=$baseUrl',
+    );
+
     return dio;
   }
 
@@ -138,7 +143,7 @@ class PlatformDioManager {
   static String _getBaseUrl(PlatformType platform) {
     switch (platform) {
       case PlatformType.chaoxing:
-        return '';
+        return 'https://www.chaoxing.com';
       case PlatformType.rainClassroom:
         return 'https://www.yuketang.cn';
       case PlatformType.tronclass:
@@ -189,14 +194,18 @@ class _PlatformCookieInterceptor extends Interceptor {
       if (platform == PlatformType.chaoxing) {
         final cookieStr = await AccountManager.getCookieForPlatform(platform, userId);
         if (cookieStr == null || cookieStr.isEmpty) {
-          ApiService.appendExternalConsoleLog('学习通', 'Cookie为空，请检查登录状态');
+          ApiService.appendExternalConsoleLog('学习通', 'Cookie为空，请检查登录状态 userId=$userId');
           throw Exception('[学习通] Cookie为空，无法发起请求');
         }
         options.headers['Cookie'] = cookieStr;
+        ApiService.appendExternalConsoleLog(
+          '学习通',
+          '已注入 Cookie (长度=${cookieStr.length}) userId=$userId',
+        );
       } else if (platform == PlatformType.rainClassroom) {
         final cookieStr = await AccountManager.getCookieForPlatform(platform, userId);
         if (cookieStr == null || cookieStr.isEmpty) {
-          ApiService.appendExternalConsoleLog('雨课堂', 'Cookie为空，请检查登录状态');
+          ApiService.appendExternalConsoleLog('雨课堂', 'Cookie为空，请检查登录状态 userId=$userId');
           throw Exception('[雨课堂] Cookie为空，无法发起请求');
         }
         options.headers['Cookie'] = cookieStr;
@@ -231,6 +240,11 @@ class _PlatformCookieInterceptor extends Interceptor {
         if (cookieMap.containsKey('sessionid')) {
           options.headers['sessionid'] = cookieMap['sessionid'];
         }
+
+        ApiService.appendExternalConsoleLog(
+          '雨课堂',
+          '已注入 Cookie (长度=${cookieStr.length}) 和雨课堂专用请求头 userId=$userId',
+        );
       } else {
         final uri = options.uri;
         List<Cookie> cookies = await cookieJar.loadForRequest(uri);
@@ -238,6 +252,10 @@ class _PlatformCookieInterceptor extends Interceptor {
         if (cookies.isNotEmpty) {
           final cookieStr = cookies.map((c) => '${c.name}=${c.value}').join('; ');
           options.headers['Cookie'] = cookieStr;
+          ApiService.appendExternalConsoleLog(
+            platformName,
+            '已从 CookieJar 注入 Cookie (长度=${cookieStr.length}) userId=$userId',
+          );
         }
       }
 
@@ -247,6 +265,15 @@ class _PlatformCookieInterceptor extends Interceptor {
           final sessionId = await TronclassAuthManager.getSessionIdForUser(userId);
           if (sessionId != null && sessionId.isNotEmpty) {
             options.headers['x-session-id'] = sessionId;
+            ApiService.appendExternalConsoleLog(
+              '畅课',
+              '已注入 x-session-id (长度=${sessionId.length}) userId=$userId url=$url',
+            );
+          } else {
+            ApiService.appendExternalConsoleLog(
+              '畅课',
+              '警告：x-session-id 为空 userId=$userId url=$url',
+            );
           }
         }
       }
@@ -255,9 +282,28 @@ class _PlatformCookieInterceptor extends Interceptor {
         final account = AccountManager.getAccountById(userId);
         if (account != null && account.token.isNotEmpty) {
           options.headers['token'] = account.token;
+          ApiService.appendExternalConsoleLog(
+            '课堂派',
+            '已注入 token (长度=${account.token.length}) userId=$userId',
+          );
+        } else {
+          ApiService.appendExternalConsoleLog(
+            '课堂派',
+            '警告：token 为空 userId=$userId',
+          );
         }
       }
     }
+
+    final finalUrl = options.uri.toString();
+    final cookieLength = options.headers['Cookie']?.toString().length ?? 0;
+    final hasSessionId = options.headers['x-session-id'] != null;
+    final hasToken = options.headers['token'] != null;
+
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      '请求: ${options.method} $finalUrl | Cookie长度=$cookieLength x-session-id=$hasSessionId token=$hasToken',
+    );
 
     handler.next(options);
   }

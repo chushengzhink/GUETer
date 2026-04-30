@@ -111,9 +111,15 @@ class CookieInterceptor extends Interceptor {
           final sessionId = await TronclassAuthManager.getCurrentSessionId();
           if (sessionId != null && sessionId.isNotEmpty) {
             options.headers['x-session-id'] = sessionId;
-            debugPrint('[CookieInterceptor] 畅课请求已注入 x-session-id (userId=$currentUserId)');
+            ApiService.appendExternalConsoleLog(
+              '畅课',
+              '[CookieInterceptor] 已注入 x-session-id (长度=${sessionId.length}) userId=$currentUserId',
+            );
           } else {
-            debugPrint('[CookieInterceptor] 警告：畅课请求缺少 x-session-id (userId=$currentUserId)');
+            ApiService.appendExternalConsoleLog(
+              '畅课',
+              '[CookieInterceptor] 警告：x-session-id 为空 userId=$currentUserId',
+            );
           }
         }
       }
@@ -124,6 +130,10 @@ class CookieInterceptor extends Interceptor {
           final account = AccountManager.getAccountById(currentUserId);
           if (account != null && account.token.isNotEmpty) {
             options.headers['token'] = account.token;
+            ApiService.appendExternalConsoleLog(
+              '课堂派',
+              '[CookieInterceptor] 已注入 token (长度=${account.token.length}) userId=$currentUserId',
+            );
           }
         }
       }
