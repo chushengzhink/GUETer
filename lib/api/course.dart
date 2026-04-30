@@ -390,6 +390,20 @@ class RCCourseApi {
         return null;
       }
 
+      // 验证 courses 数据结构
+      if (courses['data'] == null || courses['data'] is! List) {
+        debugPrint('getCoursesList: courses[\'data\'] is null or not a list');
+        return null;
+      }
+
+      // 验证 onLessonCourses 数据结构
+      if (onLessonCourses['data'] == null ||
+          onLessonCourses['data']['onLessonClassrooms'] == null ||
+          onLessonCourses['data']['onLessonClassrooms'] is! List) {
+        debugPrint('getCoursesList: onLessonCourses structure invalid');
+        return null;
+      }
+
       Map<String, dynamic> coursesMap = {
         for (var courseItem in courses['data'])
           courseItem['course_id'].toString(): courseItem,
@@ -435,12 +449,22 @@ class RCCourseApi {
       );
       final data = response.data;
 
+      if (data == null || data['code'] == null) {
+        debugPrint('checkIn: invalid response structure');
+        return null;
+      }
+
       final int code = data['code'];
       if (code == 0) {
         // 为当前用户保存 bearerToken（从响应头获取）
-        final bearerToken = response.headers.value('set-auth')!;
-        final lessonToken = data['data']['lessonToken'];
-        _setToken(bearerToken, lessonToken);
+        final bearerToken = response.headers.value('set-auth');
+        final lessonToken = data['data']?['lessonToken'];
+
+        if (bearerToken != null && lessonToken != null) {
+          _setToken(bearerToken, lessonToken);
+        } else {
+          debugPrint('checkIn: missing bearerToken or lessonToken');
+        }
         return 0;
       } else {
         // {"code":50070,"msg":"DYNAMIC_QR_CHECK_IN_REFUSED","data":null}
@@ -463,10 +487,19 @@ class RCCourseApi {
       );
       final data = response.data;
 
+      if (data == null || data['code'] == null) {
+        debugPrint('scan: invalid response structure');
+        return null;
+      }
+
       final int code = data['code'];
       if (code == 0) {
         // {"code":0,"msg":"OK","data":{"type":"checkin","value":"1632189922935066880"}}
-        final lessonId = data['data']['value'];
+        final lessonId = data['data']?['value'];
+        if (lessonId == null) {
+          debugPrint('scan: missing lessonId in response');
+          return null;
+        }
         final response = await checkIn(lessonId);
         return response;
       } else {

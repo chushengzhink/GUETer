@@ -495,7 +495,12 @@ class SignInPageState extends State<SignInPage> {
 
     if (result.startsWith('validate')) {
       if (result.contains('_')) {
-        final enc2 = result.split('_')[1];
+        final parts = result.split('_');
+        if (parts.length < 2) {
+          failedAccounts.add('${user.name} (验证码格式错误)');
+          return;
+        }
+        final enc2 = parts[1];
         (_userCaptchaValidate[user.uid] ??= {})['enc2'] = enc2;
         if (!await _handleCaptcha(user.uid)) {
           if (mounted) {
