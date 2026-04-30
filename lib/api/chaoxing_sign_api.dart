@@ -396,41 +396,6 @@ class ChaoxingSignApi {
     return null;
   }
 
-  /// 群聊签到
-  /// 群聊签到没有验证码，没有签到码
-  /// 且相对于课程签到漏洞较多，没有严格权鉴
-  static Future<Response> groupSign({
-    required String activeId,
-    required String uid,
-    String? clientip,
-    String? useragent,
-  }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法签到');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
-    final url = 'https://mobilelearn.chaoxing.com/sign/stuSignajax';
-    final params = {
-      'activeId': activeId,
-      'uid': uid,
-      'clientip': clientip ?? '10.0.85.108', // 使用内网 IP
-      'useragent': useragent ?? '',
-    };
-
-    return await context.sendRequest(
-      url,
-      method: 'GET',
-      params: params,
-      responseType: ResponseType.plain,
-    );
-  }
-
   /// 签到回执
   static Future<Map<String, dynamic>?> getSignReceipt(String activeId) async {
     final userId = AccountManager.currentSessionId;

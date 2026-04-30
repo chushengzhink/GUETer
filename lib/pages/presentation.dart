@@ -223,7 +223,7 @@ class _PresentationPageState extends State<PresentationPage> {
         _handleMessage(message);
       });
     } catch (e) {
-      print('WebSocket 连接失败：$e');
+      debugPrint('WebSocket 连接失败：$e');
     }
   }
 
@@ -232,7 +232,7 @@ class _PresentationPageState extends State<PresentationPage> {
       final data = jsonDecode(message);
       final op = data['op'];
 
-      print('WebSocket S2C：$message');
+      debugPrint('WebSocket S2C：$message');
 
       final messageText = data['message'];
 
@@ -461,7 +461,7 @@ class _PresentationPageState extends State<PresentationPage> {
         }
       }
     } catch (e) {
-      print('解析消息失败：$e');
+      debugPrint('解析消息失败：$e');
     }
   }
 
@@ -564,7 +564,7 @@ class _PresentationPageState extends State<PresentationPage> {
         });
       }
     } catch (e) {
-      print('加载 PPT 失败：$e');
+      debugPrint('加载 PPT 失败：$e');
       setState(() {
         _isLoading = false;
       });

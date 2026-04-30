@@ -13,6 +13,7 @@ import '../platform.dart';
 import '../session/account.dart';
 import '../session/app_settings.dart';
 import '../session/cookie.dart';
+import '../session/login_context.dart';
 import '../session/tronclass_auth.dart';
 import '../utils/encrypt.dart';
 import '../utils/global_palette.dart';
@@ -38,6 +39,9 @@ class QRCodeLoginState {
   Future<bool> initialize() async {
     isLoading = true;
     try {
+      // 清除临时 Cookie，避免旧登录残留
+      CookieManager.clearTempCookies();
+
       if (!_isChaoxing) {
         final data = await RCLoginApi.getQRCodeUuid();
         if (data == null || data.length < 2) {
@@ -258,6 +262,31 @@ class _LoginPageState extends State<LoginPage> {
   String _currentLoginType = '1'; // 1: 密码, 2: 验证码
   String? _ticket;
   String? _randstr;
+  LoginContext? _loginContext; // 新增：登录上下文
+
+  /// 清除当前平台的旧 Cookie 和临时 Cookie，避免多账号登录冲突
+  Future<void> _clearPlatformCookiesBeforeLogin() async {
+    try {
+      final platformName = PlatformManager().currentPlatformName;
+
+      debugPrint('[LoginPage] 开始清除 $platformName 的旧 Cookie 和临时 Cookie');
+
+      // 清除临时 Cookie（登录流程中的临时存储）
+      CookieManager.clearTempCookies();
+
+      // 清除全局 Dio 实例的 Cookie（如果有）
+      // 注意：不清除已登录用户的 Cookie，只清除可能残留的临时 Cookie
+
+      ApiService.appendExternalConsoleLog(
+        platformName,
+        '已清除临时 Cookie，准备开始新登录流程',
+      );
+
+      debugPrint('[LoginPage] $platformName Cookie 清理完成');
+    } catch (e) {
+      debugPrint('[LoginPage] 清除 Cookie 失败: $e');
+    }
+  }
 
   bool get _supportsTencentCaptcha {
     if (kIsWeb) {
@@ -307,6 +336,13 @@ class _LoginPageState extends State<LoginPage> {
     _usernameController.dispose();
     _passwordController.dispose();
     _captchaController.dispose();
+
+    // 清理登录上下文（如果存在）
+    if (_loginContext != null) {
+      LoginContextManager.instance.removeContext(_loginContext!.contextId);
+      _loginContext = null;
+    }
+
     super.dispose();
   }
 
@@ -368,60 +404,6 @@ class _LoginPageState extends State<LoginPage> {
     return result;
   }
 
-  Future<String?> _showTronclassMfaDialog(
-    String? mobileHint,
-    String? tip,
-  ) async {
-    final codeController = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('请输入短信动态验证码'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(tip?.isNotEmpty == true ? tip! : '验证码已发送，请输入收到的短信动态码'),
-              if (mobileHint != null && mobileHint.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text('接收号码：$mobileHint'),
-                ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: codeController,
-                autofocus: true,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: '短信动态码',
-                  hintText: '请输入手机收到的验证码',
-                ),
-                onSubmitted: (_) {
-                  Navigator.of(dialogContext).pop(codeController.text.trim());
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('暂不验证'),
-            ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(codeController.text.trim()),
-              child: const Text('验证'),
-            ),
-          ],
-        );
-      },
-    );
-
-    codeController.dispose();
-    return result;
-  }
 
   Future<void> _showTronclassDebugDialog({
     required String message,
@@ -512,7 +494,15 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _completeLoginInBackground(String username, String? sessionId) async {
     try {
       debugPrint('[TC][后台] 开始获取用户信息');
-      final userInfo = await TCLoginApi.getUserInfo(fallbackUid: username);
+
+      // 使用 WithContext 方法获取用户信息
+      final userInfo = _loginContext != null
+          ? await TCLoginApiWithContext.getUserInfoWithContext(
+              _loginContext!,
+              sessionId ?? '',
+            )
+          : await TCLoginApi.getUserInfo(fallbackUid: username);
+
       debugPrint('[TC][后台] getUserInfo 完成');
 
       final user = (userInfo ??
@@ -916,6 +906,15 @@ class _LoginPageState extends State<LoginPage> {
     }
 
     if (!mounted) return;
+
+    // 清除当前平台的旧 Cookie 和临时 Cookie，避免多账号登录冲突
+    await _clearPlatformCookiesBeforeLogin();
+
+    // 创建登录上下文
+    _loginContext = LoginContextManager.instance.createContext(
+      PlatformManager().currentPlatform,
+    );
+
     setState(() {
       _isLoading = true;
     });
@@ -925,11 +924,14 @@ class _LoginPageState extends State<LoginPage> {
 
       if (PlatformManager().isTronclass) {
         try {
-          final result = await TCLoginApi.login(
+          final result = await TCLoginApiWithContext.loginWithContext(
+            _loginContext!,
             username,
             _passwordController.text,
-            captchaProvider: _showTronclassCaptchaDialog,
-            mfaCodeProvider: _showTronclassMfaDialog,
+            captchaProvider: (imageBytes) async {
+              final captcha = await _showTronclassCaptchaDialog(imageBytes);
+              return captcha ?? '';
+            },
           ).timeout(
             const Duration(seconds: 30),
             onTimeout: () {
@@ -940,109 +942,30 @@ class _LoginPageState extends State<LoginPage> {
             },
           );
 
-          if (result['requireWebReauth'] == true) {
-          final authUrl = (result['authUrl'] ?? TCLoginApi.buildAuthUri().toString())
-              .toString();
-          if (!mounted) {
-            return;
-          }
+          final resultSessionId = (result['sessionId'] ?? '').toString();
+          final loginSucceeded = result['ok'] == true || resultSessionId.isNotEmpty;
 
-          final webResult = await Navigator.push<Map<String, dynamic>>(
-            context,
-            MaterialPageRoute(
-              builder: (_) => TronclassWebLoginPage(
-                accountName: username,
-                accountId: username,
-                initialUrl: Uri.parse(authUrl),
-                initialMessage: '短信验证已完成，请在内置页面继续完成畅课授权',
-                autoCloseOnAuthSuccess: true,
-              ),
-            ),
-          );
-
-          final webSucceeded =
-              webResult?['ok'] == true ||
-              (webResult?['sessionId']?.toString().isNotEmpty ?? false);
-          if (webSucceeded) {
-            if (!mounted) {
-              return;
-            }
-            await _completeTronclassLoginWithSession(
-              username: username,
-              sessionId: webResult?['sessionId']?.toString(),
-            );
-            return;
-          }
-
-          if (mounted) {
-            await _showTronclassDebugDialog(
-              message:
-                  (webResult?['message'] ?? result['message'] ?? '畅课授权未完成')
-                      .toString(),
-              debug:
-                  webResult?['debug']?.toString() ??
-                  result['debug']?.toString() ??
-                  TCLoginApi.lastLoginTrace,
-            );
-          }
-          return;
-        }
-
-        final resultSessionId = (result['sessionId'] ?? '').toString();
-        final maybeSessionEstablished = result['sessionEstablished'] == true;
-        final loginSucceeded =
-            result['ok'] == true ||
-            resultSessionId.isNotEmpty ||
-            maybeSessionEstablished;
-
-        if (!loginSucceeded) {
-          final message = (result['message'] ?? '畅课登录失败').toString();
-          final cancelledMfa =
-              result['cancelledMfa'] == true ||
-              message.contains('取消了输入') ||
-              message.contains('取消了验证');
-
-          if (cancelledMfa) {
+          if (!loginSucceeded) {
+            final message = (result['message'] ?? '畅课登录失败').toString();
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('你已取消本次短信验证，可稍后重新登录继续验证'),
-                  backgroundColor: Color(0xFF2F3A4A),
-                ),
+              await _showTronclassDebugDialog(
+                message: message,
+                debug: result['debug']?.toString() ?? '',
               );
             }
             return;
           }
 
-          if (mounted && result['rateLimited'] == true) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('检测到畅课访问频率限制：仅在当前页面降速处理，不会自动跳转浏览器'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-            await Future<void>.delayed(const Duration(milliseconds: 1200));
-          }
-
-          if (mounted) {
-            await _showTronclassDebugDialog(
-              message: message,
-              debug: result['debug']?.toString() ?? TCLoginApi.lastLoginTrace,
-            );
-          }
+          await _completeTronclassLoginWithSession(
+            username: username,
+            sessionId: resultSessionId.isEmpty ? null : resultSessionId,
+          );
           return;
-        }
-
-        await _completeTronclassLoginWithSession(
-          username: username,
-          sessionId: resultSessionId.isEmpty ? null : resultSessionId,
-        );
-        return;
         } catch (e, stackTrace) {
           if (mounted) {
             await _showTronclassDebugDialog(
               message: '畅课登录异常: ${e.toString()}',
-              debug: 'Error: $e\nStackTrace: $stackTrace\n\n${TCLoginApi.lastLoginTrace}',
+              debug: 'Error: $e\nStackTrace: $stackTrace',
             );
           }
           return;
@@ -1097,7 +1020,6 @@ class _LoginPageState extends State<LoginPage> {
                   : '',
             );
       } else if (PlatformManager().isRainClassroom) {
-        final loginType = _currentLoginType == '2' ? 3 : 2;
         final accountForLogin = _currentLoginType == '2'
             ? _normalizeMainlandPhone(username)
             : username;
@@ -1110,13 +1032,22 @@ class _LoginPageState extends State<LoginPage> {
             ? _captchaController.text.trim()
             : _passwordController.text;
 
-        loginResult = await RCLoginApi.login(
-          loginType,
-          accountForLogin,
-          code,
-          _ticket!,
-          _randstr!,
-        );
+        // 使用带 context 的新方法
+        if (_currentLoginType == '2') {
+          // 手机号登录
+          loginResult = await RCLoginApiWithContext.loginByMobileWithContext(
+            _loginContext!,
+            accountForLogin,
+            code,
+          );
+        } else {
+          // 密码登录
+          loginResult = await RCLoginApiWithContext.loginPasswordWithContext(
+            _loginContext!,
+            accountForLogin,
+            code,
+          );
+        }
 
         _ticket = null;
         _randstr = null;
@@ -1126,27 +1057,37 @@ class _LoginPageState extends State<LoginPage> {
           throw Exception((loginResult?['msg'] ?? '雨课堂登录失败').toString());
         }
 
-        user =
-            await RCLoginApi.getUserInfo() ??
+        user = await RCLoginApiWithContext.getUserInfoWithContext(_loginContext!) ??
             User(
               uid: username,
               name: username,
               avatar: '',
               phone: '未知手机号',
               school: '未知学校',
-              platform: 'rainClassroom',
+              platform: 'yuketang',
               password: _currentLoginType == '2'
                   ? ''
                   : _passwordController.text,
             );
       } else {
         // Chaoxing login: type='1' for password, type='2' for captcha
+        // 使用带 context 的新方法
         if (_currentLoginType == '1') {
-          // Password login: directly call loginAPP with password
-          loginResult = await CXLoginApi.loginAPP('1', username, _passwordController.text);
+          // Password login
+          loginResult = await CXLoginApiWithContext.loginAPPWithContext(
+            _loginContext!,
+            '1',
+            username,
+            _passwordController.text,
+          );
         } else {
-          // Captcha login: use captcha code
-          loginResult = await CXLoginApi.loginAPP('2', username, _captchaController.text.trim());
+          // Captcha login
+          loginResult = await CXLoginApiWithContext.loginAPPWithContext(
+            _loginContext!,
+            '2',
+            username,
+            _captchaController.text.trim(),
+          );
         }
         final success =
             loginResult?['status'] == true ||
@@ -1159,7 +1100,7 @@ class _LoginPageState extends State<LoginPage> {
           );
         }
 
-        user = await CXLoginApi.getUserInfo();
+        user = await CXLoginApiWithContext.getUserInfoWithContext(_loginContext!);
 
         if (user == null) {
           throw Exception('获取用户信息失败，请重试');
@@ -1167,6 +1108,9 @@ class _LoginPageState extends State<LoginPage> {
 
         debugPrint('[学习通] 登录成功，用户信息: uid=${user.uid}, name=${user.name}');
       }
+
+      // 迁移 Cookie 从 context 到用户 jar
+      await CookieManager.saveTempCookiesFromContext(user.uid, _loginContext!);
 
       await AccountManager.addAccount(user);
       await AccountManager.setCurrentSession(user.uid);
@@ -1196,6 +1140,12 @@ class _LoginPageState extends State<LoginPage> {
         ).showSnackBar(SnackBar(content: Text('登录失败：$e')));
       }
     } finally {
+      // 清理登录上下文
+      if (_loginContext != null) {
+        LoginContextManager.instance.removeContext(_loginContext!.contextId);
+        _loginContext = null;
+      }
+
       if (mounted) {
         setState(() {
           _isLoading = false;

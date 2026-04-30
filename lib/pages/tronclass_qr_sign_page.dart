@@ -367,7 +367,7 @@ class _QrSignResultPageState extends State<_QrSignResultPage> {
       if (mounted) {
         setState(() {
           currentState = isSuccessful ? _QrSignState.success : _QrSignState.failure;
-          message = TronclassSignApi.getSignMessage(responseData, success: isSuccessful);
+          message = TronclassSignApi.getSignMessage(response);
         });
       }
     } catch (e) {

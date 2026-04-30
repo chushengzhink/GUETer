@@ -9,8 +9,10 @@ import 'package:path/path.dart' as path;
 import '../platform.dart';
 import '../session/account.dart';
 import '../session/cookie.dart';
+import '../session/login_context.dart';
 import '../session/tronclass_auth.dart';
 import '../utils/browser_headers.dart';
+import '../pages/accounts.dart';
 import 'api_service.dart';
 
 /// 每用户独立 Dio 实例管理器（借鉴 tronclass_plus 的 ChangkeClient 设计）
@@ -31,6 +33,7 @@ class PlatformDioManager {
   }) async {
     final key = '${_getPlatformName(platform)}_$userId';
 
+    // 如果实例已存在，直接返回
     if (_dioInstances.containsKey(key)) {
       return _dioInstances[key]!;
     }
@@ -85,6 +88,28 @@ class PlatformDioManager {
     _dioInstances.remove(key);
     _cookieJars.remove(key);
     debugPrint('[PlatformDioManager] Cleared Dio instance: $key');
+  }
+
+  /// 清除指定平台的所有 Dio 实例（切换平台或清理时调用）
+  static void clearDioForPlatform(PlatformType platform) {
+    final platformName = _getPlatformName(platform);
+    final keysToRemove = <String>[];
+
+    for (final key in _dioInstances.keys) {
+      if (key.startsWith('${platformName}_')) {
+        keysToRemove.add(key);
+      }
+    }
+
+    for (final key in keysToRemove) {
+      _dioInstances[key]?.close();
+      _dioInstances.remove(key);
+      _cookieJars.remove(key);
+    }
+
+    if (keysToRemove.isNotEmpty) {
+      debugPrint('[PlatformDioManager] Cleared ${keysToRemove.length} Dio instances for platform: $platformName');
+    }
   }
 
   /// 清除所有 Dio 实例
@@ -244,7 +269,126 @@ class _PlatformCookieInterceptor extends Interceptor {
       await cookieJar.saveFromResponse(response.realUri, cookies);
       await CookieManager.saveCookiesForUser(userId);
     }
+
+    // 如果有活跃的登录上下文，跳过 401 认证检测
+    if (LoginContextManager.instance.hasActiveContexts) {
+      handler.next(response);
+      return;
+    }
+
+    // 检查各平台登录态失效
+    await _checkAuthStatus(response);
+
     handler.next(response);
+  }
+
+  /// 检查各平台响应中的登录态失效信号
+  Future<void> _checkAuthStatus(Response response) async {
+    try {
+      // 检查 HTTP 401
+      if (response.statusCode == 401) {
+        await _handleAuthExpired('HTTP 401 Unauthorized');
+        return;
+      }
+
+      // 检查响应体中的错误码
+      final data = response.data;
+      if (data is! Map<String, dynamic>) {
+        return;
+      }
+
+      final code = data['code'] ?? data['errcode'] ?? data['error_code'] ?? data['result'];
+      final message = data['message'] ?? data['errmsg'] ?? data['msg'] ?? data['error'] ?? '';
+
+      // 各平台登录态失效检测
+      switch (platform) {
+        case PlatformType.rainClassroom:
+          if (code == 'UNAUTHENTICATED' ||
+              code == 401 ||
+              code == -1 ||
+              message.toString().toLowerCase().contains('unauthenticated') ||
+              message.toString().contains('未登录') ||
+              message.toString().contains('登录已过期')) {
+            await _handleAuthExpired('雨课堂: code=$code msg=$message');
+          }
+          break;
+
+        case PlatformType.chaoxing:
+          // 学习通常见错误码：status=false, result=0
+          if (code == 0 ||
+              code == -1 ||
+              data['status'] == false ||
+              message.toString().contains('请先登录') ||
+              message.toString().contains('登录已过期') ||
+              message.toString().contains('未登录')) {
+            await _handleAuthExpired('学习通: code=$code msg=$message');
+          }
+          break;
+
+        case PlatformType.tronclass:
+          // 畅课常见错误码：code=-1, message包含未登录
+          if (code == -1 ||
+              code == 401 ||
+              message.toString().contains('未登录') ||
+              message.toString().contains('登录已过期') ||
+              message.toString().toLowerCase().contains('unauthorized') ||
+              message.toString().toLowerCase().contains('not logged in')) {
+            await _handleAuthExpired('畅课: code=$code msg=$message');
+          }
+          break;
+
+        case PlatformType.ketangpai:
+          // 课堂派常见错误码：code=-1, message包含token失效
+          if (code == -1 ||
+              code == 401 ||
+              message.toString().contains('token') ||
+              message.toString().contains('未登录') ||
+              message.toString().contains('登录已过期') ||
+              message.toString().contains('请重新登录')) {
+            await _handleAuthExpired('课堂派: code=$code msg=$message');
+          }
+          break;
+
+        case PlatformType.weizhuojiao:
+          // 微助教常见错误码
+          if (code == 401 ||
+              code == -1 ||
+              message.toString().contains('未登录') ||
+              message.toString().contains('登录已过期')) {
+            await _handleAuthExpired('微助教: code=$code msg=$message');
+          }
+          break;
+      }
+    } catch (e) {
+      debugPrint('[_PlatformCookieInterceptor] 检查登录态失败: $e');
+    }
+  }
+
+  /// 处理登录态失效
+  Future<void> _handleAuthExpired(String reason) async {
+    debugPrint('[_PlatformCookieInterceptor] 登录已过期: platform=$platformName userId=$userId reason=$reason');
+
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      '登录已过期，请重新登录 (userId=$userId)',
+    );
+
+    // 清除该用户的 Cookie
+    await CookieManager.clearCookiesForUser(userId);
+
+    // 清除畅课的 SessionId
+    if (platform == PlatformType.tronclass) {
+      await TronclassAuthManager.clearSessionIdForUser(userId);
+    }
+
+    // 如果是当前会话用户，清除会话
+    if (AccountManager.currentSessionId == userId) {
+      await AccountManager.clearCurrentSession();
+    }
+
+    // 通知账号页刷新
+    final accountChangeNotifier = AccountChangeNotifier();
+    accountChangeNotifier.notifyAccountChanged(null);
   }
 }
 

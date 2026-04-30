@@ -33,6 +33,7 @@ class TronclassAuthManager {
           '畅课',
           '更新凭证过期时间失败: $e',
         );
+        return user;
       });
     }
 

@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +10,7 @@ import '../api/api_service.dart';
 import 'account.dart';
 import 'tronclass_auth.dart';
 import 'credential_manager.dart';
+import 'login_context.dart';
 import '../platform.dart';
 
 class CookieInterceptor extends Interceptor {
@@ -162,6 +162,10 @@ class CookieInterceptor extends Interceptor {
           platform,
           'Cookie已临时存储到内存，等待登录完成后迁移',
         );
+
+        // 登录期间不检查认证状态，只保存 Cookie
+        handler.next(response);
+        return;
       } else {
         final cookieJar = CookieManager.getCurrentUserCookieJar();
         if (cookieJar != null) {
@@ -179,9 +183,15 @@ class CookieManager {
   static const cxDomain = '.chaoxing.com';
   static const rcDomain = '.yuketang.cn';
   static const tcDomain = 'courses.guet.edu.cn';
+
+  @Deprecated('使用 LoginContextManager.instance.hasActiveContexts 代替')
   static bool isLoggingIn = false;
+
   static final Map<String, CookieJar> _userCookieJars = {};
+
+  @Deprecated('使用 LoginContext.tempCookieJar 代替')
   static CookieJar? _tempCookieJar; // 临时保存登录的 Cookie
+
   static List<String>? _tempSetCookieHeaders;
   static bool _isMigratingCookies = false; // 防止 Cookie 迁移死循环 // 临时保存 Set-Cookie 头
   static late SharedPreferences _prefs;
@@ -514,7 +524,8 @@ class CookieManager {
     }
   }
 
-  /// 临时Cookie保存到账号
+  /// 临时Cookie保存到账号（旧方法，已弃用）
+  @Deprecated('使用 saveTempCookiesFromContext(userId, context) 代替')
   static Future<void> saveTempCookies(String userId) async {
     if (_isMigratingCookies) {
       debugPrint('[CookieManager] 跳过重复的 Cookie 迁移调用');
@@ -638,5 +649,169 @@ class CookieManager {
   static String _formatExpiry(int timestamp) {
     final date = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+  }
+
+  // ==================== 新增：基于上下文的方法 ====================
+
+  /// 从登录上下文迁移 Cookie 到用户账号（新方法）
+  static Future<void> saveTempCookiesFromContext(
+    String userId,
+    LoginContext context,
+  ) async {
+    if (_isMigratingCookies) {
+      debugPrint('[CookieManager] 跳过重复的 Cookie 迁移调用');
+      return;
+    }
+
+    _isMigratingCookies = true;
+
+    final platformName = _getPlatformNameFromType(context.platform);
+    final cookieKey = '${platformName}_$userId';
+
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      '开始从上下文迁移Cookie到用户账号，存储Key: $cookieKey',
+    );
+
+    // 解析凭证过期时间
+    int? credentialExpiry;
+    if (context.setCookieHeaders != null && context.setCookieHeaders!.isNotEmpty) {
+      for (final header in context.setCookieHeaders!) {
+        final expiry = CredentialManager.parseCookieExpiry(header);
+        if (expiry != null) {
+          if (credentialExpiry == null || expiry > credentialExpiry) {
+            credentialExpiry = expiry;
+          }
+        }
+      }
+    }
+
+    credentialExpiry ??= CredentialManager.getDefaultExpiry();
+
+    // 更新凭证过期时间
+    final user = AccountManager.getAccountById(userId);
+    if (user != null) {
+      await CredentialManager.updateCredentialExpiry(
+        user,
+        expiryTimestamp: credentialExpiry,
+        extendDefault: false,
+      );
+      ApiService.appendExternalConsoleLog(
+        platformName,
+        '凭证已存储，过期时间: ${_formatExpiry(credentialExpiry)}',
+      );
+    }
+
+    // 从上下文的临时 CookieJar 迁移到用户 CookieJar
+    final targetJar = await getCookieJarForUser(userId, platformName: platformName);
+    final probeUris = _getProbeUrisForPlatform(context.platform);
+
+    final merged = <String, Cookie>{};
+    for (final probe in probeUris) {
+      final cookies = await context.tempCookieJar.loadForRequest(probe);
+      for (final cookie in cookies) {
+        final host = _normalizeCookieHost(cookie.domain) == ''
+            ? probe.host
+            : _normalizeCookieHost(cookie.domain);
+        final key = '${cookie.name}@$host';
+        merged[key] = cookie;
+      }
+    }
+
+    if (merged.isEmpty) {
+      ApiService.appendExternalConsoleLog(
+        platformName,
+        '上下文 Cookie 迁移失败：未在探测域名中读取到有效 cookie',
+      );
+      _isMigratingCookies = false;
+      return;
+    }
+
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      'Cookie已成功存储，数量: ${merged.length}',
+    );
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      'Cookie键名: ${merged.keys.take(15).join(", ")}',
+    );
+
+    for (final cookie in merged.values) {
+      final host = _normalizeCookieHost(cookie.domain);
+      final uri = Uri.parse('https://${host.isNotEmpty ? host : _getDefaultHostForPlatform(context.platform)}');
+      await targetJar.saveFromResponse(uri, [cookie]);
+    }
+
+    await saveCookiesForUser(userId);
+    _isMigratingCookies = false;
+
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      'Cookie迁移完成，已持久化到SharedPreferences',
+    );
+  }
+
+  /// 检查是否有任何平台正在登录
+  static bool isAnyLoginInProgress() {
+    return LoginContextManager.instance.hasActiveContexts || isLoggingIn;
+  }
+
+  /// 辅助方法：从 PlatformType 获取平台名称
+  static String _getPlatformNameFromType(PlatformType platform) {
+    switch (platform) {
+      case PlatformType.chaoxing:
+        return 'chaoxing';
+      case PlatformType.rainClassroom:
+        return 'yuketang';
+      case PlatformType.ketangpai:
+        return 'ketangpai';
+      case PlatformType.tronclass:
+        return 'tronclass';
+      case PlatformType.weizhuojiao:
+        return 'weizhuojiao';
+    }
+  }
+
+  /// 辅助方法：获取平台的探测 URI 列表
+  static List<Uri> _getProbeUrisForPlatform(PlatformType platform) {
+    switch (platform) {
+      case PlatformType.rainClassroom:
+        return [
+          Uri.parse('https://www.yuketang.cn/'),
+          Uri.parse('https://pro.yuketang.cn/'),
+          Uri.parse('https://changjiang.yuketang.cn/'),
+          Uri.parse('https://huanghe.yuketang.cn/'),
+          Uri.parse('https://yuketang.cn/'),
+        ];
+      case PlatformType.chaoxing:
+        return [
+          Uri.parse('https://chaoxing.com/'),
+          Uri.parse('https://passport2.chaoxing.com/'),
+          Uri.parse('https://sso.chaoxing.com/'),
+          Uri.parse('https://i.chaoxing.com/'),
+        ];
+      case PlatformType.ketangpai:
+        return [Uri.parse('https://openapiv5.ketangpai.com/')];
+      case PlatformType.tronclass:
+        return [Uri.parse('https://www.tronclass.com.cn/')];
+      case PlatformType.weizhuojiao:
+        return [Uri.parse('https://www.weizhuojiao.com/')];
+    }
+  }
+
+  /// 辅助方法：获取平台的默认主机名
+  static String _getDefaultHostForPlatform(PlatformType platform) {
+    switch (platform) {
+      case PlatformType.chaoxing:
+        return 'chaoxing.com';
+      case PlatformType.rainClassroom:
+        return 'yuketang.cn';
+      case PlatformType.ketangpai:
+        return 'openapiv5.ketangpai.com';
+      case PlatformType.tronclass:
+        return 'www.tronclass.com.cn';
+      case PlatformType.weizhuojiao:
+        return 'www.weizhuojiao.com';
+    }
   }
 }

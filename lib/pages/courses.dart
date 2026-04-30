@@ -1519,12 +1519,6 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     _refreshTimer?.cancel();
   }
 
-  void _checkAndStartRefresh() {
-    _refreshTimer?.cancel();
-    // 雨课堂完全禁用自动刷新，只允许用户手动下拉刷新
-    debugPrint('[YKT] 自动刷新已禁用，仅支持手动刷新');
-  }
-
   void _loadGlobalPalette() {
     final scheme = AppSettings.globalColorSchemeNotifier.value;
     final palette = resolveGlobalPalette(scheme);
@@ -1543,15 +1537,6 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
   void _onGlobalSchemeChanged() {
     _loadGlobalPalette();
-  }
-
-  void _startPeriodicRefresh() {
-    debugPrint('[YKT] _startPeriodicRefresh 被调用');
-    _refreshTimer?.cancel();
-
-    // 雨课堂不需要周期刷新，只在用户手动刷新时更新
-    // 原来的3秒定时器会导致API无限循环
-    debugPrint('[YKT] 雨课堂已禁用周期刷新，避免API死循环');
   }
 
   Future<void> _loadCourses([Map<String, dynamic>? onLessonCourses]) async {
@@ -2088,9 +2073,6 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
   Widget _buildTronclassLoginPanel() {
     final hasAccount = AccountManager.hasActiveSession();
-    final currentUser = AccountManager.getAccountById(
-      AccountManager.currentSessionId ?? '',
-    );
 
     return Container(
       padding: const EdgeInsets.all(16),

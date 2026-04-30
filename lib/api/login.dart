@@ -6,8 +6,10 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:encrypt/encrypt.dart' as encrypt_pkg;
 
 import '../api/api_service.dart';
+import '../api/tronclass_client.dart';
 import '../utils/encrypt.dart';
 import '../session/cookie.dart';
+import '../session/login_context.dart';
 import '../models/user.dart';
 import '../platform.dart';
 
@@ -2218,7 +2220,7 @@ class TCLoginApi {
           reauthEntryUrl: reauthEntryUrl,
           service: service,
         );
-        _trace('[TC] 步骤6完成: 动态码发送结果=${dynamicCode != null}');
+        _trace('[TC] 步骤6完成: 动态码发送成功');
         final tip =
             (dynamicCode['returnMessage'] ??
                     dynamicCode['msg'] ??
@@ -2289,6 +2291,413 @@ class TCLoginApi {
       return {'ok': false, 'message': '畅课登录失败：$e', 'debug': lastLoginTrace};
     } finally {
       CookieManager.isLoggingIn = false;
+    }
+  }
+}
+
+// ==================== 基于上下文的登录方法（新增）====================
+
+extension CXLoginApiWithContext on CXLoginApi {
+  /// 使用登录上下文的验证码登录（新方法）
+  static Future<Map<String, dynamic>?> loginAPPWithContext(
+    LoginContext context,
+    String loginType,
+    String username,
+    String code,
+  ) async {
+    try {
+      final url =
+          'https://passport2-api.chaoxing.com/v11/loginregister?cx_xxt_passport=json';
+
+      final loginData = {'uname': username, 'code': code};
+      final loginInfo = EncryptionUtil.aesEcbEncrypt(
+        json.encode(loginData),
+        Constant.appLoginKey,
+      );
+
+      Map<String, dynamic> formData = {
+        'logininfo': loginInfo,
+        'loginType': loginType,
+        'roleSelect': 'true',
+        'entype': "1",
+      };
+      if (loginType == '2') {
+        formData['countrycode'] = '86';
+      }
+
+      ApiService.appendExternalConsoleLog(
+        '学习通',
+        '开始验证码登录请求（上下文 ${context.contextId}）: $url',
+      );
+
+      final dio = await LoginDioFactory.createLoginDio(context);
+      final response = await dio.post(url, data: formData);
+
+      _logLoginEndpoint('CX', 'response', url, data: response.data);
+      ApiService.appendExternalConsoleLog(
+        '学习通',
+        'loginregister响应: ${_loginPayloadSummary(response.data)}',
+      );
+
+      return response.data;
+    } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'v11/loginregister', error: e);
+      debugPrint('Login error: $e');
+    }
+    return null;
+  }
+
+  /// 使用登录上下文获取用户信息（新方法）
+  static Future<User?> getUserInfoWithContext(LoginContext context) async {
+    try {
+      final url = 'https://sso.chaoxing.com/apis/login/userLogin4Uname.do';
+      ApiService.appendExternalConsoleLog(
+        '学习通',
+        '开始获取用户信息请求（上下文 ${context.contextId}）: $url',
+      );
+
+      final dio = await LoginDioFactory.createLoginDio(context);
+      final response = await dio.get(url);
+
+      _logLoginEndpoint('CX', 'response', url, data: response.data);
+
+      final result = response.data['result'];
+      if (result != 1) {
+        ApiService.appendExternalConsoleLog(
+          '学习通',
+          'userLogin4Uname返回失败: result=$result',
+        );
+        return null;
+      }
+
+      final data = response.data['msg'];
+      if (data == null) {
+        ApiService.appendExternalConsoleLog(
+          '学习通',
+          'userLogin4Uname响应中没有msg字段',
+        );
+        return null;
+      }
+
+      final uid = data['puid']?.toString() ?? '';
+      final name = data['name'] ?? '未知用户';
+      final avatar = data['pic'] ?? '';
+      final phone = data['phone'] ?? '未知手机号';
+      final school = data['schoolname'] ?? '未知学校';
+
+      if (uid.isEmpty) {
+        ApiService.appendExternalConsoleLog(
+          '学习通',
+          'userLogin4Uname返回的uid为空',
+        );
+        return null;
+      }
+
+      final user = User(
+        uid: uid,
+        name: name,
+        avatar: avatar,
+        phone: phone,
+        school: school,
+        platform: 'chaoxing',
+      );
+
+      ApiService.appendExternalConsoleLog(
+        '学习通',
+        '用户信息获取完成: uid=${user.uid}, name=${user.name}',
+      );
+
+      return user;
+    } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'userLogin4Uname.do', error: e);
+      debugPrint('getUserInfo error: $e');
+    }
+    return null;
+  }
+
+  /// 使用登录上下文检查二维码授权状态（新方法）
+  static Future<Map<String, dynamic>?> checkQRAuthStatusWithContext(
+    LoginContext context,
+    String uuid,
+    String enc,
+  ) async {
+    try {
+      final authStatusUrl = 'https://passport2.chaoxing.com/getauthstatus/v2';
+
+      final formData = {
+        'enc': enc,
+        'uuid': uuid,
+        'doubleFactorLogin': '0',
+        'forbidotherlogin': '0',
+      };
+
+      final dio = await LoginDioFactory.createLoginDio(context);
+      final response = await dio.post(authStatusUrl, data: formData);
+
+      _logLoginEndpoint('CX', 'response', authStatusUrl, data: response.data);
+
+      final result = response.data;
+      final isSuccess = result?['status'] == true || result?['result'] == 1;
+
+      if (isSuccess) {
+        ApiService.appendExternalConsoleLog(
+          '学习通',
+          '二维码授权成功（上下文 ${context.contextId}）',
+        );
+      }
+
+      return result;
+    } catch (e) {
+      _logLoginEndpoint('CX', 'error', 'getauthstatus/v2', error: e);
+      debugPrint('checkQRAuthStatus error: $e');
+    }
+    return null;
+  }
+}
+
+extension RCLoginApiWithContext on RCLoginApi {
+  /// 使用登录上下文的密码登录（新方法）
+  static Future<Map<String, dynamic>?> loginPasswordWithContext(
+    LoginContext context,
+    String phone,
+    String password,
+  ) async {
+    try {
+      final url = '/api/v3/user/login/password';
+
+      final jsonData = {
+        'phoneNumber': phone,
+        'email': '',
+        'password': password,
+      };
+
+      ApiService.appendExternalConsoleLog(
+        '雨课堂',
+        '开始密码登录请求（上下文 ${context.contextId}）: $url',
+      );
+
+      final dio = await LoginDioFactory.createLoginDio(context);
+      final response = await dio.post(url, data: jsonData);
+
+      _logLoginEndpoint('RC', 'response', url, data: response.data);
+      debugPrint('[RC][API.loginPassword] request=$jsonData response=${response.data}');
+
+      return response.data;
+    } catch (e) {
+      _logLoginEndpoint('RC', 'error', 'user/login/password', error: e);
+      debugPrint('[RC][API.loginPassword] error=$e');
+    }
+    return null;
+  }
+
+  /// 使用登录上下文的手机号登录（新方法）
+  static Future<Map<String, dynamic>?> loginByMobileWithContext(
+    LoginContext context,
+    String phone,
+    String code,
+  ) async {
+    try {
+      final url = '/api/v3/user/login/phone';
+
+      final jsonData = {
+        'phoneNumber': phone,
+        'email': '',
+        'code': code,
+      };
+
+      ApiService.appendExternalConsoleLog(
+        '雨课堂',
+        '开始手机号登录请求（上下文 ${context.contextId}）: $url',
+      );
+
+      final dio = await LoginDioFactory.createLoginDio(context);
+      final response = await dio.post(url, data: jsonData);
+
+      _logLoginEndpoint('RC', 'response', url, data: response.data);
+      debugPrint('[RC][API.loginByMobile] request=$jsonData response=${response.data}');
+
+      return response.data;
+    } catch (e) {
+      _logLoginEndpoint('RC', 'error', 'user/login/phone', error: e);
+      debugPrint('[RC][API.loginByMobile] error=$e');
+    }
+    return null;
+  }
+
+  /// 使用登录上下文获取用户信息（新方法）
+  static Future<User?> getUserInfoWithContext(LoginContext context) async {
+    try {
+      final url = '/api/v3/user/profile';
+
+      ApiService.appendExternalConsoleLog(
+        '雨课堂',
+        '开始获取用户信息请求（上下文 ${context.contextId}）: $url',
+      );
+
+      final dio = await LoginDioFactory.createLoginDio(context);
+      final response = await dio.get(url);
+
+      _logLoginEndpoint('RC', 'response', url, data: response.data);
+
+      final code = response.data['code'];
+      if (code != 0) {
+        ApiService.appendExternalConsoleLog(
+          '雨课堂',
+          'profile返回失败: code=$code',
+        );
+        return null;
+      }
+
+      final data = response.data['data'];
+      if (data == null) {
+        ApiService.appendExternalConsoleLog(
+          '雨课堂',
+          'profile响应中没有data字段',
+        );
+        return null;
+      }
+
+      final uid = data['user_id']?.toString() ?? '';
+      final name = data['name'] ?? '未知用户';
+      final avatar = data['avatar'] ?? '';
+      final phone = data['phone_number'] ?? '未知手机号';
+      final school = data['university']?['name'] ?? '未知学校';
+
+      if (uid.isEmpty) {
+        ApiService.appendExternalConsoleLog(
+          '雨课堂',
+          'profile返回的user_id为空',
+        );
+        return null;
+      }
+
+      final user = User(
+        uid: uid,
+        name: name,
+        avatar: avatar,
+        phone: phone,
+        school: school,
+        platform: 'yuketang',
+      );
+
+      ApiService.appendExternalConsoleLog(
+        '雨课堂',
+        '用户信息获取完成: uid=${user.uid}, name=${user.name}',
+      );
+
+      return user;
+    } catch (e) {
+      _logLoginEndpoint('RC', 'error', 'user/profile', error: e);
+      debugPrint('getUserInfo error: $e');
+    }
+    return null;
+  }
+}
+
+// 注意：课堂派使用 Token 认证，不需要 Cookie 隔离
+
+extension TCLoginApiWithContext on TCLoginApi {
+  /// 使用 TronclassClient 的登录（新方法）
+  static Future<Map<String, dynamic>> loginWithContext(
+    LoginContext context,
+    String username,
+    String password, {
+    required Future<String> Function(Uint8List image) captchaProvider,
+  }) async {
+    try {
+      ApiService.appendExternalConsoleLog(
+        '畅课',
+        '开始登录请求（上下文 ${context.contextId}）',
+      );
+
+      // 使用 TronclassClient 的独立 Dio 实例进行登录
+      final client = await TronclassClient.getInstance(context.contextId);
+
+      final sessionId = await client.login(
+        username: username,
+        password: password,
+        captchaProvider: captchaProvider,
+      );
+
+      ApiService.appendExternalConsoleLog(
+        '畅课',
+        '登录成功，session_id 已获取',
+      );
+
+      return {
+        'ok': true,
+        'sessionId': sessionId,
+        'message': '登录成功',
+      };
+    } catch (e) {
+      ApiService.appendExternalConsoleLog(
+        '畅课',
+        '登录失败: $e',
+      );
+      debugPrint('[TC][loginWithContext] error=$e');
+      return {
+        'ok': false,
+        'message': '畅课登录失败：$e',
+      };
+    }
+  }
+
+  /// 使用 TronclassClient 获取用户信息（新方法）
+  static Future<User?> getUserInfoWithContext(
+    LoginContext context,
+    String sessionId,
+  ) async {
+    try {
+      ApiService.appendExternalConsoleLog(
+        '畅课',
+        '开始获取用户信息请求（上下文 ${context.contextId}）',
+      );
+
+      final client = await TronclassClient.getInstance(context.contextId);
+      await client.setSessionId(sessionId);
+
+      final response = await client.dio.get('/api/users/profile');
+
+      ApiService.appendExternalConsoleLog(
+        '畅课',
+        '用户信息响应: ${response.data}',
+      );
+
+      final data = response.data;
+      if (data == null || data is! Map<String, dynamic>) {
+        return null;
+      }
+
+      final user = data['user'];
+      if (user == null) {
+        return null;
+      }
+
+      final uid = user['id']?.toString() ?? '';
+      final name = user['name']?.toString() ?? '';
+      final avatar = user['avatar']?.toString() ?? '';
+      final phone = user['phone']?.toString() ?? '';
+      final school = user['school']?.toString() ?? '';
+
+      if (uid.isEmpty) {
+        return null;
+      }
+
+      return User(
+        uid: uid,
+        name: name,
+        avatar: avatar,
+        phone: phone,
+        school: school,
+        platform: 'tronclass',
+      );
+    } catch (e) {
+      ApiService.appendExternalConsoleLog(
+        '畅课',
+        '获取用户信息失败: $e',
+      );
+      debugPrint('[TC][getUserInfoWithContext] error=$e');
+      return null;
     }
   }
 }

@@ -1887,10 +1887,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         isOverdue = endDateTime.isBefore(now);
         isUrgent = !isOverdue && endDateTime.difference(now).inHours < 24;
 
-        print('[TodosPage] 雨课堂考试 "$title" end_time=$endTime 状态=${isOverdue ? "已过期" : "进行中"}');
+        debugPrint('[TodosPage] 雨课堂考试 "$title" end_time=$endTime 状态=${isOverdue ? "已过期" : "进行中"}');
       } catch (_) {}
     } else {
-      print('[TodosPage] 雨课堂考试 "$title" end_time=$endTime (无截止时间)，判定为进行中');
+      debugPrint('[TodosPage] 雨课堂考试 "$title" end_time=$endTime (无截止时间)，判定为进行中');
     }
 
     return Card(

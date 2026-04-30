@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../session/account.dart';
 import 'ketangpai_private_sign_page.dart';
 import 'ketangpai_profile_page.dart';
 import 'ketangpai_room_list_page.dart';

@@ -54,17 +54,22 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     });
 
     final users = _ketangpaiUsers;
-    final courses = await KTCourseApi.getSigningCourses();
+
+    // 使用新的 API 直接获取正在签到的课程（带详细信息）
+    final signingCoursesData = await KTCourseApi.getSigningCoursesWithDetails();
     final entries = <_SigningCourseEntry>[];
-    for (final course in courses) {
-      final signs = await KTCourseApi.getNotFinishSign(course.courseId);
-      if (signs.isNotEmpty) {
-        final sign = signs.first;
+
+    for (final data in signingCoursesData) {
+      final course = data['course'] as Course;
+      final signId = data['signId']?.toString() ?? '';
+      final signType = data['signType'] as int? ?? 0;
+
+      if (signId.isNotEmpty) {
         entries.add(
           _SigningCourseEntry(
             course: course,
-            signId: sign['id']?.toString() ?? '',
-            signType: int.tryParse(sign['type']?.toString() ?? '') ?? 0,
+            signId: signId,
+            signType: signType,
           ),
         );
       }
@@ -213,7 +218,11 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     );
   }
 
-  Future<void> _signSelectedByGps(String signId, String courseName) async {
+  Future<void> _signSelectedByGps(
+    String signId,
+    String courseName,
+    String courseId,
+  ) async {
     if (_selectedUserIds.isEmpty) {
       return;
     }
@@ -225,6 +234,7 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       users: selectedUsers,
       courseName: courseName,
       tokenHealthHint: _tokenHealth,
+      courseId: courseId, // 传递 courseId 用于读取 GPS 坐标配置
     );
     if (!mounted) return;
     _showBatchSignResult(
@@ -320,7 +330,11 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
         ),
       );
       if (confirm == true) {
-        await _signSelectedByGps(entry.signId, entry.course.name);
+        await _signSelectedByGps(
+          entry.signId,
+          entry.course.name,
+          entry.course.courseId,
+        );
       }
     } else if (entry.signType == 3) {
       final result = await Navigator.push<String>(

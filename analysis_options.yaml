@@ -15,6 +15,19 @@ analyzer:
     - _tmp/**
     - 1/**
     - chaoxing_ft-0.1/**
+    - fuckketangpai_app-main/**
+    - yuketang/**
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/generated/**"
+    - build/**
+    - .dart_tool/**
+
+  errors:
+    invalid_annotation_target: ignore
+    todo: ignore
+    deprecated_member_use: warning
+    deprecated_member_use_from_same_package: ignore
 
 linter:
   # The lint rules applied to this project can be customized in the

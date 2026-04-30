@@ -4,9 +4,7 @@ import 'package:intl/intl.dart';
 import '../api/api_service.dart';
 import '../api/rainclassroom_exam.dart';
 import '../models/course.dart';
-import '../models/exam.dart';
 import '../utils/global_palette.dart';
-import '../utils/rain_auth_manager.dart';
 import '../platform.dart';
 import '../session/app_settings.dart';
 

@@ -56,6 +56,7 @@ class KtFollowSignExecutor {
     String? latitude,
     String? longitude,
     String? accuracy,
+    String? courseId, // 新增：用于从课程设置读取坐标
   }) {
     return _execute(
       users: users,
@@ -68,6 +69,7 @@ class KtFollowSignExecutor {
         latitude: latitude,
         longitude: longitude,
         accuracy: accuracy,
+        courseId: courseId,
       ),
     );
   }
@@ -80,6 +82,7 @@ class KtFollowSignExecutor {
     String? latitude,
     String? longitude,
     String? accuracy,
+    String? courseId, // 新增：用于从课程设置读取坐标
   }) {
     return _execute(
       users: users,

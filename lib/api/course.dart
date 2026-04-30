@@ -110,7 +110,7 @@ class CXCourseApi {
           final content = channel['content'];
           ApiService.appendExternalConsoleLog(
             '学习通',
-            'channel[$i].content keys: ${content is Map ? (content as Map).keys.toList() : 'not a map'}',
+            'channel[$i].content keys: ${content is Map ? content.keys.toList() : 'not a map'}',
           );
 
           if (content is Map && content['course'] != null) {
@@ -897,7 +897,38 @@ class KTCourseApi {
   }
 
   static Future<List<Course>> getSigningCourses() async {
-    return [];
+    try {
+      debugPrint('[KTCourseApi] 调用 KTPCourseApi.getSigningCourses');
+      final signingCourses = await KTPCourseApi.getSigningCourses();
+      debugPrint('[KTCourseApi] 返回 ${signingCourses.length} 个正在签到的课程');
+      return signingCourses.map<Course>((data) => data['course'] as Course).toList();
+    } catch (e, stackTrace) {
+      debugPrint('KTCourseApi.getSigningCourses error: $e');
+      debugPrint('StackTrace: $stackTrace');
+      return [];
+    }
+  }
+
+  static Future<List<Course>> getOnlineCourses() async {
+    try {
+      debugPrint('[KTCourseApi] 调用 KTPCourseApi.getOnlineCourses');
+      final onlineCourses = await KTPCourseApi.getOnlineCourses();
+      debugPrint('[KTCourseApi] 返回 ${onlineCourses.length} 门在线课程');
+      return onlineCourses;
+    } catch (e, stackTrace) {
+      debugPrint('KTCourseApi.getOnlineCourses error: $e');
+      debugPrint('StackTrace: $stackTrace');
+      return [];
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> getSigningCoursesWithDetails() async {
+    try {
+      return await KTPCourseApi.getSigningCourses();
+    } catch (e) {
+      debugPrint('KTCourseApi.getSigningCoursesWithDetails error: $e');
+      return [];
+    }
   }
 
   static Future<List<dynamic>> getNotFinishSign(String courseId) async {

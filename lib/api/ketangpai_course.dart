@@ -166,7 +166,7 @@ class KTPCourseApi {
             debugPrint('[KTPCourseApi] data 内容: $data');
             if (data is Map) {
               debugPrint(
-                '[KTPCourseApi] data 是 Map，keys: ${(data as Map).keys.toList()}',
+                '[KTPCourseApi] data 是 Map，keys: ${data.keys.toList()}',
               );
               if (data.containsKey('list')) {
                 debugPrint('[KTPCourseApi] data 包含 list 字段，尝试提取');
@@ -430,6 +430,153 @@ class KTPCourseApi {
       return null;
     } finally {
       context.dispose();
+    }
+  }
+
+  /// 获取正在上课的课程列表
+  static Future<List<Course>> getOnlineCourses() async {
+    final userId = AccountManager.currentSessionId;
+    if (userId == null || userId.isEmpty) {
+      ApiService.appendExternalConsoleLog('课堂派', '未登录，无法获取在线课程');
+      return [];
+    }
+
+    final context = await PlatformRequestContext.create(
+      platform: PlatformType.ketangpai,
+      userId: userId,
+    );
+
+    try {
+      const endpoint = '/CourseApi/getCourseStateAll';
+      final body = {
+        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+
+      _logApiEndpoint('request', endpoint, data: body);
+      final response = await context.sendRequest(
+        endpoint,
+        method: 'POST',
+        body: body,
+      );
+      _logApiEndpoint('response', endpoint, data: response.data);
+
+      if (response.data is Map<String, dynamic>) {
+        final status = response.data['status'];
+        if (status == 1) {
+          final data = response.data['data'];
+          if (data is List) {
+            // 提取正在上课的课程 ID
+            final onlineCourseIds = <String>{};
+            for (final item in data) {
+              if (item is Map && item['courseid'] != null) {
+                onlineCourseIds.add(item['courseid'].toString());
+              }
+            }
+
+            // 获取所有课程并标记正在上课的
+            final allCourses = await getCoursesList();
+            final onlineCourses = allCourses.where((course) {
+              return onlineCourseIds.contains(course.courseId);
+            }).toList();
+
+            ApiService.appendExternalConsoleLog(
+              '课堂派',
+              '正在上课的课程: ${onlineCourses.length}/${allCourses.length}',
+            );
+            return onlineCourses;
+          }
+        }
+      }
+      return [];
+    } catch (e) {
+      _logApiEndpoint('error', '/CourseApi/getCourseStateAll', error: e);
+      debugPrint('KTPCourseApi.getOnlineCourses error: $e');
+      return [];
+    } finally {
+      context.dispose();
+    }
+  }
+
+  /// 获取未完成的签到列表
+  static Future<List<Map<String, dynamic>>> getNotFinishSign(
+    String courseId,
+  ) async {
+    final userId = AccountManager.currentSessionId;
+    if (userId == null || userId.isEmpty) {
+      return [];
+    }
+
+    final context = await PlatformRequestContext.create(
+      platform: PlatformType.ketangpai,
+      userId: userId,
+    );
+
+    try {
+      const endpoint = '/AttenceApi/getNotFinishAttenceStudent';
+      final body = {
+        'courseid': courseId,
+        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+
+      final response = await context.sendRequest(
+        endpoint,
+        method: 'POST',
+        body: body,
+      );
+
+      if (response.data is Map<String, dynamic>) {
+        final status = response.data['status'];
+        if (status == 1) {
+          final data = response.data['data'];
+          if (data is List) {
+            return data
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList();
+          }
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint('KTPCourseApi.getNotFinishSign error: $e');
+      return [];
+    } finally {
+      context.dispose();
+    }
+  }
+
+  /// 获取正在签到的课程列表
+  static Future<List<Map<String, dynamic>>> getSigningCourses() async {
+    try {
+      final courses = await getCoursesList();
+      final signingCourses = <Map<String, dynamic>>[];
+
+      for (final course in courses) {
+        final signs = await getNotFinishSign(course.courseId);
+        if (signs.isNotEmpty) {
+          for (final sign in signs) {
+            signingCourses.add({
+              'course': course,
+              'signId': sign['id']?.toString() ?? '',
+              'signType': int.tryParse(sign['type']?.toString() ?? '0') ?? 0,
+              'signName': sign['name']?.toString() ?? '签到',
+              'startTime': sign['starttime']?.toString() ?? '',
+              'endTime': sign['endtime']?.toString() ?? '',
+            });
+          }
+        }
+        // 避免请求过快
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+
+      ApiService.appendExternalConsoleLog(
+        '课堂派',
+        '正在签到的课程: ${signingCourses.length}',
+      );
+      return signingCourses;
+    } catch (e) {
+      debugPrint('KTPCourseApi.getSigningCourses error: $e');
+      return [];
     }
   }
 }

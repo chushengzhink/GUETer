@@ -265,17 +265,56 @@ class KTSignApi {
     String? latitude,
     String? longitude,
     String? accuracy,
+    String? courseId, // 新增：用于从课程设置读取坐标
   }) async {
     final userId = AccountManager.currentSessionId;
     if (userId == null || userId.isEmpty) {
       return false;
     }
 
+    // 优先使用传入的坐标，否则尝试从课程设置读取
+    String finalLatitude = latitude ?? '';
+    String finalLongitude = longitude ?? '';
+    String finalAccuracy = accuracy ?? '100';
+
+    if (finalLatitude.isEmpty || finalLongitude.isEmpty) {
+      // 尝试从课程设置读取坐标
+      if (courseId != null && courseId.isNotEmpty) {
+        try {
+          // 动态导入避免循环依赖
+          final settingModule = await _loadCourseSetting();
+          if (settingModule != null) {
+            final location = await settingModule.getDefaultLocation(courseId);
+            if (location != null) {
+              finalLatitude = location.latitude.toString();
+              finalLongitude = location.longitude.toString();
+              ApiService.appendExternalConsoleLog(
+                '课堂派',
+                'GPS签到: 使用课程设置坐标 lat=$finalLatitude lng=$finalLongitude',
+              );
+            }
+          }
+        } catch (e) {
+          debugPrint('KTSignApi.gpsSign: 读取课程设置失败: $e');
+        }
+      }
+
+      // 如果仍然为空，使用默认坐标
+      if (finalLatitude.isEmpty || finalLongitude.isEmpty) {
+        finalLatitude = '25.3';
+        finalLongitude = '110.4';
+        ApiService.appendExternalConsoleLog(
+          '课堂派',
+          'GPS签到: 使用默认坐标 lat=$finalLatitude lng=$finalLongitude',
+        );
+      }
+    }
+
     final reqtimestamp = DateTime.now().millisecondsSinceEpoch;
 
     ApiService.appendExternalConsoleLog(
       '课堂派',
-      'GPS签到: signId=$signId lat=${latitude ?? "默认"} lng=${longitude ?? "默认"}',
+      'GPS签到: signId=$signId lat=$finalLatitude lng=$finalLongitude',
     );
 
     try {
@@ -293,9 +332,9 @@ class KTSignApi {
           'id': signId,
           'code': '',
           'unusual': '',
-          'latitude': latitude ?? '',
-          'longitude': longitude ?? '',
-          'accuracy': accuracy ?? '',
+          'latitude': finalLatitude,
+          'longitude': finalLongitude,
+          'accuracy': finalAccuracy,
           'clienttype': 1,
         },
       );
@@ -315,4 +354,33 @@ class KTSignApi {
       return false;
     }
   }
+
+  /// 动态加载课程设置模块（避免循环依赖）
+  static Future<_CourseSettingModule?> _loadCourseSetting() async {
+    try {
+      // 这里使用延迟导入避免循环依赖
+      // 实际实现时需要根据项目结构调整
+      return null; // 暂时返回 null，后续实现
+    } catch (e) {
+      return null;
+    }
+  }
+}
+
+/// 课程设置模块接口（避免循环依赖）
+abstract class _CourseSettingModule {
+  Future<_Location?> getDefaultLocation(String courseId);
+}
+
+/// 位置信息（避免循环依赖）
+class _Location {
+  final double latitude;
+  final double longitude;
+  final String address;
+
+  _Location({
+    required this.latitude,
+    required this.longitude,
+    required this.address,
+  });
 }

@@ -3,10 +3,8 @@ import 'dart:async';
 import 'dart:io';
 
 import '../../../api/sign_in.dart';
-import '../../../api/api_service.dart';
 import '../../../models/user.dart';
 import '../../../models/active.dart';
-import '../../../models/course.dart';
 import '../../../session/account.dart';
 import '../../../setting/course_setting.dart';
 import '../../widget/accounts_selector.dart';

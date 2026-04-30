@@ -334,28 +334,6 @@ class SignInApi{
     return null;
   }
 
-  /// 群聊签到
-  static Future<String?> groupSign(String activeId, User user) async {
-    try {
-      final url = 'https://mobilelearn.chaoxing.com/sign/stuSignajax';
-      final params = {
-        'activeId': activeId,
-        'uid': user.uid,
-        'clientip': '10.0.85.108',
-        'useragent': 'Mozilla/5.0'
-      };
-
-      final cookieStr = await _getUserCookie(user.uid) ?? '';
-      final headers = {'Cookie': cookieStr};
-
-      final response = await ApiService.sendRequest(url, params: params, headers: headers, responseType: ResponseType.plain);
-      return response.data;
-    } catch (e) {
-      debugPrint('groupSign error: $e');
-    }
-    return null;
-  }
-
   /// 签到回执
   static Future<Map<String, dynamic>?> getSignReceipt(String activeId) async {
     try {

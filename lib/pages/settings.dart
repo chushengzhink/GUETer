@@ -1635,7 +1635,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 child: DropdownButtonFormField<String>(
                   key: ValueKey('theme-style-$_themeStyle'),
-                  value: _themeStyle,
+                  initialValue: _themeStyle,
                   decoration: const InputDecoration(
                     labelText: '主题风格',
                     border: OutlineInputBorder(),

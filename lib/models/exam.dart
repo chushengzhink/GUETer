@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 /// 考试信息模型
 class ExamInfo {
   final String examId;
@@ -84,13 +86,13 @@ class ExamInfo {
   bool get isExpired {
     // 如果 end_time 无效，默认显示为进行中（未过期）
     if (!_isEndTimeValid) {
-      print('[ExamInfo] 考试 "$title" (ID: $examId) end_time=$endTime 无效，默认显示为进行中');
+      debugPrint('[ExamInfo] 考试 "$title" (ID: $examId) end_time=$endTime 无效，默认显示为进行中');
       return false;
     }
 
     final now = DateTime.now();
     final expired = now.isAfter(endTimeBeijing);
-    print('[ExamInfo] 考试 "$title" (ID: $examId) end_time=$endTime (${endTimeBeijing.toIso8601String()}) 当前时间=${now.toIso8601String()} 已过期=$expired');
+    debugPrint('[ExamInfo] 考试 "$title" (ID: $examId) end_time=$endTime (${endTimeBeijing.toIso8601String()}) 当前时间=${now.toIso8601String()} 已过期=$expired');
     return expired;
   }
 

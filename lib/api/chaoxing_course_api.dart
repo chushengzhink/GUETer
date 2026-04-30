@@ -1,9 +1,5 @@
-import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
-import '../session/account.dart';
 import '../platform.dart';
-import 'api_service.dart';
 import 'platform_request_context.dart';
 
 /// 学习通课程 API（基于 HAR 抓包重建）
