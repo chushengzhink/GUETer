@@ -4,10 +4,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_service.dart';
+import '../api/platform_dio_manager.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import 'cookie.dart';
 import 'credential_manager.dart';
+import 'tronclass_auth.dart';
 import '../utils/encrypt.dart';
 import '../pages/accounts.dart';
 
@@ -337,6 +339,15 @@ class AccountManager {
   /// 批量删除账户
   static Future<void> removeAccounts(List<String> userIds) async {
     final accounts = await _getAllAccountsFromStorage();
+
+    // 记录被删除账户的平台信息（用于清理 Dio 实例）
+    final userPlatforms = <String, String>{};
+    for (final acc in accounts) {
+      if (userIds.contains(acc.uid)) {
+        userPlatforms[acc.uid] = acc.platform.toLowerCase();
+      }
+    }
+
     accounts.removeWhere((acc) => userIds.contains(acc.uid));
     await _saveAccounts(accounts);
 
@@ -345,14 +356,49 @@ class AccountManager {
     if (current != null && userIds.contains(current)) {
       await clearCurrentSession();
     } else {
-      // 对于其他被删除的用户，清除他们的 Cookie
+      // 对于其他被删除的用户，清除他们的 Cookie 和 Dio 实例
       for (final uid in userIds) {
         if (uid != current) {
           await CookieManager.clearCookiesForUser(uid);
+
+          // 清理该用户在所有平台的 Dio 实例
+          final userPlatform = userPlatforms[uid];
+          if (userPlatform != null) {
+            final platformType = _getPlatformTypeFromName(userPlatform);
+            if (platformType != null) {
+              PlatformDioManager.clearDioForUser(
+                platform: platformType,
+                userId: uid,
+              );
+            }
+          }
         }
       }
     }
     AccountChangeNotifier().notifyAccountChanged(null);
+  }
+
+  /// 将平台名称转换为 PlatformType
+  static PlatformType? _getPlatformTypeFromName(String platformName) {
+    switch (platformName) {
+      case 'chaoxing':
+      case '学习通':
+        return PlatformType.chaoxing;
+      case 'rainclassroom':
+      case '雨课堂':
+        return PlatformType.rainClassroom;
+      case 'tronclass':
+      case '畅课':
+        return PlatformType.tronclass;
+      case 'ketangpai':
+      case '课堂派':
+        return PlatformType.ketangpai;
+      case 'weizhuojiao':
+      case '微助教':
+        return PlatformType.weizhuojiao;
+      default:
+        return null;
+    }
   }
 
   /// 清除当前会话（仅清除会话 ID，不清除账户数据）
@@ -367,6 +413,12 @@ class AccountManager {
     await _prefs.remove(_sessionKey);
     if (currentUserId != null) {
       await CookieManager.clearCookiesForUser(currentUserId);
+
+      // 清理该用户的 Dio 实例
+      PlatformDioManager.clearDioForUser(
+        platform: PlatformManager().currentPlatform,
+        userId: currentUserId,
+      );
     }
 
     _isLoggingOut = false;
@@ -385,7 +437,7 @@ class AccountManager {
     // Guard against restoration after recent logout
     if (_lastLogoutTimestamp != null && currentSession != null) {
       final timeSinceLogout = DateTime.now().millisecondsSinceEpoch - _lastLogoutTimestamp!;
-      if (timeSinceLogout < 2000 && currentSession == _lastLoggedOutUserId) {
+      if (timeSinceLogout < 5000 && currentSession == _lastLoggedOutUserId) {
         debugPrint('[AccountManager] 阻止登出后的会话恢复 (userId=$currentSession, ${timeSinceLogout}ms ago)');
         _currentSessionId = null;
         await _prefs.remove(_sessionKey);

@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_baidu_mapapi_base/flutter_baidu_mapapi_base.dart';
 
 import '../../../../models/user.dart';
-import '../../../../api/sign_in.dart';
+import '../../../../session/account.dart';
+import '../../../../api/chaoxing_sign_api.dart';
 import '../../widget/baidu_map.dart';
 import 'sign_in.dart';
 
@@ -21,21 +22,30 @@ class LocationSign implements SignStrategy {
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
-    String? faceId;
-    if (state.needFace) {
-      faceId = await SignInApi.getFaceId(user);
-    }
+    try {
+      AccountManager.setCurrentSessionTemp(user.uid);
 
-    return await SignInApi.locationSign(
-      params.courseId,
-      params.active.id,
-      params.address ?? '未知位置',
-      params.latitude ?? 0,
-      params.longitude ?? 0,
-      user,
-      validate: validate,
-      faceId: faceId,
-    );
+      String? faceId;
+      if (state.needFace) {
+        faceId = await ChaoxingSignApi.getFaceId(user.uid);
+      }
+
+      final response = await ChaoxingSignApi.signLocation(
+        activeId: params.active.id,
+        courseId: params.courseId,
+        uid: user.uid,
+        name: user.name,
+        address: params.address ?? '未知位置',
+        latitude: params.latitude ?? 0,
+        longitude: params.longitude ?? 0,
+        validate: validate,
+        currentFaceId: faceId,
+      );
+
+      return response.data?.toString();
+    } catch (e) {
+      return null;
+    }
   }
 
   static Widget buildSignArea(SignInPageState state) {

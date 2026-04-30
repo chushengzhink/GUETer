@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:pinput/pinput.dart';
 
 import '../../../../models/user.dart';
-import '../../../../api/sign_in.dart';
+import '../../../../session/account.dart';
+import '../../../../api/chaoxing_sign_api.dart';
 import 'sign_in.dart';
 
 class CodeSign implements SignStrategy {
@@ -19,13 +20,22 @@ class CodeSign implements SignStrategy {
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
-    return await SignInApi.codeSign(
-      params.courseId,
-      params.active.id,
-      params.code,
-      user,
-      validate: validate,
-    );
+    try {
+      AccountManager.setCurrentSessionTemp(user.uid);
+
+      final response = await ChaoxingSignApi.signCode(
+        activeId: params.active.id,
+        courseId: params.courseId,
+        uid: user.uid,
+        name: user.name,
+        signCode: params.code,
+        validate: validate,
+      );
+
+      return response.data?.toString();
+    } catch (e) {
+      return null;
+    }
   }
 
   static Widget buildSignArea(SignInPageState state) {
@@ -67,12 +77,12 @@ class CodeSign implements SignStrategy {
     final code = state.signParams.code;
 
     // 验证签到码是否正确
-    bool? isValid = await SignInApi.checkSignCode(
-      state.widget.active.id,
-      code,
+    bool isValid = await ChaoxingSignApi.checkSignCode(
+      activeId: state.widget.active.id,
+      signCode: code,
     );
 
-    if (isValid == true) {
+    if (isValid) {
       // 验证通过，执行签到
       state.performMultiSign();
     } else {
@@ -100,14 +110,14 @@ class _CodeInputField extends StatefulWidget {
 class _CodeInputFieldState extends State<_CodeInputField> {
   final TextEditingController _pinController = TextEditingController();
   final FocusNode _pinFocusNode = FocusNode();
-  
+
   @override
   void initState() {
     super.initState();
     // 监听输入变化
     _pinController.addListener(_onPinChanged);
   }
-  
+
   @override
   void dispose() {
     _pinController.removeListener(_onPinChanged);
@@ -115,15 +125,15 @@ class _CodeInputFieldState extends State<_CodeInputField> {
     _pinFocusNode.dispose();
     super.dispose();
   }
-  
+
   void _onPinChanged() {
     widget.state.signParams.code = _pinController.text;
   }
-  
+
   @override
   Widget build(BuildContext context) {
     final numberCount = widget.state.signParams.numberCount;
-    
+
     final defaultPinTheme = PinTheme(
       width: 56,
       height: 60,
@@ -169,23 +179,23 @@ class _CodeInputFieldState extends State<_CodeInputField> {
       ),
     );
   }
-  
+
   Future<void> _verifyAndAutoSign() async {
-    bool? isValid = await SignInApi.checkSignCode(
-      widget.state.widget.active.id,
-      widget.state.signParams.code
+    bool isValid = await ChaoxingSignApi.checkSignCode(
+      activeId: widget.state.widget.active.id,
+      signCode: widget.state.signParams.code,
     );
-    
-    if (isValid == true) {
+
+    if (isValid) {
       // 验证通过，执行签到
       widget.state.performMultiSign();
     } else {
       widget.state.showErrorMessage('签到码不正确，请重新输入');
-      
+
       // 清空输入
       _pinController.clear();
       widget.state.signParams.code = '';
-      
+
       // 焦点回到输入框
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {

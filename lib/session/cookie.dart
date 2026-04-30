@@ -676,92 +676,97 @@ class CookieManager {
       return;
     }
 
-    _isMigratingCookies = true;
+    try {
+      _isMigratingCookies = true;
 
-    final platformName = _getPlatformNameFromType(context.platform);
-    final cookieKey = '${platformName}_$userId';
+      final platformName = _getPlatformNameFromType(context.platform);
+      final cookieKey = '${platformName}_$userId';
 
-    ApiService.appendExternalConsoleLog(
-      platformName,
-      '开始从上下文迁移Cookie到用户账号，存储Key: $cookieKey',
-    );
+      ApiService.appendExternalConsoleLog(
+        platformName,
+        '开始从上下文迁移Cookie到用户账号，存储Key: $cookieKey',
+      );
 
-    // 解析凭证过期时间
-    int? credentialExpiry;
-    if (context.setCookieHeaders != null && context.setCookieHeaders!.isNotEmpty) {
-      for (final header in context.setCookieHeaders!) {
-        final expiry = CredentialManager.parseCookieExpiry(header);
-        if (expiry != null) {
-          if (credentialExpiry == null || expiry > credentialExpiry) {
-            credentialExpiry = expiry;
+      // 解析凭证过期时间
+      int? credentialExpiry;
+      if (context.setCookieHeaders != null && context.setCookieHeaders!.isNotEmpty) {
+        for (final header in context.setCookieHeaders!) {
+          final expiry = CredentialManager.parseCookieExpiry(header);
+          if (expiry != null) {
+            if (credentialExpiry == null || expiry > credentialExpiry) {
+              credentialExpiry = expiry;
+            }
           }
         }
       }
-    }
 
-    credentialExpiry ??= CredentialManager.getDefaultExpiry();
+      credentialExpiry ??= CredentialManager.getDefaultExpiry();
 
-    // 更新凭证过期时间
-    final user = AccountManager.getAccountById(userId);
-    if (user != null) {
-      await CredentialManager.updateCredentialExpiry(
-        user,
-        expiryTimestamp: credentialExpiry,
-        extendDefault: false,
-      );
-      ApiService.appendExternalConsoleLog(
-        platformName,
-        '凭证已存储，过期时间: ${_formatExpiry(credentialExpiry)}',
-      );
-    }
-
-    // 从上下文的临时 CookieJar 迁移到用户 CookieJar
-    final targetJar = await getCookieJarForUser(userId, platformName: platformName);
-    final probeUris = _getProbeUrisForPlatform(context.platform);
-
-    final merged = <String, Cookie>{};
-    for (final probe in probeUris) {
-      final cookies = await context.tempCookieJar.loadForRequest(probe);
-      for (final cookie in cookies) {
-        final host = _normalizeCookieHost(cookie.domain) == ''
-            ? probe.host
-            : _normalizeCookieHost(cookie.domain);
-        final key = '${cookie.name}@$host';
-        merged[key] = cookie;
+      // 更新凭证过期时间
+      final user = AccountManager.getAccountById(userId);
+      if (user != null) {
+        await CredentialManager.updateCredentialExpiry(
+          user,
+          expiryTimestamp: credentialExpiry,
+          extendDefault: false,
+        );
+        ApiService.appendExternalConsoleLog(
+          platformName,
+          '凭证已存储，过期时间: ${_formatExpiry(credentialExpiry)}',
+        );
       }
-    }
 
-    if (merged.isEmpty) {
+      // 从上下文的临时 CookieJar 迁移到用户 CookieJar
+      final targetJar = await getCookieJarForUser(userId, platformName: platformName);
+      final probeUris = _getProbeUrisForPlatform(context.platform);
+
+      final merged = <String, Cookie>{};
+      for (final probe in probeUris) {
+        final cookies = await context.tempCookieJar.loadForRequest(probe);
+        for (final cookie in cookies) {
+          final host = _normalizeCookieHost(cookie.domain) == ''
+              ? probe.host
+              : _normalizeCookieHost(cookie.domain);
+          final key = '${cookie.name}@$host';
+          merged[key] = cookie;
+        }
+      }
+
+      if (merged.isEmpty) {
+        ApiService.appendExternalConsoleLog(
+          platformName,
+          '上下文 Cookie 迁移失败：未在探测域名中读取到有效 cookie',
+        );
+        return;
+      }
+
       ApiService.appendExternalConsoleLog(
         platformName,
-        '上下文 Cookie 迁移失败：未在探测域名中读取到有效 cookie',
+        'Cookie已成功存储，数量: ${merged.length}',
       );
+      ApiService.appendExternalConsoleLog(
+        platformName,
+        'Cookie键名: ${merged.keys.take(15).join(", ")}',
+      );
+
+      for (final cookie in merged.values) {
+        final host = _normalizeCookieHost(cookie.domain);
+        final uri = Uri.parse('https://${host.isNotEmpty ? host : _getDefaultHostForPlatform(context.platform)}');
+        await targetJar.saveFromResponse(uri, [cookie]);
+      }
+
+      await saveCookiesForUser(userId);
+
+      ApiService.appendExternalConsoleLog(
+        platformName,
+        'Cookie迁移完成，已持久化到SharedPreferences',
+      );
+    } catch (e) {
+      debugPrint('[CookieManager] Cookie迁移异常: $e');
+      rethrow;
+    } finally {
       _isMigratingCookies = false;
-      return;
     }
-
-    ApiService.appendExternalConsoleLog(
-      platformName,
-      'Cookie已成功存储，数量: ${merged.length}',
-    );
-    ApiService.appendExternalConsoleLog(
-      platformName,
-      'Cookie键名: ${merged.keys.take(15).join(", ")}',
-    );
-
-    for (final cookie in merged.values) {
-      final host = _normalizeCookieHost(cookie.domain);
-      final uri = Uri.parse('https://${host.isNotEmpty ? host : _getDefaultHostForPlatform(context.platform)}');
-      await targetJar.saveFromResponse(uri, [cookie]);
-    }
-
-    await saveCookiesForUser(userId);
-    _isMigratingCookies = false;
-
-    ApiService.appendExternalConsoleLog(
-      platformName,
-      'Cookie迁移完成，已持久化到SharedPreferences',
-    );
   }
 
   /// 检查是否有任何平台正在登录

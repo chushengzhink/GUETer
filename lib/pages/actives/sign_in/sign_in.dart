@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
 
-import '../../../api/sign_in.dart';
+import '../../../api/chaoxing_sign_api.dart';
 import '../../../api/api_service.dart';
 import '../../../models/user.dart';
 import '../../../models/active.dart';
@@ -216,8 +216,8 @@ class SignInPageState extends State<SignInPage> {
   Future<void> _parseSignInfo() async {
     try {
       final results = await Future.wait([
-        SignInApi.getActiveInfoWeb(widget.active.id),
-        SignInApi.getAttendInfoWeb(widget.active.id)
+        ChaoxingSignApi.getActiveInfoWeb(widget.active.id),
+        ChaoxingSignApi.getAttendInfoWeb(widget.active.id)
       ]);
 
       final activeInfo = results[0];
@@ -268,7 +268,7 @@ class SignInPageState extends State<SignInPage> {
       if (widget.active.signType == SignType.normal && _needPhoto && _selectedAccounts.isNotEmpty) {
         _assignImages();
       }
-    } catch (e, stackTrace) {
+    } catch (e) {
       ApiService.appendExternalConsoleLog('学习通', '签到信息解析失败：$e');
     }
   }

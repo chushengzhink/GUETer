@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_baidu_mapapi_base/flutter_baidu_mapapi_base.dart';
 
 import '../../../../models/user.dart';
-import '../../../../api/sign_in.dart';
+import '../../../../session/account.dart';
+import '../../../../api/chaoxing_sign_api.dart';
 import '../../widget/baidu_map.dart';
 import '../../widget/scan.dart';
 import 'sign_in.dart';
@@ -27,23 +28,32 @@ class QRCodeSign implements SignStrategy {
     final validate = userValidate?['validate'];
     final enc2 = userValidate?['enc2'];
 
-    String? faceId;
-    if (state.needFace) {
-      faceId = await SignInApi.getFaceId(user);
-    }
+    try {
+      AccountManager.setCurrentSessionTemp(user.uid);
 
-    return await SignInApi.qrCodeSign(
-      params.courseId,
-      params.active.id,
-      params.enc!,
-      user,
-      address: params.address,
-      latitude: params.latitude,
-      longitude: params.longitude,
-      enc2: enc2,
-      validate: validate,
-      faceId: faceId,
-    );
+      String? faceId;
+      if (state.needFace) {
+        faceId = await ChaoxingSignApi.getFaceId(user.uid);
+      }
+
+      final response = await ChaoxingSignApi.signQrcode(
+        enc: params.enc!,
+        activeId: params.active.id,
+        courseId: params.courseId,
+        uid: user.uid,
+        name: user.name,
+        address: params.address,
+        latitude: params.latitude,
+        longitude: params.longitude,
+        enc2: enc2,
+        validate: validate,
+        currentFaceId: faceId,
+      );
+
+      return response.data?.toString();
+    } catch (e) {
+      return null;
+    }
   }
 
   static Widget buildSignArea(SignInPageState state) {
@@ -290,7 +300,10 @@ class QRCodeSign implements SignStrategy {
                   final code = queryParams['c'];
                   state.signParams.enc = queryParams['enc']!;
 
-                  final signDetail = await SignInApi.getSignDetail(state.widget.active.id, code);
+                  final signDetail = await ChaoxingSignApi.getSignDetail(
+                    activeId: state.widget.active.id,
+                    code: code,
+                  );
                   if (code == signDetail?['signCode'] || code == state.widget.active.id) {
                     if (state.mounted) {
                       (state.context as Element).markNeedsBuild();

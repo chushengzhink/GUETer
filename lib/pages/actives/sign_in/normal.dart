@@ -6,7 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../models/user.dart';
 import '../../../../session/account.dart';
-import '../../../../api/sign_in.dart';
+import '../../../../api/chaoxing_sign_api.dart';
 import 'sign_in.dart';
 
 
@@ -26,13 +26,23 @@ class NormalSign implements SignStrategy {
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
-    return await SignInApi.normalSign(
-      params.courseId,
-      params.active.id,
-      user,
-      objectId: objectId,
-      validate: validate,
-    );
+    try {
+      // 临时切换到该用户的会话
+      AccountManager.setCurrentSessionTemp(user.uid);
+
+      final response = await ChaoxingSignApi.signNormal(
+        activeId: params.active.id,
+        courseId: params.courseId,
+        uid: user.uid,
+        name: user.name,
+        objectId: objectId,
+        validate: validate,
+      );
+
+      return response.data?.toString();
+    } catch (e) {
+      return null;
+    }
   }
 
   static Widget buildSignArea(SignInPageState state) {
@@ -167,19 +177,18 @@ class NormalSign implements SignStrategy {
         return;
       }
     }
-    
+
     state.updateMultiSignStatus(true, selectedAccounts.length);
     state.showProgressSnackBar('开始为 ${selectedAccounts.length} 个账号${source == ImageSource.camera ? '拍照' : '选择图片'}...');
-    
+
     final picker = ImagePicker();
-    
+
     for (int i = 0; i < selectedAccounts.length; i++) {
       final user = selectedAccounts[i];
-      
+
       AccountManager.setCurrentSessionTemp(user.uid);
-      SignInApi.updateUser();
       state.showProgressSnackBar('正在为账号 ${user.name} ${source == ImageSource.camera ? '拍照' : '选择图片'} (${i + 1}/${selectedAccounts.length})');
-      
+
       try {
         XFile? pickedFile;
         if (source == ImageSource.camera) {
@@ -187,10 +196,10 @@ class NormalSign implements SignStrategy {
         } else {
           pickedFile = await picker.pickImage(source: ImageSource.gallery);
         }
-        
+
         if (pickedFile != null) {
           final File imageFile = File(pickedFile.path);
-          final String? objectId = await SignInApi.uploadImage(imageFile);
+          final String? objectId = await ChaoxingSignApi.uploadImage(imageFile, user.uid);
           if (objectId != null) {
             state.signParams.setUserObjectId(user.uid, objectId);
             state.updatePhotoProgress(i + 1);
@@ -203,15 +212,15 @@ class NormalSign implements SignStrategy {
       } catch (e) {
         state.addFailedAccount('${user.name} (处理异常: $e)');
       }
-      
+
       await Future.delayed(const Duration(milliseconds: 500));
     }
-    
+
     // 恢复原账号
     if (state.currentUser != null) {
       AccountManager.setCurrentSessionTemp(state.currentUser!.uid);
     }
-    
+
     state.updateMultiSignStatus(false);
     state.showPhotoResult(state.signParams.photoCount, selectedAccounts.length);
   }

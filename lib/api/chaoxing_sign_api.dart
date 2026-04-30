@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
@@ -367,6 +368,35 @@ class ChaoxingSignApi {
     }
   }
 
+  /// 获取活动详情
+  static Future<Map<String, dynamic>?> getActiveInfoWeb(String activeId) async {
+    final userId = AccountManager.currentSessionId;
+    if (userId == null || userId.isEmpty) {
+      throw Exception('未登录，无法获取活动详情');
+    }
+
+    final context = await PlatformRequestContext.create(
+      platform: PlatformType.chaoxing,
+      userId: userId,
+    );
+
+    try {
+      final url =
+          'https://mobilelearn.chaoxing.com/v2/apis/active/getPPTActiveInfo?activeId=$activeId';
+
+      final response = await context.sendRequest(url, method: 'GET');
+      final data = response.data;
+
+      if (data['result'] == 1) {
+        return data['data'];
+      }
+    } catch (e) {
+      debugPrint('[ChaoxingSignApi] getActiveInfoWeb error: $e');
+    }
+
+    return null;
+  }
+
   /// 获取参与详情
   static Future<Map<String, dynamic>?> getAttendInfoWeb(String activeId) async {
     final userId = AccountManager.currentSessionId;
@@ -416,6 +446,73 @@ class ChaoxingSignApi {
       return response.data;
     } catch (e) {
       debugPrint('[ChaoxingSignApi] getSignReceipt error: $e');
+      return null;
+    }
+  }
+
+  /// 上传图片到学习通
+  static Future<String?> uploadImage(File imageFile, String uid) async {
+    final userId = AccountManager.currentSessionId;
+    if (userId == null || userId.isEmpty) {
+      throw Exception('未登录，无法上传图片');
+    }
+
+    final context = await PlatformRequestContext.create(
+      platform: PlatformType.chaoxing,
+      userId: userId,
+    );
+
+    try {
+      // 1. 获取 token
+      final tokenUrl = 'https://pan-yz.chaoxing.com/api/token/uservalid';
+      final tokenResponse = await context.sendRequest(tokenUrl, method: 'GET');
+
+      if (tokenResponse.data == null) {
+        debugPrint('[ChaoxingSignApi] Failed to get token');
+        return null;
+      }
+
+      final token = tokenResponse.data['_token'];
+
+      // 2. 上传 CRC 状态
+      final crcUrl = 'https://pan-yz.chaoxing.com/api/crcStorageStatus';
+      final crc = await EncryptionUtil.getCRC(imageFile);
+      final crcParams = <String, String>{
+        'puid': uid,
+        'crc': crc,
+        '_token': token.toString(),
+      };
+
+      await context.sendRequest(crcUrl, method: 'GET', params: crcParams);
+
+      // 3. 生成文件名
+      final now = DateTime.now();
+      final timestamp =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+      final milliseconds = now.millisecond.toString().padLeft(3, '0');
+      final fileName = '$timestamp$milliseconds.jpg';
+
+      // 4. 上传文件
+      final formData = FormData.fromMap({
+        'file': await MultipartFile.fromFile(imageFile.path, filename: fileName),
+        'puid': uid,
+      });
+
+      final uploadUrl =
+          'https://pan-yz.chaoxing.com/upload?_from=mobilelearn&_token=$token';
+
+      final uploadResponse = await context.sendRequest(
+        uploadUrl,
+        method: 'POST',
+        body: formData,
+      );
+
+      final responseData = uploadResponse.data;
+      final objectId = responseData['data']?['objectId'];
+
+      return objectId;
+    } catch (e) {
+      debugPrint('[ChaoxingSignApi] uploadImage error: $e');
       return null;
     }
   }

@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:pattern_lock/pattern_lock.dart';
 
 import '../../../../models/user.dart';
-import '../../../../api/sign_in.dart';
+import '../../../../session/account.dart';
+import '../../../../api/chaoxing_sign_api.dart';
 import 'sign_in.dart';
 
 class PatternSign implements SignStrategy {
@@ -19,15 +20,24 @@ class PatternSign implements SignStrategy {
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
-    return await SignInApi.codeSign(
-      params.courseId,
-      params.active.id,
-      params.pattern,
-      user,
-      validate: validate,
-    );
+    try {
+      AccountManager.setCurrentSessionTemp(user.uid);
+
+      final response = await ChaoxingSignApi.signCode(
+        activeId: params.active.id,
+        courseId: params.courseId,
+        uid: user.uid,
+        name: user.name,
+        signCode: params.pattern,
+        validate: validate,
+      );
+
+      return response.data?.toString();
+    } catch (e) {
+      return null;
+    }
   }
-  
+
   static Widget buildSignArea(SignInPageState state) {
     return Builder(
       builder: (BuildContext context) {
@@ -54,12 +64,12 @@ class PatternSign implements SignStrategy {
                       final pattern1to9 = pattern.map((p) => p + 1).toList().join('');
                       state.signParams.pattern = pattern1to9;
 
-                      bool? isValid = await SignInApi.checkSignCode(
-                          state.widget.active.id,
-                          pattern1to9
+                      bool isValid = await ChaoxingSignApi.checkSignCode(
+                        activeId: state.widget.active.id,
+                        signCode: pattern1to9,
                       );
 
-                      if (isValid == true) {
+                      if (isValid) {
                         state.performMultiSign();
                       } else {
                         state.showErrorMessage('手势不正确，请重新绘制');
