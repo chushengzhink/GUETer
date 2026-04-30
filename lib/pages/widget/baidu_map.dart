@@ -216,7 +216,7 @@ class _BaiduMapWidgetState extends State<BaiduMapWidget> {
     await _mapController!.addMarker(marker);
 
     String address = await _getAddressFromCoordinate(position);
-    if (!mounted) return;
+    if (!mounted) return '';
     setState(() {
       _markerPosition = position;
       _locationInfo =
