@@ -24,6 +24,13 @@ import './widgets/floating_nav_bar.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 在 release 模式下将 debugPrint 重定向到请求控制台
+  debugPrint = (String? message, {int? wrapWidth}) {
+    if (message != null) {
+      ApiService.appendExternalConsoleLog('Debug', message);
+    }
+  };
+
   // Initialize settings and api in parallel, then run platform/account/cookie chain.
   await Future.wait<void>([ApiService.initialize(), AppSettings.initialize()]);
 
