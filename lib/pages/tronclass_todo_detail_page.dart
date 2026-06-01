@@ -1,6 +1,11 @@
+// ignore_for_file: deprecated_member_use
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
+import 'package:html/parser.dart' as html_parser;
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../api/api_service.dart';
 
@@ -19,8 +24,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
   Map<String, dynamic>? _detail;
   Map<String, dynamic>? _distribute;
   List<dynamic> _subjects = [];
-  Map<int, List<int>> _answers = {};
+  final Map<int, List<int>> _answers = {};
   String? _error;
+  String? _classroomExamStartTime;
 
   @override
   void initState() {
@@ -36,7 +42,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
 
     try {
       final type = widget.todo['type']?.toString() ?? '';
-      final id = widget.todo['id'];
+      final id = _intId(widget.todo['id']);
 
       if (type == 'homework') {
         await _loadHomeworkDetail(id);
@@ -69,6 +75,8 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       endpoint = '/api/exams/$id';
     } else if (type == 'questionnaire') {
       endpoint = '/api/questionnaires/$id';
+    } else if (type == 'classroom') {
+      endpoint = '/api/classroom-exams/$id';
     } else {
       throw Exception('不支持的类型: $type');
     }
@@ -105,7 +113,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       ),
     );
 
-    if (shouldStart != true) return;
+    if (shouldStart != true || !mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -135,11 +143,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
 
     try {
       final type = widget.todo['type']?.toString() ?? '';
-      final id = widget.todo['id'];
+      final id = _intId(widget.todo['id']);
 
-      final distributeEndpoint = type == 'questionnaire'
-          ? '/api/questionnaire/$id/distribute'
-          : '/api/${type}s/$id/distribute';
+      final distributeEndpoint = _distributeEndpoint(type, id);
 
       final distributeResponse = await ApiService.sendRequest(distributeEndpoint);
       final distribute = distributeResponse.data;
@@ -148,6 +154,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       setState(() {
         _distribute = distribute;
         _subjects = distribute['subjects'] ?? [];
+        if (type == 'classroom') {
+          _classroomExamStartTime ??= _utcIsoSeconds(DateTime.now());
+        }
         _loading = false;
       });
     } catch (e) {
@@ -185,6 +194,16 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
     try {
       final type = widget.todo['type']?.toString() ?? '';
       final id = widget.todo['id'];
+
+      if (type == 'classroom') {
+        await _submitClassroomAnswer(_intId(id));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('答案已保存')),
+        );
+        return;
+      }
+
       final instanceId = _distribute?['exam_paper_instance_id'];
 
       if (instanceId == null) {
@@ -201,9 +220,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         };
       }).toList();
 
-      final endpoint = type == 'questionnaire'
-          ? '/api/questionnaire/$id/submissions/storage'
-          : '/api/${type}s/$id/submissions/storage';
+      final endpoint = _storageEndpoint(type, _intId(id));
 
       await ApiService.sendRequest(
         endpoint,
@@ -211,7 +228,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         body: {
           'exam_paper_instance_id': instanceId,
           'subjects': subjects,
-          if (type == 'exam') 'examFinished': false,
+          if (type == 'exam' || type == 'classroom') 'examFinished': false,
         },
       );
 
@@ -222,7 +239,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保存失败: $e')),
+        SnackBar(content: Text('保存失败: ${_friendlySubmitError(e)}')),
       );
     }
   }
@@ -279,6 +296,17 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
     try {
       final type = widget.todo['type']?.toString() ?? '';
       final id = widget.todo['id'];
+
+      if (type == 'classroom') {
+        await _submitClassroomAnswer(_intId(id));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('提交成功')),
+        );
+        Navigator.pop(context, true);
+        return;
+      }
+
       final instanceId = _distribute?['exam_paper_instance_id'];
 
       if (instanceId == null) {
@@ -295,9 +323,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         };
       }).toList();
 
-      final endpoint = type == 'questionnaire'
-          ? '/api/questionnaire/$id/submissions'
-          : '/api/${type}s/$id/submissions';
+      final endpoint = _submitEndpoint(type, _intId(id));
 
       await ApiService.sendRequest(
         endpoint,
@@ -316,9 +342,164 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('提交失败: $e')),
+        SnackBar(content: Text('提交失败: ${_friendlySubmitError(e)}')),
       );
     }
+  }
+
+  Future<void> _submitClassroomAnswer(int classroomId) async {
+    final instanceId = _distribute?['exam_paper_instance_id'];
+    if (instanceId == null) {
+      throw Exception('无法获取试卷实例ID');
+    }
+    if (_subjects.isEmpty) {
+      throw Exception('未加载到互动测试题目');
+    }
+
+    _classroomExamStartTime ??= _utcIsoSeconds(DateTime.now());
+    final subjectId = _classroomSubmitSubjectId();
+    final endpoint = '/api/classroom/$classroomId/submit/$subjectId';
+
+    await ApiService.sendRequest(
+      endpoint,
+      method: 'POST',
+      body: {
+        'subjects': _classroomSubmissionSubjects(),
+        'exam_paper_instance_id': instanceId,
+        'exam_start_time': _classroomExamStartTime,
+      },
+    );
+  }
+
+  int _classroomSubmitSubjectId() {
+    int? fallbackSubjectId;
+    int? lastAnsweredSubjectId;
+
+    for (final subject in _subjects) {
+      if (subject is! Map) continue;
+      final subjectId = _intId(subject['id']);
+      if (subjectId == 0) continue;
+      fallbackSubjectId = subjectId;
+      if ((_answers[subjectId] ?? const <int>[]).isNotEmpty) {
+        lastAnsweredSubjectId = subjectId;
+      }
+    }
+
+    final subjectId = lastAnsweredSubjectId ?? fallbackSubjectId;
+    if (subjectId == null) {
+      throw Exception('无法获取互动测试题目ID');
+    }
+    return subjectId;
+  }
+
+  List<Map<String, dynamic>> _classroomSubmissionSubjects() {
+    return _subjects.whereType<Map>().map((subject) {
+      final subjectId = _intId(subject['id']);
+      return {
+        'subject_id': subjectId,
+        'answer': '',
+        'answer_option_ids': _answers[subjectId] ?? const <int>[],
+        'correct_answers': const [],
+        'answers': const [],
+        'attachments': const [],
+        'content': '',
+        'alternates': const [],
+        'sort': _intId(subject['sort']),
+      };
+    }).toList();
+  }
+
+  String _utcIsoSeconds(DateTime value) {
+    return '${value.toUtc().toIso8601String().split('.').first}Z';
+  }
+
+  String _friendlySubmitError(Object error) {
+    if (error is DioException) {
+      final statusCode = error.response?.statusCode;
+      if (statusCode != null) {
+        return '互动测试提交接口返回 $statusCode';
+      }
+      return '网络请求失败，请稍后重试';
+    }
+    return error.toString().replaceFirst('Exception: ', '');
+  }
+
+  Future<void> _exportQuestions() async {
+    if (_subjects.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先进入测试并加载题目后再导出')),
+      );
+      return;
+    }
+
+    final text = _buildExportText();
+    if (text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂无可导出的题目内容')),
+      );
+      return;
+    }
+
+    await Share.share(text, subject: widget.todo['title']?.toString() ?? '测试题目');
+  }
+
+  String _buildExportText() {
+    final buffer = StringBuffer();
+    final title = widget.todo['title']?.toString() ?? '测试';
+    final courseName = widget.todo['course_name']?.toString() ?? '';
+
+    if (courseName.isNotEmpty) {
+      buffer.writeln('课程：$courseName');
+    }
+    buffer.writeln('测试：$title');
+    buffer.writeln();
+
+    for (var i = 0; i < _subjects.length; i++) {
+      final subject = _subjects[i];
+      if (subject is! Map<String, dynamic>) continue;
+      final description = _plainText(subject['description']?.toString() ?? '');
+      buffer.writeln('${i + 1}. $description');
+
+      final options = subject['options'];
+      if (options is List) {
+        for (var j = 0; j < options.length; j++) {
+          final option = options[j];
+          if (option is! Map<String, dynamic>) continue;
+          buffer.writeln(
+            '${_optionLabel(j)}. ${_plainText(option['content']?.toString() ?? '')}',
+          );
+        }
+      }
+
+      if (i != _subjects.length - 1) {
+        buffer.writeln();
+      }
+    }
+
+    return buffer.toString().trim();
+  }
+
+  int _intId(Object? value) {
+    if (value is int) return value;
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  String _distributeEndpoint(String type, int id) {
+    if (type == 'questionnaire') return '/api/questionnaire/$id/distribute';
+    if (type == 'classroom') return '/api/classroom/$id/distribute';
+    return '/api/${type}s/$id/distribute';
+  }
+
+  String _storageEndpoint(String type, int id) {
+    if (type == 'questionnaire') return '/api/questionnaire/$id/submissions/storage';
+    if (type == 'classroom') return '/api/classroom/$id/submissions/storage';
+    return '/api/${type}s/$id/submissions/storage';
+  }
+
+  String _submitEndpoint(String type, int id) {
+    if (type == 'questionnaire') return '/api/questionnaire/$id/submissions';
+    if (type == 'classroom') return '/api/classroom/$id/submissions';
+    return '/api/${type}s/$id/submissions';
   }
 
   @override
@@ -334,6 +515,12 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         backgroundColor: const Color(0xFF1DB6C2),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          if (!_loading && type != 'homework')
+            IconButton(
+              icon: const Icon(Icons.ios_share),
+              onPressed: _exportQuestions,
+              tooltip: '导出题目',
+            ),
           if (!_loading && _distribute != null && type != 'homework')
             IconButton(
               icon: const Icon(Icons.save),
@@ -488,8 +675,16 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
 
   Widget _buildExamInfoView(String courseName, String endTimeStr) {
     final description = _detail?['data']?['description']?.toString() ?? '';
-    final startTime = _detail?['start_time']?.toString() ?? '';
-    final endTime = _detail?['end_time']?.toString() ?? '';
+    final startTime =
+        _detail?['start_time']?.toString() ??
+        _detail?['start_at']?.toString() ??
+        widget.todo['start_time']?.toString() ??
+        '';
+    final endTime =
+        _detail?['end_time']?.toString() ??
+        _detail?['finish_at']?.toString() ??
+        widget.todo['end_time']?.toString() ??
+        '';
     final scorePercentage = _detail?['data']?['score_percentage']?.toString() ?? '';
     final totalScore = _detail?['total_score']?.toString() ?? '';
     final announceScoreStatus = _detail?['announce_score_status']?.toString() ?? '';
@@ -667,15 +862,14 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
             const SizedBox(height: 8),
             _buildMathText(description),
             const SizedBox(height: 16),
-            ...options.asMap().entries.map((entry) {
-              final option = entry.value as Map<String, dynamic>;
-              final optionId = option['id'] as int;
-              final content = option['content']?.toString() ?? '';
-              final isSelected = _answers[subjectId]?.contains(optionId) ?? false;
+            if (type == 'single_selection')
+              ...options.asMap().entries.map((entry) {
+                final option = entry.value as Map<String, dynamic>;
+                final optionId = option['id'] as int;
+                final content = option['content']?.toString() ?? '';
 
-              if (type == 'single_selection') {
                 return RadioListTile<int>(
-                  title: _buildMathText(content),
+                  title: _buildOptionTitle(entry.key, content),
                   value: optionId,
                   groupValue: _answers[subjectId]?.firstOrNull,
                   onChanged: (value) {
@@ -686,9 +880,16 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 );
-              } else {
+              })
+            else
+              ...options.asMap().entries.map((entry) {
+                final option = entry.value as Map<String, dynamic>;
+                final optionId = option['id'] as int;
+                final content = option['content']?.toString() ?? '';
+                final isSelected = _answers[subjectId]?.contains(optionId) ?? false;
+
                 return CheckboxListTile(
-                  title: _buildMathText(content),
+                  title: _buildOptionTitle(entry.key, content),
                   value: isSelected,
                   onChanged: (value) {
                     setState(() {
@@ -704,8 +905,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                 );
-              }
-            }),
+              }),
           ],
         ),
       ),
@@ -713,7 +913,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
   }
 
   Widget _buildMathText(String text) {
-    final stripped = _stripHtml(text);
+    final stripped = _plainText(text);
     final parts = _splitMathText(stripped);
 
     return Wrap(
@@ -741,9 +941,25 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
     );
   }
 
+  Widget _buildOptionTitle(int index, String content) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '${_optionLabel(index)}. ',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        Expanded(child: _buildMathText(content)),
+      ],
+    );
+  }
+
   List<Map<String, dynamic>> _splitMathText(String text) {
     final parts = <Map<String, dynamic>>[];
-    final regex = RegExp(r'\\\((.*?)\\\)|\\\[(.*?)\\\]');
+    final regex = RegExp(
+      r'\\\((.*?)\\\)|\\\[(.*?)\\\]|\$\$(.*?)\$\$|\$([^$\n]+)\$',
+      dotAll: true,
+    );
     int lastEnd = 0;
 
     for (final match in regex.allMatches(text)) {
@@ -751,7 +967,8 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         parts.add({'text': text.substring(lastEnd, match.start), 'isMath': false});
       }
 
-      final mathContent = match.group(1) ?? match.group(2) ?? '';
+      final mathContent =
+          match.group(1) ?? match.group(2) ?? match.group(3) ?? match.group(4) ?? '';
       parts.add({'text': mathContent, 'isMath': true});
       lastEnd = match.end;
     }
@@ -764,12 +981,35 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
   }
 
   String _stripHtml(String html) {
-    return html
-        .replaceAll(RegExp(r'<[^>]*>'), '')
-        .replaceAll('&nbsp;', ' ')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&amp;', '&')
+    return _plainText(html);
+  }
+
+  String _plainText(String html) {
+    if (html.trim().isEmpty) return '';
+    var normalized = html
+        .replaceAllMapped(
+          RegExp(
+            r'''<img[^>]*(?:data-latex|alt|title)=["']([^"']+)["'][^>]*>''',
+            caseSensitive: false,
+          ),
+          (match) => ' ${match.group(1) ?? ''} ',
+        )
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'</p\s*>', caseSensitive: false), '\n')
+        .replaceAll('&nbsp;', ' ');
+
+    final document = html_parser.parseFragment(normalized);
+    normalized = document.text ?? normalized;
+    return normalized
+        .replaceAll('\u00a0', ' ')
+        .replaceAll(RegExp(r'[ \t]+'), ' ')
+        .replaceAll(RegExp(r'\n\s*\n+'), '\n')
         .trim();
+  }
+
+  String _optionLabel(int index) {
+    const labels = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    if (index >= 0 && index < labels.length) return labels[index];
+    return (index + 1).toString();
   }
 }

@@ -1,0 +1,321 @@
+{
+  "@@locale": "en",
+  "appCourses": "Courses",
+  "appAccounts": "Accounts",
+  "appTodos": "Todos",
+  "appTools": "Tools",
+  "appSettings": "Settings",
+  "updateAvailableTitle": "New version available",
+  "latestVersionLabel": "Latest version: v{version}",
+  "@latestVersionLabel": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateNotesLabel": "What's new:",
+  "laterButton": "Later",
+  "downloadButton": "Download",
+  "anonymousChatTitle": "💬 Anonymous Chat",
+  "anonymousChatSubtitle": "Nearby anonymous chat and file sharing powered by Nearby Connections",
+  "localTransferTitle": "Local Transfer",
+  "localTransferSubtitle": "Compatible with LocalSend for local file and text transfer",
+  "readingTitle": "Reading",
+  "readingSubtitle": "Reading tools have been merged into the tools page",
+  "academicSearchTitle": "📎 Paper Search",
+  "academicSearchSubtitle": "Search CrossRef and arXiv in parallel with BibTeX and PDF export support",
+  "apodCardTitle": "Today's Sky",
+  "apodLoadingSubtitle": "Loading NASA Astronomy Picture of the Day...",
+  "apodErrorSubtitle": "Unable to load today's astronomy picture",
+  "apodUnavailableSubtitle": "Today's APOD is not an image. Tap to view details.",
+  "apodRefreshTooltip": "Refresh astronomy picture",
+  "apodDetailTitle": "Today's Sky",
+  "apodDateLabel": "Date",
+  "apodAboutLabel": "About",
+  "apodNonImageNotice": "NASA APOD is not an image today. The original content may be a video or another media type.",
+  "toolsPageTitle": "Tools",
+  "toolsTabReading": "Reading",
+  "toolsTabPdf": "PDF",
+  "toolsTabGueter": "GUETer",
+  "pickPdfOutputDirectory": "Choose PDF output directory",
+  "statusSelectTool": "Select a tool to start",
+  "statusOutputDirChanged": "Output directory changed to: {path}",
+  "@statusOutputDirChanged": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "statusOutputDirReset": "Output directory reset to the default temp directory",
+  "toolRunFailed": "Execution failed: {error}",
+  "@toolRunFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "openFailedMessage": "Open failed: {message}",
+  "@openFailedMessage": {
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "pdfOutputShareText": "PDF tool output",
+  "pdfToImagesTitle": "PDF to Images",
+  "pdfToImagesSubtitle": "Export as PNG",
+  "imagesToPdfTitle": "Images to PDF",
+  "imagesToPdfSubtitle": "Merge images",
+  "compressPdfTitle": "Compress PDF",
+  "compressPdfSubtitle": "Reduce size",
+  "extractPagesTitle": "Extract Pages",
+  "extractPagesSubtitle": "Extract by page number",
+  "watermarkTitle": "Watermark",
+  "watermarkSubtitle": "Anti-tampering",
+  "extractPagesDialogTitle": "Enter page numbers",
+  "extractPagesHint": "Example: 1,3,5-8 (total pages: {count})",
+  "@extractPagesHint": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cancelButton": "Cancel",
+  "confirmButton": "OK",
+  "pdfToImagesComplete": "PDF to images completed, exported {count} files",
+  "@pdfToImagesComplete": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "imagesToPdfComplete": "Images merged into PDF",
+  "compressPdfComplete": "PDF compression completed",
+  "extractPagesComplete": "PDF page extraction completed ({count} pages)",
+  "@extractPagesComplete": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "watermarkDialogTitle": "Watermark options",
+  "watermarkTextLabel": "Watermark text",
+  "watermarkTextHint": "Example: Anti-tamper - Name - Date",
+  "watermarkOpacityLabel": "Opacity: {value}",
+  "@watermarkOpacityLabel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "watermarkAngleLabel": "Rotation: {value}°",
+  "@watermarkAngleLabel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "watermarkFontSizeLabel": "Font size: {value}",
+  "@watermarkFontSizeLabel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "watermarkColorLabel": "Color",
+  "watermarkColorDeepRed": "Deep red",
+  "watermarkColorDeepBlue": "Deep blue",
+  "watermarkColorDeepGray": "Deep gray",
+  "watermarkColorBlack": "Black",
+  "watermarkComplete": "PDF watermark completed",
+  "pdfToolsTitle": "PDF Tools",
+  "recentTasksTitle": "Recent tasks",
+  "recentTasksCount": "{count} records",
+  "@recentTasksCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "copyOutputPath": "Copy output path",
+  "outputPathCopied": "Output path copied",
+  "gueterToolsTitle": "GUETer Tools",
+  "gueterToolsSubtitle": "Quick access to common GUET official entries",
+  "guetEmailTitle": "GUET Mail",
+  "guetEmailSubtitle": "Application entry",
+  "guetOfficialTitle": "GUET Official Site",
+  "guetOfficialSubtitle": "School homepage",
+  "aiFigureTitle": "AI Paper Figure Generator",
+  "aiFigureSubtitle": "Describe the method and generate academic illustrations automatically",
+  "settingsAnnouncementTitle": "Settings announcement",
+  "settingsAnnouncementContent": "Welcome to GUETer.\n\nThis project only provides local learning-assistant features and does not offer cloud account sync, password collection, or background upload services.\n\nAccounts, sessions, and related local records are encrypted and stored on device. They are not uploaded to this project's server, and your credentials are never proactively sent.\n\nThis announcement is versioned. If the terms are updated later, you will be reminded again.\n\nIf your school, platform provider, or rights holder believes any related feature is inappropriate, please contact us through a compliant channel.",
+  "reviewLaterButton": "Review later",
+  "gotItButton": "Understood",
+  "settingsSavedEmail": "Academic API email saved",
+  "settingsClearedEmail": "Academic API email cleared",
+  "languageLabel": "Language",
+  "languageChinese": "Simplified Chinese",
+  "languageEnglish": "English",
+  "languageRestartHint": "Changes take effect after restarting the app",
+  "languageSavedRestart": "Language saved. Restart the app to apply it.",
+  "themeAndAppearanceTitle": "Appearance & Theme",
+  "themeAndAppearanceSubtitle": "Color schemes, style presets, and theme mode",
+  "themeModeLabel": "Theme mode",
+  "themeModeSystem": "Follow system",
+  "themeModeLight": "Light",
+  "themeModeDark": "Dark eye-care",
+  "themeStyleLabel": "Theme style",
+  "themeStyleModern": "Modern (recommended)",
+  "themeStyleCompact": "Compact",
+  "themeStylePlayful": "Playful",
+  "themeStyleMinimal": "Minimal",
+  "themeStyleBold": "Bold",
+  "themeStyleSoft": "Soft",
+  "randomPaletteTitle": "Mystery palette",
+  "randomPaletteSubtitle": "Switch to a different global color palette randomly",
+  "academicToolsTitle": "Academic Tools",
+  "academicToolsSubtitle": "CrossRef mailto email and paper-search related settings",
+  "academicApiEmailLabel": "Academic API email",
+  "academicApiEmailHint": "Optional, used for the CrossRef mailto parameter",
+  "academicApiEmailDescription": "CrossRef search works without it. If you provide one, requests will include the email to follow polite-usage guidance.",
+  "saveAcademicEmailTitle": "Save academic API email",
+  "currentEmailUnset": "No email configured",
+  "currentEmailValue": "Current email: {email}",
+  "@currentEmailValue": {
+    "placeholders": {
+      "email": {
+        "type": "String"
+      }
+    }
+  },
+  "clearAcademicEmailTitle": "Clear academic API email",
+  "clearAcademicEmailSubtitle": "CrossRef requests will no longer include the mailto parameter",
+  "diagnosticsToggleTitle": "Checks, diagnostics, and repair tools",
+  "diagnosticsToggleSubtitle": "Disabled by default. Enable to use diagnostic tools.",
+  "diagnosticsTitle": "Checks, Diagnostics & Repair",
+  "diagnosticsSubtitle": "Platform checks, report export, and one-click fixes",
+  "checkPlatformsTitle": "Check connectivity for the four platforms",
+  "checkPlatformsSubtitle": "Chaoxing, Rain Classroom, TronClass, and Ketangpai",
+  "copyLastReportTooltip": "Copy last report",
+  "lastReportCopied": "Last report copied",
+  "copyDiagnosticPackTitle": "Generate and copy diagnostic pack",
+  "copyDiagnosticPackSubtitle": "Includes settings snapshot, account counts, and permission states",
+  "fixCommonIssuesTitle": "Fix common issues with one tap",
+  "fixCommonIssuesSubtitle": "Restore recommended strategies and default platform addresses",
+  "accountHealthTitle": "Account health check",
+  "accountHealthSubtitle": "Check account availability across four platforms",
+  "batchPrecheckTitle": "Batch sign-in precheck",
+  "batchPrecheckSubtitle": "Check whether accounts, permissions, and network are ready",
+  "signRecordsTitle": "Sign-in record search",
+  "signRecordsSubtitle": "Filter by time/platform/course with copy and share support",
+  "requestConsoleTitle": "Request console",
+  "requestConsoleSubtitle": "View recent request results, retries, and error logs",
+  "securityAndPacingTitle": "Security & Request Pacing",
+  "securityAndPacingSubtitle": "Control request security level",
+  "strictSecurityModeTitle": "Strict security mode",
+  "strictSecurityModeSubtitle": "Enable this if you think requests may be too frequent",
+  "securityLevelLabel": "Request security level:",
+  "securityLevelStrict": "Strict",
+  "securityLevelStandard": "Standard",
+  "securityModeStrictDescription": "Current mode: strict security mode (sign-in requests are additionally throttled)",
+  "securityModeStandardDescription": "Current mode: standard (default)",
+  "beginnerGuideCardTitle": "Beginner Guide",
+  "beginnerGuideCardSubtitle": "First-use tips and common troubleshooting advice",
+  "viewGuideButton": "View guide",
+  "beginnerGuideDialogTitle": "Beginner Guide (can be disabled)",
+  "beginnerGuideDialogContent": "1. Select a platform before logging in. Accounts on different platforms are independent.\n\n2. For TronClass, \"System browser first + session reuse first\" is recommended.\n\n3. Run the batch sign-in precheck once before signing in.\n\n4. If something goes wrong, try \"Fix common issues\" first, then generate a diagnostic pack for feedback.",
+  "quickActionsTitle": "Quick actions",
+  "quickActionPlatformCheck": "Platform check",
+  "quickActionFix": "Quick fix",
+  "quickActionRandomPalette": "Random palette",
+  "disclaimerCardTitle": "Disclaimer (please read first)",
+  "disclaimerCardSubtitle": "Locally encrypted storage, never uploaded to a server",
+  "disclaimerDialogTitle": "Disclaimer",
+  "disclaimerDialogSummary": "Summary: this project does not collect passwords or provide cloud sync. Account data is only encrypted and stored on your device.",
+  "disclaimerDialogContent": "Disclaimer (please read first)\n\n1. This app is for learning exchange and technical research only and must not be used for any illegal or non-compliant purpose.\n\n2. This app has no official partnership with platforms such as Chaoxing, Rain Classroom, TronClass, Ketangpai, or Weizhujiao, nor with their affiliated institutions.\n\n3. Users must ensure they are legally authorized to use the relevant platform account and course. Any account risk, data loss, or other consequences caused by personal operation are the user's own responsibility.\n\n4. This app does not provide cloud account sync, password collection, or background upload services. Accounts, sessions, and related local records are encrypted and stored on device. They are not uploaded to this project's server, and your credentials are never proactively sent.\n\n5. This app does not guarantee continuous availability and is not responsible for issues caused by network fluctuations, platform policy changes, API changes, or device compatibility issues.\n\n6. If your school, platform provider, or rights holder believes any related feature or displayed content is inappropriate, please contact us in time.\n\nFor infringement concerns, contact: 3177401522a@gmai.com",
+  "copyFullTextButton": "Copy full text",
+  "disclaimerCopied": "Disclaimer copied",
+  "themePaletteLabel": "Color palette",
+  "themePaletteLongPress": "Long press to switch",
+  "themeModeStatLabel": "Theme mode",
+  "themeModeSwitched": "Switched to {mode} mode",
+  "@themeModeSwitched": {
+    "placeholders": {
+      "mode": {
+        "type": "String"
+      }
+    }
+  },
+  "colorSchemeSwitched": "Switched palette: {name}",
+  "@colorSchemeSwitched": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "randomPaletteSwitched": "Mystery palette switched to: {name}",
+  "@randomPaletteSwitched": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "colorSchemeAqua": "Aqua",
+  "colorSchemeOcean": "Ocean Blue",
+  "colorSchemeForest": "Forest Green",
+  "colorSchemeAmber": "Amber",
+  "colorSchemeNight": "Night Care",
+  "colorSchemeRose": "Warm Rose",
+  "colorSchemePurple": "Violet",
+  "colorSchemeCyan": "Cyan",
+  "colorSchemeOrange": "Energy Orange",
+  "autoCloseWebLoginTitle": "Auto return after web login succeeds",
+  "autoCloseWebLoginSubtitle": "Close the page automatically after TronClass web login obtains a session",
+  "batchPrecheckResultTitle": "Batch sign-in precheck result",
+  "copyReportButton": "Copy report",
+  "closeButton": "Close",
+  "precheckReportCopied": "Precheck report copied",
+  "copyButton": "Copy",
+  "passwordCopied": "Password copied to clipboard",
+  "computerHelpTitle": "Computer Quick Manual",
+  "computerHelpSubtitle": "Offline step cards for common Windows and Android tasks",
+  "computerHelpPageTitle": "Computer Quick Manual",
+  "computerHelpSearchHint": "Search by problem title or keyword",
+  "computerHelpAllCategories": "Categories",
+  "computerHelpAllPlatforms": "Platforms",
+  "computerHelpPlatformBoth": "Windows + Android",
+  "computerHelpPlatformWindows": "Windows",
+  "computerHelpPlatformAndroid": "Android",
+  "computerHelpDiagnosisLabel": "When to use",
+  "computerHelpStepsLabel": "Steps",
+  "computerHelpTipsLabel": "Common mistakes and tips",
+  "computerHelpKeywordsLabel": "Keywords",
+  "computerHelpCopySteps": "Copy steps",
+  "computerHelpCopyKeywords": "Copy keywords",
+  "computerHelpCopiedSteps": "Steps copied",
+  "computerHelpCopiedKeywords": "Keywords copied",
+  "computerHelpEmptyState": "No matching quick-help topic yet",
+  "computerHelpViewDetails": "View steps",
+  "computerHelpCategoryFileTransfer": "File transfer",
+  "computerHelpCategoryArchives": "Archives",
+  "computerHelpCategoryFileBasics": "File names",
+  "computerHelpCategoryPdf": "PDF",
+  "computerHelpCategoryCaptureProjection": "Capture & casting",
+  "computerHelpCategorySoftwareInstall": "Software install",
+  "computerHelpCategoryDownloads": "Downloads",
+  "computerHelpCategoryDeviceConnection": "USB / Bluetooth / WeChat",
+  "computerHelpCategoryNetworkBlock": "Blocked downloads"
+}

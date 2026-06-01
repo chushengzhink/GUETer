@@ -10,8 +10,10 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:encrypt/encrypt.dart' as encrypt_pkg;
 
 import 'api_service.dart';
+import 'login.dart';
 
 import '../session/tronclass_auth.dart';
+import '../tronclass_guet_constants.dart';
 
 /// 畅课客户端 - 每用户独立实例管理
 /// 借鉴 tronclass_plus 的 ChangkeClient 架构
@@ -58,25 +60,27 @@ class TronclassClient {
       instance._cookieJar = await _getCookieJar(userId);
 
       // 创建主 Dio 实例（用于 tronclass API）
-      instance._dio = Dio(
-        BaseOptions(
-          baseUrl: 'https://courses.guet.edu.cn',
-          headers: {'User-Agent': _userAgent},
-          followRedirects: false,
-          validateStatus: (status) => status != null,
-          connectTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(seconds: 30),
-          responseType: ResponseType.json,
-        ),
-      )..interceptors.addAll([
-          _TronclassCookieInterceptor(instance._cookieJar),
-          _TronclassAuthInterceptor(() => instance._sessionId),
-        ]);
+      instance._dio =
+          Dio(
+              BaseOptions(
+                baseUrl: TronclassGuetConstants.portalBaseUrl,
+                headers: {'User-Agent': _userAgent},
+                followRedirects: false,
+                validateStatus: (status) => status != null,
+                connectTimeout: const Duration(seconds: 30),
+                receiveTimeout: const Duration(seconds: 30),
+                responseType: ResponseType.json,
+              ),
+            )
+            ..interceptors.addAll([
+              _TronclassCookieInterceptor(instance._cookieJar),
+              _TronclassAuthInterceptor(() => instance._sessionId),
+            ]);
 
       // 创建 CAS Dio 实例（用于 CAS 认证）
       instance._casDio = Dio(
         BaseOptions(
-          baseUrl: 'https://cas.guet.edu.cn/',
+          baseUrl: '${TronclassGuetConstants.casBaseUrl}/',
           headers: {'User-Agent': _userAgent},
           followRedirects: false,
           validateStatus: (status) => status != null,
@@ -87,14 +91,16 @@ class TronclassClient {
       )..interceptors.add(_TronclassCookieInterceptor(instance._cookieJar));
 
       // 从 TronclassAuthManager 读取 session
-      instance._sessionId = await TronclassAuthManager.getSessionIdForUser(userId);
+      instance._sessionId = await TronclassAuthManager.getSessionIdForUser(
+        userId,
+      );
       _instances[userId] = instance;
     }
     return _instances[userId]!;
   }
 
   /// 登录：获取并保存新的 session
-  Future<String> login({
+  Future<String?> login({
     required String username,
     required String password,
     required Future<String> Function(Uint8List image) captchaProvider,
@@ -156,10 +162,7 @@ class _TronclassCookieInterceptor extends Interceptor {
   }
 
   @override
-  void onResponse(
-    Response response,
-    ResponseInterceptorHandler handler,
-  ) async {
+  void onResponse(Response response, ResponseInterceptorHandler handler) async {
     final setCookieHeaders = response.headers['set-cookie'];
     if (setCookieHeaders != null) {
       final cookies = setCookieHeaders
@@ -183,7 +186,7 @@ class _TronclassAuthInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     final url = options.uri.toString();
-    if (url.contains('https://courses.guet.edu.cn/')) {
+    if (url.contains('${TronclassGuetConstants.portalBaseUrl}/')) {
       final sessionId = getSessionId();
       if (sessionId != null) {
         options.headers['x-session-id'] = sessionId;
@@ -205,14 +208,19 @@ class _TronclassAuthInterceptor extends Interceptor {
 /// 畅课登录服务 - 借鉴 tronclass_plus 的 TronClassService
 class _TronclassLoginService {
   /// 完整登录流程：OAuth code -> access_token -> session_id
-  static Future<String> login(
+  static Future<String?> login(
     Dio casDio,
     Dio dio, {
     required String username,
     required String password,
     required Future<String> Function(Uint8List image) captchaHandler,
   }) async {
-    final code = await _getLoginCode(casDio, username, password, captchaHandler);
+    final code = await _getLoginCode(
+      casDio,
+      username,
+      password,
+      captchaHandler,
+    );
     final token = await _getAccessToken(dio, code: code);
     final sessionId = await _loginDesktopEndpoint(dio, accessToken: token);
     return sessionId;
@@ -225,12 +233,12 @@ class _TronclassLoginService {
     String password,
     Future<String> Function(Uint8List image) captchaHandler,
   ) async {
-    final url = 'https://identity.guet.edu.cn/auth/realms/guet/protocol/openid-connect/auth';
+    final url = TronclassGuetConstants.identityAuthUrl;
     final params = {
       'scope': 'openid',
       'response_type': 'code',
-      'redirect_uri': 'https://mobile.guet.edu.cn/cas-callback?_h5=true',
-      'client_id': 'TronClassH5',
+      'redirect_uri': TronclassGuetConstants.redirectUri,
+      'client_id': TronclassGuetConstants.clientId,
       'autologin': 'true',
     };
 
@@ -239,7 +247,7 @@ class _TronclassLoginService {
     final redirectUrlString = redirectUrl.toString();
 
     Uri callbackUrl;
-    if (redirectUrlString.contains('https://mobile.guet.edu.cn/cas-callback?_h5=true')) {
+    if (redirectUrlString.contains(TronclassGuetConstants.redirectUri)) {
       callbackUrl = redirectUrl;
     } else {
       final serviceUrl = redirectUrl.queryParameters['service'];
@@ -266,10 +274,10 @@ class _TronclassLoginService {
 
   /// 步骤2: code 换 access_token
   static Future<String> _getAccessToken(Dio dio, {required String code}) async {
-    final url = 'https://identity.guet.edu.cn/auth/realms/guet/protocol/openid-connect/token';
+    final url = TronclassGuetConstants.identityTokenUrl;
     final params = {
-      'client_id': 'TronClassH5',
-      'redirect_uri': 'https://mobile.guet.edu.cn/cas-callback?_h5=true',
+      'client_id': TronclassGuetConstants.clientId,
+      'redirect_uri': TronclassGuetConstants.redirectUri,
       'code': code,
       'grant_type': 'authorization_code',
       'scope': 'openid',
@@ -289,16 +297,22 @@ class _TronclassLoginService {
   }
 
   /// 步骤3: access_token 换 session_id
-  static Future<String> _loginDesktopEndpoint(Dio dio, {required String accessToken}) async {
-    final url = 'https://courses.guet.edu.cn/api/login?login=access_token';
+  static Future<String?> _loginDesktopEndpoint(
+    Dio dio, {
+    required String accessToken,
+  }) async {
+    final url = TronclassGuetConstants.portalAccessTokenLoginUrl;
     final data = {'access_token': accessToken, 'org_id': 1};
 
     final resp = await dio.post(url, data: data);
-    final sessionId = resp.headers.value('x-session-id');
-    if (sessionId == null) {
-      throw Exception('TronclassLogin: session_id is null');
+    final sessionId = resp.headers.value('x-session-id')?.trim();
+    if (sessionId != null && sessionId.isNotEmpty) {
+      return sessionId;
     }
-    return sessionId;
+    if (isSuccessfulTronclassDesktopLoginResponse(resp)) {
+      return null;
+    }
+    throw Exception('TronclassLogin: desktop login did not establish session');
   }
 
   /// CAS 认证登录
@@ -406,8 +420,12 @@ class _TronclassLoginService {
     }
 
     // 生成 64 字节随机字符串
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    final randomStr = List.generate(64, (_) => chars[random.nextInt(chars.length)]).join();
+    const chars =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    final randomStr = List.generate(
+      64,
+      (_) => chars[random.nextInt(chars.length)],
+    ).join();
 
     // 拼接并加密
     final plaintext = randomStr + password;
@@ -415,7 +433,11 @@ class _TronclassLoginService {
     final encryptKey = encrypt_pkg.Key(keyBytes);
     final ivKey = encrypt_pkg.IV(iv);
     final encrypter = encrypt_pkg.Encrypter(
-      encrypt_pkg.AES(encryptKey, mode: encrypt_pkg.AESMode.cbc, padding: 'PKCS7'),
+      encrypt_pkg.AES(
+        encryptKey,
+        mode: encrypt_pkg.AESMode.cbc,
+        padding: 'PKCS7',
+      ),
     );
     final encrypted = encrypter.encrypt(plaintext, iv: ivKey);
 

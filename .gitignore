@@ -3,6 +3,10 @@
 *.log
 *.pyc
 *.swp
+*.jks
+*.keystore
+*.p12
+*.pem
 .DS_Store
 .atom/
 .build/
@@ -33,6 +37,8 @@ migrate_working_dir/
 /coverage/
 .gradle-dist/
 .metadata
+.dart_appdata/
+.codex/
 
 # Symbolication related
 app.*.symbols
@@ -44,6 +50,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+android/local.properties
+android/key.properties
+android/app/key.properties
+key.properties
+key/
 
 # Reference directories (not needed for building)
 _ref/
@@ -52,8 +63,12 @@ _tmp/
 zhuaqu/
 yuketang/
 tronclass_plus-main/
+tronclass_plus-main*/
 chaoxing_ft-0.1/
+fuckketangpai_app-main/
 ktpwarp-server-master/
+third_party/zerotier_sockets/example/
+third_party/zerotier_sockets/test/
 
 # GitHub workflows (if not needed)
 .github/

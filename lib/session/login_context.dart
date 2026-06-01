@@ -4,6 +4,7 @@ import 'package:cookie_jar/cookie_jar.dart';
 import 'package:uuid/uuid.dart';
 
 import '../platform.dart';
+import '../tronclass_guet_constants.dart';
 import '../utils/browser_headers.dart';
 
 /// 登录上下文 - 为每次登录会话提供隔离的状态
@@ -157,14 +158,16 @@ class LoginDioFactory {
       ...BrowserHeadersManager.getStandardHeaders(referer: referer),
     };
 
-    final dio = Dio(BaseOptions(
-      baseUrl: baseUrl,
-      headers: headers,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 10),
-      followRedirects: true,
-      maxRedirects: 5,
-    ));
+    final dio = Dio(
+      BaseOptions(
+        baseUrl: baseUrl,
+        headers: headers,
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 10),
+        followRedirects: true,
+        maxRedirects: 5,
+      ),
+    );
 
     // 添加 Cookie 拦截器（使用上下文的临时 CookieJar）
     dio.interceptors.add(_LoginCookieInterceptor(context));
@@ -187,7 +190,7 @@ class LoginDioFactory {
       case PlatformType.ketangpai:
         return 'https://openapiv5.ketangpai.com';
       case PlatformType.tronclass:
-        return 'https://www.tronclass.com.cn';
+        return TronclassGuetConstants.portalBaseUrl;
       case PlatformType.weizhuojiao:
         return 'https://www.weizhuojiao.com'; // 微助教暂不支持
     }
@@ -233,10 +236,7 @@ class _LoginCookieInterceptor extends Interceptor {
   }
 
   @override
-  void onResponse(
-    Response response,
-    ResponseInterceptorHandler handler,
-  ) async {
+  void onResponse(Response response, ResponseInterceptorHandler handler) async {
     // 保存响应中的 Cookie 到上下文的临时 CookieJar
     final setCookieHeaders = response.headers['set-cookie'];
     if (setCookieHeaders != null && setCookieHeaders.isNotEmpty) {
@@ -253,7 +253,9 @@ class _LoginCookieInterceptor extends Interceptor {
         cookies,
       );
 
-      print('[LoginCookie] 保存 ${cookies.length} 个 Cookie 到上下文 ${context.contextId}');
+      print(
+        '[LoginCookie] 保存 ${cookies.length} 个 Cookie 到上下文 ${context.contextId}',
+      );
     }
 
     handler.next(response);
@@ -274,13 +276,17 @@ class _LoginLogInterceptor extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    print('[LoginDio] ${context.contextId} ← ${response.statusCode} ${response.requestOptions.uri}');
+    print(
+      '[LoginDio] ${context.contextId} ← ${response.statusCode} ${response.requestOptions.uri}',
+    );
     handler.next(response);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    print('[LoginDio] ${context.contextId} ✗ ${err.type} ${err.requestOptions.uri}');
+    print(
+      '[LoginDio] ${context.contextId} ✗ ${err.type} ${err.requestOptions.uri}',
+    );
     handler.next(err);
   }
 }

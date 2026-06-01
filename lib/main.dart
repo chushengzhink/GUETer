@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -12,14 +14,20 @@ import './pages/settings.dart';
 import './pages/tools_page.dart';
 import './pages/todos_page.dart';
 import './api/api_service.dart';
+import './modules/airchat/ui/nearby_room_page.dart';
+import './modules/local_transfer/local_transfer.dart';
+import './modules/zerotier/ui/zerotier_page.dart';
 import './session/cookie.dart';
 import './session/account.dart';
 import './session/app_settings.dart';
 import './session/license_ack.dart';
+import './session/startup_recovery_coordinator.dart';
 import './utils/global_palette.dart';
 import './platform.dart';
+import './theme/design_tokens.dart';
 import './theme/theme_style.dart';
 import './widgets/floating_nav_bar.dart';
+import './l10n/app_localizations.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,14 +41,25 @@ void main() async {
 
   // Initialize settings and api in parallel, then run platform/account/cookie chain.
   await Future.wait<void>([ApiService.initialize(), AppSettings.initialize()]);
+  await ApiService.beginStartupRecoverySession(reason: 'app_launch');
 
+  ApiService.logStartupRecovery('[Main] PlatformManager.initialize start');
   await PlatformManager().initialize();
+  ApiService.logStartupRecovery('[Main] PlatformManager.initialize done');
+  ApiService.logStartupRecovery('[Main] AccountManager.initialize start');
   await AccountManager.initialize();
+  ApiService.logStartupRecovery('[Main] AccountManager.initialize done');
+  ApiService.logStartupRecovery('[Main] CookieManager.initialize start');
   await CookieManager.initialize();
+  ApiService.logStartupRecovery('[Main] CookieManager.initialize done');
+  await LocalTransferModule.initialize(const LocalTransferConfig());
 
   registerCustomAcknowledgementLicenses();
 
   runApp(const MyApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(StartupRecoveryCoordinator.runAfterLaunch());
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -83,13 +102,12 @@ class MyApp extends StatelessWidget {
                     : baseDarkScheme;
 
                 return MaterialApp(
+                  navigatorKey: LocalTransferModule.navigatorKey,
                   title: 'GUETer',
-                  locale: const Locale('zh', 'CN'),
-                  supportedLocales: const [
-                    Locale('zh', 'CN'),
-                    Locale('en', 'US'),
-                  ],
-                  localizationsDelegates: const [
+                  locale: AppSettings.currentLocale,
+                  supportedLocales: AppLocalizations.supportedLocales,
+                  localizationsDelegates: [
+                    AppLocalizations.delegate,
                     GlobalMaterialLocalizations.delegate,
                     GlobalWidgetsLocalizations.delegate,
                     GlobalCupertinoLocalizations.delegate,
@@ -100,9 +118,13 @@ class MyApp extends StatelessWidget {
                   home: const MyHomePage(),
                   routes: {
                     '/accounts': (context) => const AccountsPage(),
+                    '/anonymous-chat': (context) => const NearbyRoomPage(),
+                    '/nearby-room': (context) => const NearbyRoomPage(),
                     '/login': (context) => const LoginPage(),
+                    '/local-transfer': (context) => const LocalTransferPage(),
                     '/reading': (context) => const ReadingPage(),
                     '/settings': (context) => const SettingsPage(),
+                    '/virtual-lan': (context) => const ZeroTierPage(),
                   },
                 );
               },
@@ -197,6 +219,24 @@ class MyApp extends StatelessWidget {
       chipTheme: ChipThemeData(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(style.chipRadius),
+        ),
+      ),
+      appBarTheme: AppBarTheme(
+        centerTitle: false,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        backgroundColor: colorScheme.surface,
+        foregroundColor: colorScheme.onSurface,
+        titleTextStyle: TextStyle(
+          color: colorScheme.onSurface,
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.large),
         ),
       ),
       dialogTheme: DialogThemeData(
@@ -299,23 +339,24 @@ class _MainPageState extends State<MainPage> {
     required String releaseNotes,
     required String downloadUrl,
   }) {
+    final l10n = AppLocalizations.of(context)!;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('发现新版本'),
+        title: Text(l10n.updateAvailableTitle),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '最新版本: v$latestVersion',
+                l10n.latestVersionLabel(latestVersion),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              const Text(
-                '更新内容:',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              Text(
+                l10n.updateNotesLabel,
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 4),
               Text(releaseNotes),
@@ -325,14 +366,14 @@ class _MainPageState extends State<MainPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('稍后'),
+            child: Text(l10n.laterButton),
           ),
           FilledButton(
             onPressed: () {
               Navigator.pop(context);
               launchUrl(Uri.parse(downloadUrl));
             },
-            child: const Text('前往下载'),
+            child: Text(l10n.downloadButton),
           ),
         ],
       ),
@@ -370,15 +411,27 @@ class _MainPageState extends State<MainPage> {
             index == 0,
           );
         },
-        items: const [
-          FloatingNavBarItem(icon: Icons.school_rounded, label: '课程'),
-          FloatingNavBarItem(icon: Icons.account_circle_rounded, label: '账号'),
+        items: [
+          FloatingNavBarItem(
+            icon: Icons.school_rounded,
+            label: AppLocalizations.of(context)!.appCourses,
+          ),
+          FloatingNavBarItem(
+            icon: Icons.account_circle_rounded,
+            label: AppLocalizations.of(context)!.appAccounts,
+          ),
           FloatingNavBarItem(
             icon: Icons.check_circle_outline_rounded,
-            label: '待办',
+            label: AppLocalizations.of(context)!.appTodos,
           ),
-          FloatingNavBarItem(icon: Icons.apps_rounded, label: '工具'),
-          FloatingNavBarItem(icon: Icons.settings_rounded, label: '设置'),
+          FloatingNavBarItem(
+            icon: Icons.apps_rounded,
+            label: AppLocalizations.of(context)!.appTools,
+          ),
+          FloatingNavBarItem(
+            icon: Icons.settings_rounded,
+            label: AppLocalizations.of(context)!.appSettings,
+          ),
         ],
       ),
     );

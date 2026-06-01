@@ -3,12 +3,15 @@ import 'package:dio/dio.dart';
 import 'dart:convert';
 
 import 'api_service.dart';
+import 'ketangpai_attendance_api.dart';
 import 'ketangpai_course.dart';
+import 'tronclass_sign_api.dart';
+import 'tronclass_client.dart';
 import '../session/account.dart';
-import '../session/tronclass_auth.dart';
 import '../utils/encrypt.dart';
 import '../models/active.dart';
 import '../models/course.dart';
+import '../models/tronclass_rollcalls.dart';
 
 class CXCourseApi {
   /// 获取课程列表
@@ -329,6 +332,7 @@ class CXCourseApi {
 class RCCourseApi {
   // userId -> [bearerToken, lessonToken]
   static final Map<String, List<String>> _tokens = {};
+  static Map<String, dynamic>? _lastCourseDebugSummary;
 
   static String get _currentSessionId => AccountManager.currentSessionId!;
 
@@ -343,6 +347,44 @@ class RCCourseApi {
 
   static void _setToken(String bearerToken, String lessonToken) {
     _tokens[_currentSessionId] = [bearerToken, lessonToken];
+  }
+
+  @visibleForTesting
+  static String buildLessonPageReferer(String lessonId) {
+    return 'https://www.yuketang.cn/lesson/student/v3/$lessonId?source=12';
+  }
+
+  @visibleForTesting
+  static String buildMiniProgramReferer() {
+    return 'https://servicewechat.com/wxdff6636b7cf6907d/207/page-frame.html';
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildCheckInRequestBody(
+    String lessonId, {
+    required int source,
+    bool joinIfNotIn = false,
+  }) {
+    final body = <String, dynamic>{'source': source, 'lessonId': lessonId};
+    if (joinIfNotIn) {
+      body['joinIfNotIn'] = true;
+    }
+    return body;
+  }
+
+  @visibleForTesting
+  static Map<String, String> buildCheckInHeaders({
+    String? referer,
+    String? bearerToken,
+  }) {
+    final headers = <String, String>{};
+    if (referer != null && referer.isNotEmpty) {
+      headers['Referer'] = referer;
+    }
+    if (bearerToken != null && bearerToken.isNotEmpty) {
+      headers['authorization'] = 'Bearer $bearerToken';
+    }
+    return headers;
   }
 
   static Future<Map<String, dynamic>?> getCourses() async {
@@ -369,11 +411,174 @@ class RCCourseApi {
     return null;
   }
 
+  static Map<String, dynamic> _normalizeStringMap(Map source) {
+    return source.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  static String _asTrimmedString(dynamic value) {
+    return value?.toString().trim() ?? '';
+  }
+
+  static Map<String, dynamic> _cloneCourseItem(
+    Map<String, dynamic> courseItem,
+  ) {
+    final cloned = Map<String, dynamic>.from(courseItem);
+    final teacher = cloned['teacher'];
+    if (teacher is Map) {
+      cloned['teacher'] = _normalizeStringMap(teacher);
+    }
+    return cloned;
+  }
+
+  static void _updateCourseDebugSummary(Map<String, dynamic> patch) {
+    final next = Map<String, dynamic>.from(_lastCourseDebugSummary ?? const {});
+    next.addAll(patch);
+    _lastCourseDebugSummary = next;
+  }
+
+  static Course _buildRainCourse(
+    Map<String, dynamic> courseItem, {
+    String? school,
+    String? lessonId,
+    required String logTag,
+  }) {
+    final normalized = _cloneCourseItem(courseItem);
+    if (lessonId != null && lessonId.trim().isNotEmpty) {
+      normalized['lesson_id'] = lessonId.trim();
+    }
+
+    final course = Course.fromRCJson(normalized);
+    if (school != null) {
+      course.schools = school;
+    }
+
+    debugPrint(
+      '[YKT][$logTag] name=${course.name} '
+      'course_id=${course.courseId} '
+      'classroom_id=${course.classId} '
+      'lesson_id=${course.lessonId ?? ''}',
+    );
+    return course;
+  }
+
   /// 获取处理后的课程列表
   static Future<List<Course>?> getCoursesList([
     Map<String, dynamic>? onLessonCourses,
   ]) async {
     try {
+      if (DateTime.now().millisecondsSinceEpoch >= 0) {
+        late Map<String, dynamic>? courses;
+        if (onLessonCourses == null) {
+          final results = await Future.wait([
+            getCourses(),
+            getOnLessonAndUpcomingExam(),
+          ]);
+          courses = results[0];
+          onLessonCourses = results[1];
+        } else {
+          courses = await getCourses();
+        }
+
+        if (courses == null || onLessonCourses == null) {
+          return null;
+        }
+
+        final courseListRaw = courses['data'];
+        final onLessonListRaw = onLessonCourses['data']?['onLessonClassrooms'];
+        if (courseListRaw is! List || onLessonListRaw is! List) {
+          _updateCourseDebugSummary({
+            'ok': false,
+            'reason': 'invalid course payload',
+            'courseItems': 0,
+            'onLessonItems': 0,
+            'mergedResult': 0,
+          });
+          return null;
+        }
+
+        final rawCourseItems = courseListRaw
+            .whereType<Map>()
+            .map(_normalizeStringMap)
+            .toList();
+        final onLessonItems = onLessonListRaw
+            .whereType<Map>()
+            .map(_normalizeStringMap)
+            .toList();
+
+        final coursesByClassroomId = <String, Map<String, dynamic>>{};
+        final coursesByCourseId = <String, Map<String, dynamic>>{};
+        for (final courseItem in rawCourseItems) {
+          final classroomId = _asTrimmedString(courseItem['classroom_id']);
+          final courseId = _asTrimmedString(courseItem['course_id']);
+          if (classroomId.isNotEmpty) {
+            coursesByClassroomId[classroomId] = courseItem;
+          }
+          if (courseId.isNotEmpty) {
+            coursesByCourseId.putIfAbsent(courseId, () => courseItem);
+          }
+        }
+
+        final school =
+            AccountManager.getAccountById(
+              AccountManager.currentSessionId!,
+            )?.school ??
+            'Unknown School';
+
+        var lessonByCourseId = 0;
+        var lessonByCourseAndClassId = 0;
+        final contentList = <Course>[];
+
+        for (final onLessonItem in onLessonItems) {
+          final courseId = _asTrimmedString(onLessonItem['courseId']);
+          final classroomId = _asTrimmedString(onLessonItem['classroomId']);
+          final lessonId = _asTrimmedString(onLessonItem['lessonId']);
+
+          Map<String, dynamic>? matched;
+          if (classroomId.isNotEmpty) {
+            matched = coursesByClassroomId[classroomId];
+          }
+          if (matched != null) {
+            lessonByCourseAndClassId++;
+          } else if (courseId.isNotEmpty) {
+            matched = coursesByCourseId[courseId];
+            if (matched != null) {
+              lessonByCourseId++;
+            }
+          }
+
+          if (matched == null) {
+            debugPrint(
+              '[YKT][course-detail] unmatched course_id=$courseId classroom_id=$classroomId lesson_id=$lessonId',
+            );
+            continue;
+          }
+
+          contentList.add(
+            _buildRainCourse(
+              matched,
+              school: school,
+              lessonId: lessonId,
+              logTag: 'merged',
+            ),
+          );
+        }
+
+        _updateCourseDebugSummary({
+          'ok': true,
+          'reason': '',
+          'courseItems': rawCourseItems.length,
+          'onLessonItems': onLessonItems.length,
+          'mergedResult': contentList.length,
+          'lessonByCourseId': lessonByCourseId,
+          'lessonByCourseAndClassId': lessonByCourseAndClassId,
+          'courseCode': courses['errcode'] ?? courses['code'] ?? 0,
+          'onLessonCode': onLessonCourses['code'] ?? 0,
+          'authExpired': false,
+        });
+
+        return contentList;
+      }
+
       late Map<String, dynamic>? courses;
       if (onLessonCourses == null) {
         final results = await Future.wait([
@@ -404,37 +609,101 @@ class RCCourseApi {
         return null;
       }
 
-      Map<String, dynamic> coursesMap = {
-        for (var courseItem in courses['data'])
-          courseItem['course_id'].toString(): courseItem,
-      };
+      final rawCourseItems = courses['data']
+          .whereType<Map>()
+          .map(_normalizeStringMap)
+          .toList();
+      final onLessonItems =
+          (onLessonCourses['data']['onLessonClassrooms'] as List)
+              .whereType<Map>()
+              .map(_normalizeStringMap)
+              .toList();
+
+      final coursesByClassroomId = <String, Map<String, dynamic>>{};
+      final coursesByCourseId = <String, Map<String, dynamic>>{};
+      for (final courseItem in rawCourseItems) {
+        final classroomId = _asTrimmedString(courseItem['classroom_id']);
+        final courseId = _asTrimmedString(courseItem['course_id']);
+        if (classroomId.isNotEmpty) {
+          coursesByClassroomId[classroomId] = courseItem;
+        }
+        if (courseId.isNotEmpty) {
+          coursesByCourseId.putIfAbsent(courseId, () => courseItem);
+        }
+      }
 
       List<Course> contentList = [];
+      var lessonByCourseId = 0;
+      var lessonByCourseAndClassId = 0;
 
       final school = AccountManager.getAccountById(
         AccountManager.currentSessionId!,
       )!.school;
 
-      for (var onLessonCourseItem
-          in onLessonCourses['data']['onLessonClassrooms']) {
-        final String courseId = onLessonCourseItem['courseId'];
-        if (coursesMap.containsKey(courseId)) {
-          var courseItem = coursesMap[courseId];
-          courseItem['lesson_id'] = onLessonCourseItem['lessonId'];
-          final courseObject = Course.fromRCJson(courseItem);
-          courseObject.schools = school;
-          contentList.add(courseObject);
+      for (final onLessonCourseItem in onLessonItems) {
+        final courseId = _asTrimmedString(onLessonCourseItem['courseId']);
+        final classroomId = _asTrimmedString(onLessonCourseItem['classroomId']);
+        final lessonId = _asTrimmedString(onLessonCourseItem['lessonId']);
+
+        Map<String, dynamic>? courseItem;
+        if (classroomId.isNotEmpty) {
+          courseItem = coursesByClassroomId[classroomId];
         }
+        if (courseItem != null) {
+          lessonByCourseAndClassId++;
+        } else if (courseId.isNotEmpty) {
+          courseItem = coursesByCourseId[courseId];
+          if (courseItem != null) {
+            lessonByCourseId++;
+          }
+        }
+
+        if (courseItem == null) {
+          debugPrint(
+            '[YKT][online-match] skip unmatched onLesson '
+            'course_id=$courseId classroom_id=$classroomId lesson_id=$lessonId',
+          );
+          continue;
+        }
+
+        contentList.add(
+          _buildRainCourse(
+            courseItem,
+            school: school,
+            lessonId: lessonId,
+            logTag: 'online-merged',
+          ),
+        );
       }
+
+      _updateCourseDebugSummary({
+        'ok': true,
+        'reason': '',
+        'courseItems': rawCourseItems.length,
+        'onLessonItems': onLessonItems.length,
+        'mergedResult': contentList.length,
+        'lessonByCourseId': lessonByCourseId,
+        'lessonByCourseAndClassId': lessonByCourseAndClassId,
+        'courseCode': courses['errcode'] ?? courses['code'] ?? 0,
+        'onLessonCode': onLessonCourses['code'] ?? 0,
+        'authExpired': false,
+      });
 
       return contentList;
     } catch (e, stackTrace) {
+      _updateCourseDebugSummary({'ok': false, 'reason': e.toString()});
       debugPrint('getCoursesList error: $e\n$stackTrace');
       return null;
     }
   }
 
-  static Future<int?> checkIn(String lessonId) async {
+  static Future<int?> checkIn(
+    String lessonId, {
+    required int source,
+    bool joinIfNotIn = false,
+    String? referer,
+    String? bearerToken,
+  }) async {
     try {
       final url = '/api/v3/lesson/checkin';
       final jsonData = {
@@ -442,9 +711,18 @@ class RCCourseApi {
         'lessonId': lessonId,
         'joinIfNotIn': true,
       };
+      jsonData['source'] = source;
+      if (!joinIfNotIn) {
+        jsonData.remove('joinIfNotIn');
+      }
+      final headers = buildCheckInHeaders(
+        referer: referer,
+        bearerToken: bearerToken,
+      );
       final response = await ApiService.sendRequest(
         url,
         method: 'POST',
+        headers: headers,
         body: jsonData,
       );
       final data = response.data;
@@ -457,11 +735,11 @@ class RCCourseApi {
       final int code = data['code'];
       if (code == 0) {
         // 为当前用户保存 bearerToken（从响应头获取）
-        final bearerToken = response.headers.value('set-auth');
+        final responseBearerToken = response.headers.value('set-auth');
         final lessonToken = data['data']?['lessonToken'];
 
-        if (bearerToken != null && lessonToken != null) {
-          _setToken(bearerToken, lessonToken);
+        if (responseBearerToken != null && lessonToken != null) {
+          _setToken(responseBearerToken, lessonToken);
         } else {
           debugPrint('checkIn: missing bearerToken or lessonToken');
         }
@@ -476,7 +754,20 @@ class RCCourseApi {
     return null;
   }
 
-  static Future<int?> scan(String qrCodeUrl) async {
+  static Future<int?> checkInFromLessonPage(String lessonId) async {
+    return checkIn(
+      lessonId,
+      source: 12,
+      referer: buildLessonPageReferer(lessonId),
+      bearerToken: getBearerToken(),
+    );
+  }
+
+  static Future<int?> checkInFromMiniProgram(String lessonId) async {
+    return checkIn(lessonId, source: 11, referer: buildMiniProgramReferer());
+  }
+
+  static Future<int?> scanDynamicQr(String qrCodeUrl) async {
     try {
       final url = '/api/v3/app/scan';
       final jsonData = {'url': qrCodeUrl};
@@ -500,7 +791,12 @@ class RCCourseApi {
           debugPrint('scan: missing lessonId in response');
           return null;
         }
-        final response = await checkIn(lessonId);
+        final response = await checkIn(
+          lessonId.toString(),
+          source: 21,
+          joinIfNotIn: true,
+          bearerToken: getBearerToken(),
+        );
         return response;
       } else {
         // {"code":51203,"msg":"动态二维码过期","data":{"type":"default","value":""}}
@@ -510,6 +806,10 @@ class RCCourseApi {
       debugPrint('scan error: $e');
     }
     return null;
+  }
+
+  static Future<int?> scan(String qrCodeUrl) async {
+    return scanDynamicQr(qrCodeUrl);
   }
 
   static Future<Map<String, dynamic>?> getPresentation(
@@ -611,6 +911,126 @@ class RCCourseApi {
   static Future<List<Course>?> getOnlineCoursesList() async {
     debugPrint('[YKT] getOnlineCoursesList 开始');
     try {
+      if (DateTime.now().millisecondsSinceEpoch >= 0) {
+        final results = await Future.wait([
+          ApiService.sendRequest(
+            '/v2/api/web/courses/list?identity=2',
+            method: 'GET',
+          ),
+          getOnLessonAndUpcomingExam(),
+        ]);
+
+        final coursesResponse = results[0] as Response;
+        final onLessonData = results[1] as Map<String, dynamic>?;
+
+        if (coursesResponse.data == null) {
+          debugPrint('[YKT] 响应数据为空');
+          return [];
+        }
+
+        if (coursesResponse.data is! Map) {
+          debugPrint('[YKT] 响应格式错误');
+          return [];
+        }
+
+        final data = _normalizeStringMap(coursesResponse.data as Map);
+        final errcode = data['errcode'] ?? 0;
+        if (errcode != 0) {
+          debugPrint('[YKT] API 返回错误: errcode=$errcode');
+          return [];
+        }
+
+        final listData = data['data']?['list'];
+        if (listData is! List) {
+          debugPrint('[YKT] 课程列表为空或格式错误');
+          return [];
+        }
+
+        final rawCourseItems = listData
+            .whereType<Map>()
+            .map(_normalizeStringMap)
+            .toList();
+        final onLessonItems =
+            ((onLessonData?['data']?['onLessonClassrooms']) as List?)
+                ?.whereType<Map>()
+                .map(_normalizeStringMap)
+                .toList() ??
+            <Map<String, dynamic>>[];
+
+        final coursesByClassroomId = <String, Map<String, dynamic>>{};
+        final coursesByCourseId = <String, Map<String, dynamic>>{};
+        for (final courseItem in rawCourseItems) {
+          final classroomId = _asTrimmedString(courseItem['classroom_id']);
+          final courseId = _asTrimmedString(courseItem['course_id']);
+          if (classroomId.isNotEmpty) {
+            coursesByClassroomId[classroomId] = courseItem;
+          }
+          if (courseId.isNotEmpty) {
+            coursesByCourseId.putIfAbsent(courseId, () => courseItem);
+          }
+        }
+
+        final school =
+            AccountManager.getAccountById(
+              AccountManager.currentSessionId!,
+            )?.school ??
+            '未知学校';
+
+        var lessonByCourseId = 0;
+        var lessonByCourseAndClassId = 0;
+        final onlineCourses = <Course>[];
+
+        for (final onLessonItem in onLessonItems) {
+          final courseId = _asTrimmedString(onLessonItem['courseId']);
+          final classroomId = _asTrimmedString(onLessonItem['classroomId']);
+          final lessonId = _asTrimmedString(onLessonItem['lessonId']);
+
+          Map<String, dynamic>? matched;
+          if (classroomId.isNotEmpty) {
+            matched = coursesByClassroomId[classroomId];
+          }
+          if (matched != null) {
+            lessonByCourseAndClassId++;
+          } else if (courseId.isNotEmpty) {
+            matched = coursesByCourseId[courseId];
+            if (matched != null) {
+              lessonByCourseId++;
+            }
+          }
+
+          if (matched == null) {
+            debugPrint(
+              '[YKT][online-list] unmatched course_id=$courseId classroom_id=$classroomId lesson_id=$lessonId',
+            );
+            continue;
+          }
+
+          onlineCourses.add(
+            _buildRainCourse(
+              matched,
+              school: school,
+              lessonId: lessonId,
+              logTag: 'online-list',
+            ),
+          );
+        }
+
+        _updateCourseDebugSummary({
+          'ok': true,
+          'reason': '',
+          'onlineRawCourses': rawCourseItems.length,
+          'onlineLessonItems': onLessonItems.length,
+          'onlineResult': onlineCourses.length,
+          'onlineLessonByCourseId': lessonByCourseId,
+          'onlineLessonByCourseAndClassId': lessonByCourseAndClassId,
+          'onlineCourseCode': errcode,
+          'onlinePayloadCode': onLessonData?['code'] ?? 0,
+        });
+
+        debugPrint('[YKT] 成功解析 ${onlineCourses.length} 门在线课程');
+        return onlineCourses;
+      }
+
       // 获取所有课程和正在上课的课程
       final results = await Future.wait([
         ApiService.sendRequest(
@@ -698,6 +1118,64 @@ class RCCourseApi {
   static Future<List<Course>?> getOfflineCoursesList() async {
     debugPrint('[YKT] getOfflineCoursesList 开始');
     try {
+      if (DateTime.now().millisecondsSinceEpoch >= 0) {
+        final response = await ApiService.sendRequest(
+          '/v2/api/web/courses/list?identity=2',
+          method: 'GET',
+        );
+
+        debugPrint('[YKT] courses/list 响应: ${response.data}');
+
+        if (response.data is! Map) {
+          debugPrint('[YKT] 响应格式错误');
+          return [];
+        }
+
+        final data = _normalizeStringMap(response.data as Map);
+        final errcode = data['errcode'] ?? 0;
+        if (errcode != 0) {
+          debugPrint('[YKT] API 返回错误: errcode=$errcode');
+          return [];
+        }
+
+        final listData = data['data']?['list'];
+        if (listData is! List) {
+          debugPrint('[YKT] 课程列表为空或格式错误');
+          return [];
+        }
+
+        final school =
+            AccountManager.getAccountById(
+              AccountManager.currentSessionId!,
+            )?.school ??
+            '未知学校';
+
+        final rawCourseItems = listData
+            .whereType<Map>()
+            .map(_normalizeStringMap)
+            .toList();
+        final offlineCourses = rawCourseItems
+            .map(
+              (courseItem) => _buildRainCourse(
+                courseItem,
+                school: school,
+                logTag: 'offline-list',
+              ),
+            )
+            .toList();
+
+        _updateCourseDebugSummary({
+          'ok': true,
+          'reason': '',
+          'offlineRawCourses': rawCourseItems.length,
+          'offlineResult': offlineCourses.length,
+          'offlineCourseCode': errcode,
+        });
+
+        debugPrint('[YKT] 成功解析 ${offlineCourses.length} 门离线课程');
+        return offlineCourses;
+      }
+
       // 获取所有课程
       final response = await ApiService.sendRequest(
         '/v2/api/web/courses/list?identity=2',
@@ -748,7 +1226,11 @@ class RCCourseApi {
   }
 
   static Map<String, dynamic>? getLastCourseDebugSummary() {
-    return null;
+    final summary = _lastCourseDebugSummary;
+    if (summary == null) {
+      return null;
+    }
+    return Map<String, dynamic>.from(summary);
   }
 
   static Future<String?> uploadImageToQiniu(dynamic file) async {
@@ -761,19 +1243,23 @@ class TCCourseApi {
   static Future<List<Course>?> getCoursesList() async {
     try {
       final userId = AccountManager.currentSessionId;
-      if (userId == null) return [];
+      if (userId == null || userId.isEmpty) {
+        debugPrint('[TCCourseApi] getCoursesList: userId is null or empty');
+        return [];
+      }
 
-      final url = 'https://courses.guet.edu.cn/api/users/$userId/courses';
-      final params = {'page': '1', 'per_page': '50'};
-
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'GET',
-        params: params,
+      final client = await TronclassClient.getInstance(userId);
+      final response = await client.dio.get(
+        '/api/users/$userId/courses',
+        queryParameters: const {'page': '1', 'per_page': '50'},
       );
+
       if (response.data is Map<String, dynamic>) {
         final data = response.data['data'];
         if (data is List) {
+          debugPrint(
+            '[TCCourseApi] getCoursesList: found ${data.length} courses',
+          );
           return data.whereType<Map<String, dynamic>>().map((e) {
             return Course(
               courseId: e['id']?.toString() ?? '',
@@ -786,112 +1272,393 @@ class TCCourseApi {
           }).toList();
         }
       }
+
+      debugPrint('[TCCourseApi] getCoursesList: no valid data in response');
       return [];
-    } catch (e) {
-      debugPrint('TCCourseApi.getCoursesList error: $e');
+    } catch (e, stackTrace) {
+      debugPrint('[TCCourseApi] getCoursesList error: $e');
+      debugPrint('[TCCourseApi] StackTrace: $stackTrace');
       return [];
     }
   }
 
   static Future<List<Active>> getSignActivities(String courseId) async {
-    return [];
+    try {
+      final response = await TronclassSignApi.getRollcalls();
+      final activities = <Active>[];
+
+      for (final rollcall in response.rollcalls) {
+        if (courseId.isNotEmpty && rollcall.courseId.toString() != courseId) {
+          continue;
+        }
+
+        activities.add(
+          Active(
+            type: 2,
+            id: rollcall.rollcallId.toString(),
+            name: rollcall.title.isEmpty ? '签到' : rollcall.title,
+            description: rollcall.courseTitle,
+            startTime: 0,
+            url: '',
+            status: rollcall.isInProgress,
+            extras: {
+              '_mode': rollcall.mode,
+              '_signed': rollcall.status == 'on_call_fine',
+              'rollcall_status': rollcall.rollcallStatus,
+              'rollcall_time': rollcall.rollcallTime,
+              'status': rollcall.status,
+              'class_name': rollcall.className,
+              'created_by_name': rollcall.createdByName,
+              'course_title': rollcall.courseTitle,
+              'course_id': rollcall.courseId,
+              'updated_at': rollcall.rollcallTime,
+              'created_at': rollcall.rollcallTime,
+            },
+          ),
+        );
+      }
+
+      debugPrint(
+        '[TCCourseApi] getSignActivities: courseId=$courseId, parsed ${activities.length} activities',
+      );
+      return activities;
+    } catch (e, stackTrace) {
+      debugPrint('[TCCourseApi] getSignActivities error: $e');
+      debugPrint('[TCCourseApi] StackTrace: $stackTrace');
+      return [];
+    }
   }
 
-  static Future<Map<String, dynamic>?> getRollcalls() async {
+  static Future<RollcallsResponse?> getRollcalls() async {
     try {
-      final userId = AccountManager.currentSessionId;
-      debugPrint('[TCCourseApi.getRollcalls] 当前用户ID: $userId');
-
-      final sessionId = await TronclassAuthManager.getCurrentSessionId();
-      debugPrint('[TCCourseApi.getRollcalls] 畅课 Session ID: ${sessionId?.substring(0, 20)}...');
-
-      final url = 'https://courses.guet.edu.cn/api/radar/rollcalls';
-      final params = {'api_version': '1.1.0'};
-
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'GET',
-        params: params,
-      );
-
-      debugPrint('[TCCourseApi.getRollcalls] 响应状态码: ${response.statusCode}');
-      debugPrint('[TCCourseApi.getRollcalls] 响应数据类型: ${response.data.runtimeType}');
-
-      if (response.data is Map<String, dynamic>) {
-        final rollcalls = response.data['rollcalls'];
-        debugPrint('[TCCourseApi.getRollcalls] 签到列表数量: ${rollcalls is List ? rollcalls.length : 0}');
-        return response.data;
-      }
-      return null;
+      return await TronclassSignApi.getRollcalls();
     } catch (e) {
       debugPrint('TCCourseApi.getRollcalls error: $e');
       return null;
     }
   }
 
-  static Future<Map<String, dynamic>> sign(
-    String rollcallId, {
-    String? mode,
-    String? qrPayload,
-    String? signCode,
-    String? numberCode,
-    double? radarLatitude,
-    double? radarLongitude,
-    double? radarAccuracy,
-    Map<String, dynamic>? data,
-  }) async {
-    try {
-      final url =
-          'https://courses.guet.edu.cn/api/radar/rollcalls/$rollcallId/sign';
-      final body = <String, dynamic>{};
-
-      if (mode != null) body['mode'] = mode;
-      if (qrPayload != null) body['qr_payload'] = qrPayload;
-      if (signCode != null) body['sign_code'] = signCode;
-      if (numberCode != null) body['number_code'] = numberCode;
-      if (radarLatitude != null) body['radar_latitude'] = radarLatitude;
-      if (radarLongitude != null) body['radar_longitude'] = radarLongitude;
-      if (radarAccuracy != null) body['radar_accuracy'] = radarAccuracy;
-      if (data != null) body.addAll(data);
-
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
-      );
-      if (response.data is Map<String, dynamic>) {
-        return {'success': true, 'data': response.data};
-      }
-      return {'success': false, 'message': 'Invalid response'};
-    } catch (e) {
-      debugPrint('TCCourseApi.sign error: $e');
-      return {'success': false, 'message': e.toString()};
-    }
-  }
-
   static Future<List<Map<String, dynamic>>> getTodos() async {
     try {
-      final url = 'https://courses.guet.edu.cn/api/todos';
-      final response = await ApiService.sendRequest(url, method: 'GET');
+      final userId = AccountManager.currentSessionId;
+      if (userId == null || userId.isEmpty) {
+        debugPrint('[TCCourseApi] getTodos: userId is null or empty');
+        return [];
+      }
+
+      final client = await TronclassClient.getInstance(userId);
+      final response = await client.dio.get('/api/todos');
 
       if (response.data is Map<String, dynamic>) {
         final data = response.data['data'];
         if (data is List) {
+          debugPrint('[TCCourseApi] getTodos: found ${data.length} todos');
           return data
               .whereType<Map>()
               .map((e) => Map<String, dynamic>.from(e))
               .toList();
         }
       }
+      debugPrint('[TCCourseApi] getTodos: no valid data in response');
       return [];
-    } catch (e) {
-      debugPrint('TCCourseApi.getTodos error: $e');
+    } catch (e, stackTrace) {
+      debugPrint('[TCCourseApi] getTodos error: $e');
+      debugPrint('[TCCourseApi] StackTrace: $stackTrace');
+      return [];
+    }
+  }
+
+  static Map<String, dynamic>? _asStringMap(dynamic value) {
+    if (value is! Map) return null;
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  static List<Map<String, dynamic>> _extractTronclassCourses(
+    dynamic responseData,
+  ) {
+    final root = _asStringMap(responseData);
+    if (root == null) return const [];
+
+    final candidates = <dynamic>[
+      root['courses'],
+      root['data'],
+      _asStringMap(root['data'])?['list'],
+    ];
+
+    for (final candidate in candidates) {
+      if (candidate is List) {
+        return candidate
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  item.map((key, value) => MapEntry(key.toString(), value)),
+            )
+            .toList();
+      }
+    }
+    return const [];
+  }
+
+  static String _tronclassResponseShape(dynamic responseData) {
+    final root = _asStringMap(responseData);
+    if (root == null) return 'type=${responseData.runtimeType}';
+    final data = root['data'];
+    final dataShape = data is Map
+        ? 'data.keys=[${data.keys.take(8).join(',')}]'
+        : 'data=${data.runtimeType}';
+    return 'keys=[${root.keys.take(12).join(',')}], $dataShape';
+  }
+
+  static DateTime? _parseTronclassDate(dynamic value) {
+    final raw = value?.toString().trim() ?? '';
+    if (raw.isEmpty || raw == 'null') return null;
+    return DateTime.tryParse(raw)?.toLocal();
+  }
+
+  static DateTime? _firstTronclassDate(
+    Map<String, dynamic> source,
+    List<String> keys,
+  ) {
+    for (final key in keys) {
+      final parsed = _parseTronclassDate(source[key]);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static String evaluateTronclassInteractionState(
+    Map<String, dynamic> classroom, {
+    DateTime? now,
+  }) {
+    final current = now ?? DateTime.now();
+    final finishAt = _parseTronclassDate(classroom['finish_at']);
+    if (finishAt != null) return '已结束';
+    final status = classroom['status']?.toString().trim().toLowerCase() ?? '';
+    if (status.isNotEmpty && status != 'start') return '已结束';
+
+    final deadline = _firstTronclassDate(classroom, const [
+      'end_time',
+      'end_at',
+      'deadline',
+      'closed_at',
+      'close_at',
+      'due_at',
+    ]);
+    if (deadline != null) {
+      return deadline.isBefore(current) ? '已过截止时间' : '进行中';
+    }
+
+    return '未设置截止';
+  }
+
+  static bool isTronclassInteractionOngoing(
+    Map<String, dynamic> classroom, {
+    DateTime? now,
+  }) {
+    return tronclassInteractionSkipReason(classroom, now: now) == null;
+  }
+
+  static String? tronclassInteractionSkipReason(
+    Map<String, dynamic> classroom, {
+    DateTime? now,
+  }) {
+    final status = classroom['status']?.toString().trim().toLowerCase() ?? '';
+    if (status != 'start') {
+      return status.isEmpty ? 'status empty' : 'status=$status';
+    }
+
+    final finishAtRaw = classroom['finish_at']?.toString().trim() ?? '';
+    if (finishAtRaw.isNotEmpty && finishAtRaw != 'null') {
+      return 'finish_at=$finishAtRaw';
+    }
+
+    final current = now ?? DateTime.now();
+    final deadline = _firstTronclassDate(classroom, const [
+      'end_time',
+      'end_at',
+      'deadline',
+      'closed_at',
+      'close_at',
+      'due_at',
+    ]);
+    if (deadline != null && deadline.isBefore(current)) {
+      return 'deadline expired=${deadline.toIso8601String()}';
+    }
+
+    return null;
+  }
+
+  static Future<List<TronclassInteractionItem>> getOngoingInteractions() async {
+    try {
+      final userId = AccountManager.currentSessionId;
+      if (userId == null || userId.isEmpty) {
+        debugPrint(
+          '[TCCourseApi] getOngoingInteractions: userId is null or empty',
+        );
+        return [];
+      }
+
+      final client = await TronclassClient.getInstance(userId);
+      final coursesResponse = await client.dio.get(
+        '/api/users/$userId/courses',
+        queryParameters: const {'page': '1', 'per_page': '50'},
+      );
+
+      debugPrint(
+        '[TCCourseApi] getOngoingInteractions: course response ${_tronclassResponseShape(coursesResponse.data)}',
+      );
+
+      final coursesData = _extractTronclassCourses(coursesResponse.data);
+      if (coursesData.isEmpty) {
+        debugPrint('[TCCourseApi] getOngoingInteractions: no valid courses');
+        return [];
+      }
+
+      final items = <TronclassInteractionItem>[];
+      for (final course in coursesData) {
+        final courseId = course['id']?.toString() ?? '';
+        if (courseId.isEmpty) continue;
+        final courseName = course['name']?.toString() ?? '未知课程';
+
+        try {
+          final classroomResponse = await client.dio.get(
+            '/api/courses/$courseId/classroom-list',
+          );
+          final classroomRoot = _asStringMap(classroomResponse.data);
+          final classrooms = classroomRoot?['classrooms'];
+          if (classrooms is! List) continue;
+
+          for (final classroomData in classrooms.whereType<Map>()) {
+            final classroom = classroomData.map(
+              (key, value) => MapEntry(key.toString(), value),
+            );
+            final id = classroom['id']?.toString() ?? '';
+            if (id.isEmpty) continue;
+            final skipReason = tronclassInteractionSkipReason(classroom);
+            if (skipReason != null) {
+              debugPrint(
+                '[TCCourseApi] skip interaction id=$id title=${classroom['title']} '
+                'status=${classroom['status']} start_at=${classroom['start_at']} '
+                'finish_at=${classroom['finish_at']} '
+                'updated_status_at=${classroom['updated_status_at']} '
+                'skipReason=$skipReason',
+              );
+              continue;
+            }
+
+            final status = classroom['status']?.toString() ?? '';
+            final stateLabel = evaluateTronclassInteractionState(classroom);
+
+            debugPrint(
+              '[TCCourseApi] interaction id=$id title=${classroom['title']} '
+              'status=$status start_at=${classroom['start_at']} '
+              'finish_at=${classroom['finish_at']} duration=${classroom['duration']} '
+              'updated_status_at=${classroom['updated_status_at']} state=$stateLabel',
+            );
+
+            items.add(
+              TronclassInteractionItem(
+                id: id,
+                title: classroom['title']?.toString() ?? '课堂互动',
+                courseId: courseId,
+                courseName: courseName,
+                startAt: classroom['start_at']?.toString() ?? '',
+                status: status,
+                stateLabel: stateLabel,
+              ),
+            );
+          }
+        } catch (e) {
+          debugPrint(
+            '[TCCourseApi] getOngoingInteractions: course $courseId error: $e',
+          );
+        }
+      }
+
+      items.sort((a, b) => b.startAt.compareTo(a.startAt));
+      debugPrint(
+        '[TCCourseApi] getOngoingInteractions: found ${items.length} items',
+      );
+      return items;
+    } catch (e, stackTrace) {
+      debugPrint('[TCCourseApi] getOngoingInteractions error: $e');
+      debugPrint('[TCCourseApi] StackTrace: $stackTrace');
       return [];
     }
   }
 }
 
+class TronclassInteractionItem {
+  const TronclassInteractionItem({
+    required this.id,
+    required this.title,
+    required this.courseId,
+    required this.courseName,
+    required this.startAt,
+    required this.status,
+    required this.stateLabel,
+  });
+
+  final String id;
+  final String title;
+  final String courseId;
+  final String courseName;
+  final String startAt;
+  final String status;
+  final String stateLabel;
+
+  Map<String, dynamic> toTodoMap() => {
+    'id': id,
+    'title': title,
+    'type': 'classroom',
+    'course_id': courseId,
+    'course_name': courseName,
+    'start_time': startAt,
+    'end_time': '',
+    'interaction_state': stateLabel,
+    'is_locked': false,
+  };
+}
+
 class KTCourseApi {
+  static int _contentTypeOf(Map<String, dynamic> item) {
+    return int.tryParse(
+          item['contenttype']?.toString() ??
+              item['contentType']?.toString() ??
+              '',
+        ) ??
+        -1;
+  }
+
+  static String _searchableTextOf(Map<String, dynamic> item) {
+    final parts = <String>[
+      item['title']?.toString() ?? '',
+      item['name']?.toString() ?? '',
+      item['activitylabel']?.toString() ?? '',
+      item['description']?.toString() ?? '',
+      item['summary']?.toString() ?? '',
+      item['typename']?.toString() ?? '',
+      item['type_name']?.toString() ?? '',
+      item['introduce']?.toString() ?? '',
+    ];
+    return parts
+        .where((part) => part.trim().isNotEmpty)
+        .join(' ')
+        .toLowerCase();
+  }
+
+  static List<Map<String, dynamic>> _filterKetangpaiContent(
+    List<Map<String, dynamic>> items,
+    bool Function(Map<String, dynamic> item, int contentType, String text)
+    matcher,
+  ) {
+    return items.where((item) {
+      final contentType = _contentTypeOf(item);
+      final text = _searchableTextOf(item);
+      return matcher(item, contentType, text);
+    }).toList();
+  }
+
   static Future<List<Course>> getCoursesList() async {
     try {
       debugPrint('[KTCourseApi] 直接调用 KTPCourseApi');
@@ -907,22 +1674,7 @@ class KTCourseApi {
 
   static Future<Map<String, dynamic>?> getCourseDetail(String courseId) async {
     try {
-      final url =
-          'https://openapiv5.ketangpai.com/CourseBigDataApi/getCourseBaseDataV2';
-      final body = {
-        'courseid': courseId,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
-      );
-      if (response.data is Map<String, dynamic> &&
-          response.data['status'] == 1) {
-        return response.data['data'];
-      }
-      return null;
+      return await KTPCourseApi.getCourseDetail(courseId);
     } catch (e) {
       debugPrint('KTCourseApi.getCourseDetail error: $e');
       return null;
@@ -934,7 +1686,9 @@ class KTCourseApi {
       debugPrint('[KTCourseApi] 调用 KTPCourseApi.getSigningCourses');
       final signingCourses = await KTPCourseApi.getSigningCourses();
       debugPrint('[KTCourseApi] 返回 ${signingCourses.length} 个正在签到的课程');
-      return signingCourses.map<Course>((data) => data['course'] as Course).toList();
+      return signingCourses
+          .map<Course>((data) => data['course'] as Course)
+          .toList();
     } catch (e, stackTrace) {
       debugPrint('KTCourseApi.getSigningCourses error: $e');
       debugPrint('StackTrace: $stackTrace');
@@ -955,7 +1709,8 @@ class KTCourseApi {
     }
   }
 
-  static Future<List<Map<String, dynamic>>> getSigningCoursesWithDetails() async {
+  static Future<List<Map<String, dynamic>>>
+  getSigningCoursesWithDetails() async {
     try {
       return await KTPCourseApi.getSigningCourses();
     } catch (e) {
@@ -966,57 +1721,32 @@ class KTCourseApi {
 
   static Future<List<dynamic>> getNotFinishSign(String courseId) async {
     try {
-      final url =
-          'https://openapiv5.ketangpai.com/AttenceApi/getNotFinishAttenceStudent';
-      final body = {
-        'courseid': courseId,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
-      );
-      if (response.data is Map<String, dynamic> &&
-          response.data['status'] == 1) {
-        final data = response.data['data'];
-        if (data is List) {
-          return data;
-        }
-      }
-      return [];
+      return await KTPCourseApi.getNotFinishSign(courseId);
     } catch (e) {
       debugPrint('KTCourseApi.getNotFinishSign error: $e');
       return [];
     }
   }
 
-  static Future<Map<String, dynamic>?> getCourseContent(String courseId) async {
+  static Future<Map<String, dynamic>?> getCourseContent(
+    String courseId, {
+    int contentType = 0,
+    int page = 1,
+    int limit = 50,
+  }) async {
     try {
-      final url =
-          'https://openapiv5.ketangpai.com/FutureV2/CourseMeans/getCourseContent';
-      final body = {
-        'courseid': courseId,
-        'courserole': 0,
-        'contenttype': 0,
-        'dirid': '0',
-        'lessonlink': [],
-        'desc': '2',
-        'page': 1,
-        'limit': 50,
-        'sort': [],
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      final list = await KTPCourseApi.getCourseContent(
+        courseId,
+        contentType: contentType,
+        page: page,
+        limit: limit,
       );
-      if (response.data is Map<String, dynamic> &&
-          response.data['status'] == 1) {
-        return response.data['data'];
-      }
-      return null;
+      return {
+        'list': list,
+        'contentType': contentType,
+        'page': page,
+        'limit': limit,
+      };
     } catch (e) {
       debugPrint('KTCourseApi.getCourseContent error: $e');
       return null;
@@ -1026,9 +1756,16 @@ class KTCourseApi {
   static Future<List<Map<String, dynamic>>> getCourseContentList(
     String courseId, {
     int contentType = 0,
+    int page = 1,
+    int limit = 50,
   }) async {
     try {
-      final content = await getCourseContent(courseId);
+      final content = await getCourseContent(
+        courseId,
+        contentType: contentType,
+        page: page,
+        limit: limit,
+      );
       if (content != null && content['list'] is List) {
         return (content['list'] as List)
             .whereType<Map>()
@@ -1048,15 +1785,111 @@ class KTCourseApi {
     return getCourseContentList(courseId, contentType: 4);
   }
 
-  static Future<Map<String, dynamic>?> getHomeworkDetail(
-    String homeworkId,
+  static Future<List<Map<String, dynamic>>> getAnnouncementList(
     String courseId,
   ) async {
-    return null;
+    final items = await getCourseContentList(courseId, contentType: 0);
+    return _filterKetangpaiContent(items, (item, contentType, text) {
+      return text.contains('公告') ||
+          text.contains('通知') ||
+          text.contains('announcement') ||
+          text.contains('notice');
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getAnswerQuestionList(
+    String courseId,
+  ) async {
+    final items = await getCourseContentList(courseId, contentType: 0);
+    return _filterKetangpaiContent(items, (item, contentType, text) {
+      return text.contains('互动答题') ||
+          text.contains('抢答') ||
+          text.contains('答题') ||
+          text.contains('question') ||
+          text.contains('作答');
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getSourceList(
+    String courseId,
+  ) async {
+    return getCourseContentList(courseId, contentType: 2);
+  }
+
+  static Future<List<Map<String, dynamic>>> getCourseWareList(
+    String courseId,
+  ) async {
+    final items = await getCourseContentList(courseId, contentType: 0);
+    return _filterKetangpaiContent(items, (item, contentType, text) {
+      return text.contains('课件') ||
+          text.contains('ppt') ||
+          text.contains('slides') ||
+          text.contains('讲义') ||
+          text.contains('幻灯');
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getTopicList(
+    String courseId,
+  ) async {
+    return getCourseContentList(courseId, contentType: 5);
+  }
+
+  static Future<Map<String, dynamic>?> getHomeworkDetail(
+    String courseId,
+    String homeworkId,
+  ) async {
+    try {
+      final homeworks = await getHomeworkList(courseId);
+      Map<String, dynamic>? matched;
+      for (final item in homeworks) {
+        final itemId =
+            item['id']?.toString() ?? item['homeworkid']?.toString() ?? '';
+        if (itemId == homeworkId) {
+          matched = item;
+          break;
+        }
+      }
+
+      if (matched == null) {
+        return null;
+      }
+
+      return {
+        'status': 1,
+        'data': {'homework': matched},
+      };
+    } catch (e) {
+      debugPrint('KTCourseApi.getHomeworkDetail error: $e');
+      return null;
+    }
   }
 
   static Future<Map<String, dynamic>?> getSignStatus(String courseId) async {
-    return null;
+    try {
+      final stats = await KetangpaiAttendanceApi.getAttendanceStats(courseId);
+      final history = await KetangpaiAttendanceApi.getAttendanceHistory(
+        courseId: courseId,
+        page: 1,
+        limit: 20,
+      );
+
+      return {
+        'status': 1,
+        'data': {
+          'attenceCount': stats['attendance'] ?? 0,
+          'lateCount': stats['late'] ?? 0,
+          'absentCount': stats['absent'] ?? 0,
+          'leaveEarlyCount': stats['leaveEarly'] ?? 0,
+          'pleaseCount': stats['leave'] ?? 0,
+          'total': history.length,
+          'lists': history,
+        },
+      };
+    } catch (e) {
+      debugPrint('KTCourseApi.getSignStatus error: $e');
+      return null;
+    }
   }
 
   static Future<Map<String, dynamic>?> getExamInfo(

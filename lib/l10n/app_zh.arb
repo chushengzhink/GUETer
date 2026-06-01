@@ -1,0 +1,322 @@
+{
+  "@@locale": "zh",
+  "appCourses": "课程",
+  "appAccounts": "账号",
+  "appTodos": "待办",
+  "appTools": "工具",
+  "appSettings": "设置",
+  "updateAvailableTitle": "发现新版本",
+  "latestVersionLabel": "最新版本: v{version}",
+  "@latestVersionLabel": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateNotesLabel": "更新内容:",
+  "laterButton": "稍后",
+  "downloadButton": "前往下载",
+  "anonymousChatTitle": "💬 匿名聊天",
+  "anonymousChatSubtitle": "基于 Nearby Connections 的附近设备匿名聊天与文件分享",
+  "localTransferTitle": "局域网快传",
+  "localTransferSubtitle": "兼容 LocalSend，局域网内自动发现并传输文件/文本",
+  "readingTitle": "阅读",
+  "readingSubtitle": "阅读功能已并入工具分区",
+  "academicSearchTitle": "📎 论文检索",
+  "academicSearchSubtitle": "并行检索 CrossRef 与 arXiv，支持 BibTeX 与 PDF 导出",
+  "apodCardTitle": "今日星空",
+  "apodLoadingSubtitle": "正在加载 NASA 今日天文图片...",
+  "apodErrorSubtitle": "无法加载今日天文图片",
+  "apodUnavailableSubtitle": "NASA 今日 APOD 不是图片，点击查看详情。",
+  "apodRefreshTooltip": "刷新天文图片",
+  "apodDetailTitle": "今日星空",
+  "apodDateLabel": "日期",
+  "apodAboutLabel": "简介",
+  "apodNonImageNotice": "NASA 今日 APOD 不是图片，原始内容可能是视频或其他媒体类型。",
+  "toolsPageTitle": "工具",
+  "toolsTabReading": "阅读",
+  "toolsTabPdf": "PDF",
+  "toolsTabGueter": "GUETer",
+  "pickPdfOutputDirectory": "选择 PDF 工具输出目录",
+  "statusSelectTool": "请选择一个工具开始",
+  "statusOutputDirChanged": "输出目录已切换为: {path}",
+  "@statusOutputDirChanged": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "statusOutputDirReset": "输出目录已恢复为默认临时目录",
+  "toolRunFailed": "执行失败: {error}",
+  "@toolRunFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "openFailedMessage": "打开失败: {message}",
+  "@openFailedMessage": {
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "pdfOutputShareText": "PDF 工具输出文件",
+  "pdfToImagesTitle": "PDF 转图片",
+  "pdfToImagesSubtitle": "导出为 PNG",
+  "imagesToPdfTitle": "图片合并 PDF",
+  "imagesToPdfSubtitle": "多图合一",
+  "compressPdfTitle": "PDF 压缩",
+  "compressPdfSubtitle": "减小体积",
+  "extractPagesTitle": "提取页面",
+  "extractPagesSubtitle": "按页码提取",
+  "watermarkTitle": "加水印",
+  "watermarkSubtitle": "防篡改保护",
+  "extractPagesDialogTitle": "输入提取页码",
+  "extractPagesHint": "示例: 1,3,5-8 (总页数 {count})",
+  "@extractPagesHint": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cancelButton": "取消",
+  "confirmButton": "确定",
+  "pdfToImagesComplete": "PDF 转图片完成，共导出 {count} 张",
+  "@pdfToImagesComplete": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "imagesToPdfComplete": "图片合并 PDF 完成",
+  "compressPdfComplete": "PDF 压缩完成",
+  "extractPagesComplete": "PDF 提取页面完成（{count} 页）",
+  "@extractPagesComplete": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "watermarkDialogTitle": "水印参数",
+  "watermarkTextLabel": "水印文字",
+  "watermarkTextHint": "例如：防篡改-姓名-日期",
+  "watermarkOpacityLabel": "透明度: {value}",
+  "@watermarkOpacityLabel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "watermarkAngleLabel": "旋转角度: {value}°",
+  "@watermarkAngleLabel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "watermarkFontSizeLabel": "字号: {value}",
+  "@watermarkFontSizeLabel": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "watermarkColorLabel": "颜色",
+  "watermarkColorDeepRed": "深红",
+  "watermarkColorDeepBlue": "深蓝",
+  "watermarkColorDeepGray": "深灰",
+  "watermarkColorBlack": "黑色",
+  "watermarkComplete": "PDF 加水印完成",
+  "pdfToolsTitle": "PDF 工具",
+  "recentTasksTitle": "最近任务",
+  "recentTasksCount": "{count} 条记录",
+  "@recentTasksCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "copyOutputPath": "复制输出路径",
+  "outputPathCopied": "已复制输出路径",
+  "gueterToolsTitle": "GUETer 工具",
+  "gueterToolsSubtitle": "收拢桂电常用官方入口",
+  "guetEmailTitle": "桂电邮箱",
+  "guetEmailSubtitle": "申请入口",
+  "guetOfficialTitle": "桂电官网",
+  "guetOfficialSubtitle": "学校主页",
+  "aiFigureTitle": "AI 论文配图生成",
+  "aiFigureSubtitle": "输入方法描述，自动生成学术插图",
+  "settingsAnnouncementTitle": "设置公告",
+  "settingsAnnouncementContent": "欢迎使用 GUETer。\n\n本项目仅提供本地化的学习辅助能力，不提供账号云端同步、密码代收或后台上传服务。\n\n账号、会话与相关本地记录采用加密后落盘保存；不会上传到本项目服务器，也不会主动发送你的账号密码。\n\n本公告为版本化提示，后续条款更新时会再次提示一次。\n\n如你所在学校、平台方或权利人对相关功能有异议，请以合规方式与我们联系处理。",
+  "reviewLaterButton": "稍后再看",
+  "gotItButton": "我已知晓",
+  "settingsSavedEmail": "学术 API 邮箱已保存",
+  "settingsClearedEmail": "学术 API 邮箱已清空",
+  "languageLabel": "语言",
+  "languageChinese": "简体中文",
+  "languageEnglish": "English",
+  "languageRestartHint": "修改后重启应用生效",
+  "languageSavedRestart": "语言设置已保存，重启应用后生效",
+  "themeAndAppearanceTitle": "外观与主题",
+  "themeAndAppearanceSubtitle": "配色方案、主题风格、主题模式",
+  "themeModeLabel": "主题模式",
+  "themeModeSystem": "跟随系统",
+  "themeModeLight": "浅色",
+  "themeModeDark": "深色护眼",
+  "themeStyleLabel": "主题风格",
+  "themeStyleModern": "现代（推荐）",
+  "themeStyleCompact": "紧凑",
+  "themeStylePlayful": "趣味",
+  "themeStyleMinimal": "极简",
+  "themeStyleBold": "大胆",
+  "themeStyleSoft": "柔和",
+  "randomPaletteTitle": "盲盒随机配色",
+  "randomPaletteSubtitle": "随机切换到一套不同的全局配色",
+  "academicToolsTitle": "学术工具",
+  "academicToolsSubtitle": "CrossRef mailto 邮箱与论文检索相关配置",
+  "academicApiEmailLabel": "学术 API 邮箱",
+  "academicApiEmailHint": "可选，用于 CrossRef mailto 参数",
+  "academicApiEmailDescription": "留空也可正常检索；填写后所有 CrossRef 请求会自动携带该邮箱，便于遵循其礼貌访问建议。",
+  "saveAcademicEmailTitle": "保存学术 API 邮箱",
+  "currentEmailUnset": "当前未设置邮箱",
+  "currentEmailValue": "当前邮箱: {email}",
+  "@currentEmailValue": {
+    "placeholders": {
+      "email": {
+        "type": "String"
+      }
+    }
+  },
+  "clearAcademicEmailTitle": "清空学术 API 邮箱",
+  "clearAcademicEmailSubtitle": "清空后 CrossRef 请求不再附带 mailto 参数",
+  "diagnosticsToggleTitle": "检查、诊断与修复工具",
+  "diagnosticsToggleSubtitle": "默认关闭，开启后可使用诊断功能",
+  "diagnosticsTitle": "检查、诊断与修复",
+  "diagnosticsSubtitle": "平台体检、报告导出与一键修复",
+  "checkPlatformsTitle": "检查四大平台连通性",
+  "checkPlatformsSubtitle": "学习通、雨课堂、畅课、课堂派",
+  "copyLastReportTooltip": "复制上次报告",
+  "lastReportCopied": "上次检查报告已复制",
+  "copyDiagnosticPackTitle": "生成诊断包并复制",
+  "copyDiagnosticPackSubtitle": "包含设置快照、账号统计、权限状态",
+  "fixCommonIssuesTitle": "一键修复常见问题",
+  "fixCommonIssuesSubtitle": "恢复推荐策略与默认平台地址",
+  "accountHealthTitle": "账号体检",
+  "accountHealthSubtitle": "检查四平台账号可用状态",
+  "batchPrecheckTitle": "批量签到预检",
+  "batchPrecheckSubtitle": "检查账号、权限、网络是否就绪",
+  "signRecordsTitle": "签到记录查询",
+  "signRecordsSubtitle": "按时间/平台/课程筛选，支持复制与分享",
+  "requestConsoleTitle": "请求控制台",
+  "requestConsoleSubtitle": "查看最近请求结果、重试与错误日志",
+  "securityAndPacingTitle": "安全与请求节奏",
+  "securityAndPacingSubtitle": "请求安全级别控制",
+  "strictSecurityModeTitle": "严格安全模式",
+  "strictSecurityModeSubtitle": "觉得可能请求过快的同学可以开启严格安全模式",
+  "securityLevelLabel": "请求安全级别：",
+  "securityLevelStrict": "严格",
+  "securityLevelStandard": "标准",
+  "securityModeStrictDescription": "当前模式：严格安全模式（签到类请求会额外降频）",
+  "securityModeStandardDescription": "当前模式：标准（默认）",
+  "beginnerGuideCardTitle": "新手引导",
+  "beginnerGuideCardSubtitle": "首次使用与常见排障建议",
+  "viewGuideButton": "查看引导内容",
+  "beginnerGuideDialogTitle": "新手引导（可关闭）",
+  "beginnerGuideDialogContent": "1. 先选平台再登录，对应平台账号互不影响。\n\n2. 畅课建议用“系统浏览器优先 + 会话复用优先”。\n\n3. 签到前先跑一次“批量签到预检”。\n\n4. 异常时先点“一键修复常见问题”，再生成诊断包反馈。",
+  "quickActionsTitle": "快捷操作",
+  "quickActionPlatformCheck": "平台体检",
+  "quickActionFix": "一键修复",
+  "quickActionRandomPalette": "随机配色",
+  "disclaimerCardTitle": "免责声明（请先阅读）",
+  "disclaimerCardSubtitle": "本地加密存储，不上传服务器",
+  "disclaimerDialogTitle": "免责声明",
+  "disclaimerDialogSummary": "简要说明：本项目不代收账号密码，不做云端同步，账号数据仅加密保存在本机。",
+  "disclaimerDialogContent": "免责声明（请先阅读）\n\n1. 本应用仅供学习交流与技术研究使用，不得用于任何违法违规用途。\n\n2. 本应用与学习通、雨课堂、畅课、课堂派、微助教等平台及其所属机构不存在官方合作关系。\n\n3. 用户应确保本人已获得对应平台账号与课程的合法使用授权，因个人操作导致的账号风险、数据损失或其他后果由用户自行承担。\n\n4. 本应用不提供账号云端同步、密码代收或后台上传服务；账号、会话与相关本地记录采用加密后落盘保存，不会上传到本项目服务器，也不会主动发送你的账号密码。\n\n5. 本应用不承诺服务连续可用，不对因网络波动、平台策略调整、接口变更、设备兼容问题导致的功能异常承担责任。\n\n6. 若你所在学校、平台方或权利人认为相关功能或展示内容存在不当，请及时联系我们处理。\n\n如有侵权请联系邮箱3177401522a@gmai.com",
+  "copyFullTextButton": "复制全文",
+  "disclaimerCopied": "免责声明已复制",
+  "themePaletteLabel": "配色方案",
+  "themePaletteLongPress": "长按切换",
+  "themeModeStatLabel": "主题模式",
+  "themeModeSwitched": "已切换至{mode}模式",
+  "@themeModeSwitched": {
+    "placeholders": {
+      "mode": {
+        "type": "String"
+      }
+    }
+  },
+  "colorSchemeSwitched": "已切换配色：{name}",
+  "@colorSchemeSwitched": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "randomPaletteSwitched": "已切换盲盒配色：{name}",
+  "@randomPaletteSwitched": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "colorSchemeAqua": "青碧",
+  "colorSchemeOcean": "海蓝",
+  "colorSchemeForest": "松绿",
+  "colorSchemeAmber": "琥珀",
+  "colorSchemeNight": "护眼夜色",
+  "colorSchemeRose": "暖红",
+  "colorSchemePurple": "紫罗兰",
+  "colorSchemeCyan": "青色",
+  "colorSchemeOrange": "活力橙",
+  "autoCloseWebLoginTitle": "网页登录成功后自动返回",
+  "autoCloseWebLoginSubtitle": "畅课网页登录拿到会话后自动关闭页面",
+  "batchPrecheckResultTitle": "批量签到预检结果",
+  "copyReportButton": "复制报告",
+  "closeButton": "关闭",
+  "precheckReportCopied": "预检报告已复制",
+  "copyButton": "复制",
+  "passwordCopied": "密码已复制到剪贴板"
+  ,
+  "computerHelpTitle": "\u7535\u8111\u901f\u67e5\u624b\u518c",
+  "computerHelpSubtitle": "\u79bb\u7ebf\u5185\u7f6e Windows \u548c\u5b89\u5353\u5e38\u89c1\u95ee\u9898\u6b65\u9aa4\u5361",
+  "computerHelpPageTitle": "\u7535\u8111\u901f\u67e5\u624b\u518c",
+  "computerHelpSearchHint": "\u6309\u95ee\u9898\u6807\u9898\u6216\u5173\u952e\u8bcd\u641c\u7d22",
+  "computerHelpAllCategories": "\u95ee\u9898\u5206\u7c7b",
+  "computerHelpAllPlatforms": "\u9002\u7528\u5e73\u53f0",
+  "computerHelpPlatformBoth": "\u53cc\u7aef",
+  "computerHelpPlatformWindows": "Windows",
+  "computerHelpPlatformAndroid": "\u5b89\u5353",
+  "computerHelpDiagnosisLabel": "\u9002\u7528\u573a\u666f",
+  "computerHelpStepsLabel": "\u64cd\u4f5c\u6b65\u9aa4",
+  "computerHelpTipsLabel": "\u5e38\u89c1\u8bef\u533a\u4e0e\u63d0\u793a",
+  "computerHelpKeywordsLabel": "\u5173\u952e\u8bcd",
+  "computerHelpCopySteps": "\u590d\u5236\u6b65\u9aa4",
+  "computerHelpCopyKeywords": "\u590d\u5236\u5173\u952e\u8bcd",
+  "computerHelpCopiedSteps": "\u5df2\u590d\u5236\u6b65\u9aa4",
+  "computerHelpCopiedKeywords": "\u5df2\u590d\u5236\u5173\u952e\u8bcd",
+  "computerHelpEmptyState": "\u6682\u65f6\u6ca1\u6709\u5339\u914d\u7684\u901f\u67e5\u6761\u76ee",
+  "computerHelpViewDetails": "\u67e5\u770b\u6b65\u9aa4",
+  "computerHelpCategoryFileTransfer": "\u6587\u4ef6\u4e92\u4f20",
+  "computerHelpCategoryArchives": "\u538b\u7f29\u5305",
+  "computerHelpCategoryFileBasics": "\u6587\u4ef6\u540d\u4e0e\u6269\u5c55\u540d",
+  "computerHelpCategoryPdf": "PDF",
+  "computerHelpCategoryCaptureProjection": "\u622a\u56fe\u5f55\u5c4f\u4e0e\u6295\u5c4f",
+  "computerHelpCategorySoftwareInstall": "\u8f6f\u4ef6\u4e0b\u8f7d\u4e0e\u5b89\u88c5",
+  "computerHelpCategoryDownloads": "\u6d4f\u89c8\u5668\u4e0b\u8f7d",
+  "computerHelpCategoryDeviceConnection": "U \u76d8 / \u84dd\u7259 / \u5fae\u4fe1\u4f20\u6587\u4ef6",
+  "computerHelpCategoryNetworkBlock": "\u88ab\u62e6\u622a\u7684\u4e0b\u8f7d"
+}

@@ -1,19 +1,36 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/timezone.dart' as tz;
-import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest_all.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
+
 import '../api/api_service.dart';
+
+class _OngoingTodoEntry {
+  const _OngoingTodoEntry({
+    required this.title,
+    required this.platform,
+    required this.deadline,
+  });
+
+  final String title;
+  final String platform;
+  final DateTime deadline;
+}
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
   NotificationService._internal();
 
-  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
   bool _initialized = false;
   bool _notificationsEnabled = true;
+  bool _showTodosOnLockScreen = true;
 
   static const String _notificationEnabledKey = 'notifications_enabled';
+  static const String _showTodosOnLockScreenKey =
+      'todo_notifications_show_on_lock_screen';
   static const int _ongoingNotificationId = 999999;
 
   Future<void> initialize() async {
@@ -22,7 +39,9 @@ class NotificationService {
     tz.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -38,29 +57,45 @@ class NotificationService {
 
     final prefs = await SharedPreferences.getInstance();
     _notificationsEnabled = prefs.getBool(_notificationEnabledKey) ?? true;
+    _showTodosOnLockScreen = prefs.getBool(_showTodosOnLockScreenKey) ?? true;
 
     _initialized = true;
-    ApiService.appendExternalConsoleLog('NotificationService', 'Initialized successfully');
+    ApiService.appendExternalConsoleLog(
+      'NotificationService',
+      'Initialized successfully',
+    );
   }
 
   Future<bool> checkPermissionStatus() async {
     if (!_initialized) await initialize();
 
-    final androidPlugin = _notifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _notifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (androidPlugin != null) {
       final granted = await androidPlugin.areNotificationsEnabled();
-      ApiService.appendExternalConsoleLog('NotificationService', 'Android permission status: $granted');
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'Android permission status: $granted',
+      );
       return granted ?? false;
     }
 
-    final iosPlugin = _notifications.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    final iosPlugin = _notifications
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
     if (iosPlugin != null) {
       final granted = await iosPlugin.requestPermissions(
         alert: false,
         badge: false,
         sound: false,
       );
-      ApiService.appendExternalConsoleLog('NotificationService', 'iOS permission status: $granted');
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'iOS permission status: $granted',
+      );
       return granted ?? false;
     }
 
@@ -70,21 +105,33 @@ class NotificationService {
   Future<bool> requestPermissions() async {
     if (!_initialized) await initialize();
 
-    final androidPlugin = _notifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _notifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (androidPlugin != null) {
       final granted = await androidPlugin.requestNotificationsPermission();
-      ApiService.appendExternalConsoleLog('NotificationService', 'Android permission granted: $granted');
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'Android permission granted: $granted',
+      );
       return granted ?? false;
     }
 
-    final iosPlugin = _notifications.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    final iosPlugin = _notifications
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
     if (iosPlugin != null) {
       final granted = await iosPlugin.requestPermissions(
         alert: true,
         badge: true,
         sound: true,
       );
-      ApiService.appendExternalConsoleLog('NotificationService', 'iOS permission granted: $granted');
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'iOS permission granted: $granted',
+      );
       return granted ?? false;
     }
 
@@ -102,72 +149,57 @@ class NotificationService {
     }
   }
 
+  Future<void> setShowTodosOnLockScreen(bool enabled) async {
+    if (!_initialized) await initialize();
+
+    _showTodosOnLockScreen = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_showTodosOnLockScreenKey, enabled);
+  }
+
   bool get notificationsEnabled => _notificationsEnabled;
 
-  Future<void> scheduleNotificationsForTodos(List<Map<String, dynamic>> todos, String platformName) async {
+  bool get showTodosOnLockScreen => _showTodosOnLockScreen;
+
+  Future<void> scheduleNotificationsForTodos(
+    List<Map<String, dynamic>> todos,
+    String platformName,
+  ) async {
     if (!_initialized || !_notificationsEnabled) return;
 
-    for (var todo in todos) {
+    for (final todo in todos) {
       await _scheduleNotificationForTodo(todo, platformName);
     }
   }
 
-  Future<void> updateOngoingNotification(List<Map<String, dynamic>> allPendingTodos) async {
+  Future<void> updateOngoingNotification(
+    List<Map<String, dynamic>> allPendingTodos,
+  ) async {
     if (!_initialized || !_notificationsEnabled) return;
 
     if (allPendingTodos.isEmpty) {
-      await _showOngoingNotification(
-        title: '所有待办已完成',
-        body: '暂无未完成的待办事项',
-        bigText: null,
-      );
-    } else {
-      final count = allPendingTodos.length;
-      final nearestTodo = allPendingTodos.first;
-      final todoTitle = nearestTodo['title']?.toString() ?? '未知任务';
-      final platform = nearestTodo['platform']?.toString() ?? '';
-
-      DateTime? deadline;
-      if (nearestTodo['end_time'] != null) {
-        try {
-          final endTimeStr = nearestTodo['end_time'].toString();
-          if (endTimeStr.contains('-')) {
-            final parsed = DateTime.parse(endTimeStr);
-            deadline = parsed.isUtc ? parsed.toLocal() : parsed;
-          } else {
-            final timestamp = int.tryParse(endTimeStr);
-            if (timestamp != null) {
-              final utcDate = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000, isUtc: true);
-              deadline = utcDate.add(const Duration(hours: 8));
-            }
-          }
-        } catch (_) {}
-      } else if (nearestTodo['endtime'] != null) {
-        try {
-          final timestamp = int.tryParse(nearestTodo['endtime'].toString());
-          if (timestamp != null && timestamp > 0) {
-            final parsed = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
-            deadline = parsed.isUtc ? parsed.add(const Duration(hours: 8)) : parsed;
-          }
-        } catch (_) {}
-      }
-
-      final deadlineStr = deadline != null ? _formatDeadline(deadline) : '未知';
-      final remainingStr = deadline != null ? _formatRemaining(deadline) : '';
-      final bigText = '[$platform] $todoTitle${remainingStr.isNotEmpty ? ' 剩余 $remainingStr' : ''} (截止 $deadlineStr)';
-
-      await _showOngoingNotification(
-        title: '您有 $count 项待办未完成',
-        body: '最近一项：$todoTitle',
-        bigText: bigText,
-      );
+      await _showOngoingNotification(title: '所有待办已完成', body: '暂无未完成的待办事项');
+      return;
     }
+
+    final visibleTodos = _buildVisibleOngoingTodos(allPendingTodos);
+    if (visibleTodos.isEmpty) {
+      await _showOngoingNotification(title: '暂无未截止的待办', body: '已截止的待办不会显示在通知栏');
+      return;
+    }
+
+    final nearestTodo = visibleTodos.first;
+    await _showOngoingNotification(
+      title: '您有 ${visibleTodos.length} 项待办未完成',
+      body: '最近一项：${nearestTodo.title}',
+      expandedTodos: visibleTodos,
+    );
   }
 
   Future<void> _showOngoingNotification({
     required String title,
     required String body,
-    String? bigText,
+    List<_OngoingTodoEntry>? expandedTodos,
   }) async {
     final androidDetails = AndroidNotificationDetails(
       'ongoing_todos',
@@ -178,13 +210,8 @@ class NotificationService {
       ongoing: true,
       autoCancel: false,
       showWhen: false,
-      styleInformation: bigText != null
-          ? BigTextStyleInformation(
-              bigText,
-              contentTitle: title,
-              summaryText: '待办提醒',
-            )
-          : null,
+      visibility: _androidVisibility,
+      styleInformation: _buildOngoingStyleInformation(title, expandedTodos),
     );
 
     const iosDetails = DarwinNotificationDetails(
@@ -199,56 +226,101 @@ class NotificationService {
     );
 
     try {
-      await _notifications.show(
-        _ongoingNotificationId,
-        title,
-        body,
-        details,
+      await _notifications.show(_ongoingNotificationId, title, body, details);
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'Updated ongoing notification: $title',
       );
-      ApiService.appendExternalConsoleLog('NotificationService', 'Updated ongoing notification: $title');
     } catch (e) {
-      ApiService.appendExternalConsoleLog('NotificationService', 'Failed to show ongoing notification: $e');
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'Failed to show ongoing notification: $e',
+      );
     }
   }
 
-  Future<void> _scheduleNotificationForTodo(Map<String, dynamic> todo, String platformName) async {
+  StyleInformation? _buildOngoingStyleInformation(
+    String title,
+    List<_OngoingTodoEntry>? expandedTodos,
+  ) {
+    if (expandedTodos == null || expandedTodos.isEmpty) {
+      return null;
+    }
+
+    if (expandedTodos.length == 1) {
+      final todo = expandedTodos.first;
+      return BigTextStyleInformation(
+        '${todo.title}\n平台：${todo.platform}\n截止：${_formatDeadline(todo.deadline)}（北京时间）',
+        contentTitle: title,
+        summaryText: '截止时间按北京时间显示',
+      );
+    }
+
+    final lines = expandedTodos
+        .map(
+          (todo) =>
+              '${todo.title} · ${todo.platform} · 截止 ${_formatDeadline(todo.deadline)}',
+        )
+        .toList();
+
+    return InboxStyleInformation(
+      lines,
+      contentTitle: title,
+      summaryText: '截止时间按北京时间显示',
+    );
+  }
+
+  List<_OngoingTodoEntry> _buildVisibleOngoingTodos(
+    List<Map<String, dynamic>> allPendingTodos,
+  ) {
+    final now = DateTime.now();
+    final todos = <_OngoingTodoEntry>[];
+
+    for (final todo in allPendingTodos) {
+      final deadline = _extractDeadline(todo);
+      if (deadline == null || deadline.isBefore(now)) {
+        continue;
+      }
+
+      final title = todo['title']?.toString().trim();
+      if (title == null || title.isEmpty) {
+        continue;
+      }
+
+      todos.add(
+        _OngoingTodoEntry(
+          title: title,
+          platform: _extractPlatformName(todo),
+          deadline: deadline,
+        ),
+      );
+    }
+
+    todos.sort((a, b) => a.deadline.compareTo(b.deadline));
+    return todos;
+  }
+
+  String _extractPlatformName(Map<String, dynamic> todo) {
+    final platform =
+        todo['platform_name']?.toString().trim() ??
+        todo['platform']?.toString().trim() ??
+        '';
+    return platform.isEmpty ? '未知平台' : platform;
+  }
+
+  Future<void> _scheduleNotificationForTodo(
+    Map<String, dynamic> todo,
+    String platformName,
+  ) async {
     final todoId = todo['id']?.toString() ?? '';
     if (todoId.isEmpty) return;
 
-    DateTime? deadline;
-    String title = todo['title']?.toString() ?? '未知任务';
-    String courseName = todo['course_name']?.toString() ?? todo['classroom_name']?.toString() ?? '';
-
-    if (todo['end_time'] != null) {
-      final endTimeStr = todo['end_time'].toString();
-      try {
-        if (endTimeStr.contains('-')) {
-          final parsed = DateTime.parse(endTimeStr);
-          deadline = parsed.isUtc ? parsed.toLocal() : parsed;
-        } else {
-          final timestamp = int.tryParse(endTimeStr);
-          if (timestamp != null) {
-            final utcDate = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000, isUtc: true);
-            deadline = utcDate.add(const Duration(hours: 8));
-            ApiService.appendExternalConsoleLog('NotificationService', '原始截止时间(UTC): ${utcDate.toIso8601String()}, 北京时间: ${deadline.year}-${deadline.month.toString().padLeft(2, '0')}-${deadline.day.toString().padLeft(2, '0')} ${deadline.hour.toString().padLeft(2, '0')}:${deadline.minute.toString().padLeft(2, '0')}');
-          }
-        }
-      } catch (e) {
-        ApiService.appendExternalConsoleLog('NotificationService', 'Failed to parse end_time: $e');
-      }
-    } else if (todo['endtime'] != null) {
-      final endTimeStr = todo['endtime'].toString();
-      try {
-        final timestamp = int.tryParse(endTimeStr);
-        if (timestamp != null && timestamp > 0) {
-          final parsed = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
-          deadline = parsed.isUtc ? parsed.add(const Duration(hours: 8)) : parsed;
-          ApiService.appendExternalConsoleLog('NotificationService', '原始截止时间: ${parsed.toIso8601String()}, 北京时间: ${deadline.year}-${deadline.month.toString().padLeft(2, '0')}-${deadline.day.toString().padLeft(2, '0')} ${deadline.hour.toString().padLeft(2, '0')}:${deadline.minute.toString().padLeft(2, '0')}');
-        }
-      } catch (e) {
-        ApiService.appendExternalConsoleLog('NotificationService', 'Failed to parse endtime: $e');
-      }
-    }
+    final deadline = _extractDeadline(todo);
+    final title = todo['title']?.toString() ?? '未知任务';
+    final courseName =
+        todo['course_name']?.toString() ??
+        todo['classroom_name']?.toString() ??
+        '';
 
     if (deadline == null) return;
 
@@ -262,9 +334,13 @@ class NotificationService {
     final oneHourBefore = deadline.subtract(const Duration(hours: 1));
     final oneDayBefore = deadline.subtract(const Duration(hours: 24));
 
-    final body = '$platformName · $courseName · 截止 ${_formatDeadline(deadline)}';
+    final body =
+        '$platformName · $courseName · 截止 ${_formatDeadline(deadline)}';
 
-    ApiService.appendExternalConsoleLog('NotificationService', '调度通知: $title 截止时间(北京时间) ${deadline.year}-${deadline.month.toString().padLeft(2, '0')}-${deadline.day.toString().padLeft(2, '0')} ${deadline.hour.toString().padLeft(2, '0')}:${deadline.minute.toString().padLeft(2, '0')}');
+    ApiService.appendExternalConsoleLog(
+      'NotificationService',
+      '调度通知: $title 截止时间(北京时间) ${_formatLogTime(deadline)}',
+    );
 
     if (oneDayBefore.isAfter(now)) {
       await _scheduleNotification(
@@ -279,7 +355,7 @@ class NotificationService {
     if (oneHourBefore.isAfter(now)) {
       await _scheduleNotification(
         id: notificationIdBase * 10 + 2,
-        title: '⚠️ 即将截止：$title',
+        title: '⏰ 即将截止：$title',
         body: body,
         scheduledDate: oneHourBefore,
         priority: Priority.high,
@@ -302,7 +378,7 @@ class NotificationService {
       priority: priority,
       fullScreenIntent: priority == Priority.high,
       category: AndroidNotificationCategory.alarm,
-      visibility: NotificationVisibility.public,
+      visibility: _androidVisibility,
     );
 
     const iosDetails = DarwinNotificationDetails(
@@ -325,11 +401,18 @@ class NotificationService {
         tz.TZDateTime.from(scheduledDate, tz.local),
         details,
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
       );
-      ApiService.appendExternalConsoleLog('NotificationService', 'Scheduled notification $id for $scheduledDate');
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'Scheduled notification $id for $scheduledDate',
+      );
     } catch (e) {
-      ApiService.appendExternalConsoleLog('NotificationService', 'Failed to schedule notification: $e');
+      ApiService.appendExternalConsoleLog(
+        'NotificationService',
+        'Failed to schedule notification: $e',
+      );
     }
   }
 
@@ -344,40 +427,86 @@ class NotificationService {
   Future<void> cancelAllNotifications() async {
     if (!_initialized) return;
     await _notifications.cancelAll();
-    ApiService.appendExternalConsoleLog('NotificationService', 'Cancelled all notifications');
+    ApiService.appendExternalConsoleLog(
+      'NotificationService',
+      'Cancelled all notifications',
+    );
   }
 
   Future<void> cancelOngoingNotification() async {
     if (!_initialized) return;
     await _notifications.cancel(_ongoingNotificationId);
-    ApiService.appendExternalConsoleLog('NotificationService', 'Cancelled ongoing notification');
+    ApiService.appendExternalConsoleLog(
+      'NotificationService',
+      'Cancelled ongoing notification',
+    );
   }
+
+  DateTime? _extractDeadline(Map<String, dynamic> todo) {
+    if (todo['end_time'] != null) {
+      final endTimeStr = todo['end_time'].toString();
+      try {
+        if (endTimeStr.contains('-')) {
+          final parsed = DateTime.parse(endTimeStr);
+          return parsed.isUtc ? parsed.toLocal() : parsed;
+        }
+
+        final timestamp = int.tryParse(endTimeStr);
+        if (timestamp != null) {
+          final utcDate = DateTime.fromMillisecondsSinceEpoch(
+            timestamp * 1000,
+            isUtc: true,
+          );
+          final deadline = utcDate.add(const Duration(hours: 8));
+          ApiService.appendExternalConsoleLog(
+            'NotificationService',
+            '原始截止时间(UTC): ${utcDate.toIso8601String()}, 北京时间: ${_formatLogTime(deadline)}',
+          );
+          return deadline;
+        }
+      } catch (e) {
+        ApiService.appendExternalConsoleLog(
+          'NotificationService',
+          'Failed to parse end_time: $e',
+        );
+      }
+    }
+
+    if (todo['endtime'] != null) {
+      final endTimeStr = todo['endtime'].toString();
+      try {
+        final timestamp = int.tryParse(endTimeStr);
+        if (timestamp != null && timestamp > 0) {
+          final parsed = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+          final deadline = parsed.isUtc
+              ? parsed.add(const Duration(hours: 8))
+              : parsed;
+          ApiService.appendExternalConsoleLog(
+            'NotificationService',
+            '原始截止时间: ${parsed.toIso8601String()}, 北京时间: ${_formatLogTime(deadline)}',
+          );
+          return deadline;
+        }
+      } catch (e) {
+        ApiService.appendExternalConsoleLog(
+          'NotificationService',
+          'Failed to parse endtime: $e',
+        );
+      }
+    }
+
+    return null;
+  }
+
+  NotificationVisibility get _androidVisibility => _showTodosOnLockScreen
+      ? NotificationVisibility.public
+      : NotificationVisibility.secret;
 
   String _formatDeadline(DateTime deadline) {
     return '${deadline.month.toString().padLeft(2, '0')}-${deadline.day.toString().padLeft(2, '0')} ${deadline.hour.toString().padLeft(2, '0')}:${deadline.minute.toString().padLeft(2, '0')}';
   }
 
-  String _formatRemaining(DateTime deadline) {
-    final now = DateTime.now();
-    final diff = deadline.difference(now);
-
-    if (diff.isNegative) {
-      final absDiff = diff.abs();
-      final hours = absDiff.inHours;
-      final minutes = absDiff.inMinutes % 60;
-      return '已截止 ${hours}时 ${minutes}分';
-    }
-
-    final days = diff.inDays;
-    final hours = diff.inHours % 24;
-    final minutes = diff.inMinutes % 60;
-
-    if (days > 0) {
-      return '${days}天 ${hours}时 ${minutes}分';
-    } else if (hours > 0) {
-      return '${hours}时 ${minutes}分';
-    } else {
-      return '${minutes}分';
-    }
+  String _formatLogTime(DateTime deadline) {
+    return '${deadline.year}-${deadline.month.toString().padLeft(2, '0')}-${deadline.day.toString().padLeft(2, '0')} ${deadline.hour.toString().padLeft(2, '0')}:${deadline.minute.toString().padLeft(2, '0')}';
   }
 }

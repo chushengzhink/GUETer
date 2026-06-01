@@ -1,0 +1,15 @@
+This product includes code adapted from the following Apache-2.0 projects:
+
+1. LocalSend
+   Copyright (c) LocalSend contributors
+   Source: https://github.com/localsend/localsend
+   License: Apache License 2.0
+
+2. LocalSend Protocol
+   Copyright (c) LocalSend contributors
+   Source: https://github.com/localsend/protocol
+   License: Apache License 2.0
+
+The LocalSend-derived files in this repository keep their attribution header
+and remain subject to the Apache-2.0 notice requirements alongside the
+repository's GPL-3.0 distribution terms.

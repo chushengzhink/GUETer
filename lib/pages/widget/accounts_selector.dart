@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../models/user.dart';
 import '../../session/account.dart';
 
@@ -11,7 +12,7 @@ class AccountsSelector extends StatefulWidget {
   const AccountsSelector({
     super.key,
     required this.onSelectionChanged,
-    this.title = '选择参加的账号',
+    this.title = '选择参与的账号',
     this.initiallyExpanded = true,
     this.initialSelected,
   });
@@ -27,10 +28,14 @@ class _AccountsSelectorState extends State<AccountsSelector> {
   bool _isLoading = true;
   late bool _isExpanded;
 
-  // 为tristate创造条件
-  bool get _hasSelectableAccounts => _allAccounts.any((user) => user != _currentUser);
-  int get _selectableCount => _allAccounts.where((user) => user != _currentUser).length;
-  int get _selectedSelectableCount => _selectedAccounts.where((user) => user != _currentUser).length;
+  bool get _hasSelectableAccounts =>
+      _allAccounts.any((user) => user.uid != _currentUser?.uid);
+
+  int get _selectableCount =>
+      _allAccounts.where((user) => user.uid != _currentUser?.uid).length;
+
+  int get _selectedSelectableCount =>
+      _selectedAccounts.where((user) => user.uid != _currentUser?.uid).length;
 
   @override
   void initState() {
@@ -41,53 +46,56 @@ class _AccountsSelectorState extends State<AccountsSelector> {
 
   void _loadAccounts() {
     try {
-      // 获取所有账号
-      _allAccounts = AccountManager.getAllAccounts();
-      
-      // 使用外部传入的初始选中状态，否则默认全选
+      _allAccounts = AccountManager.getCurrentPlatformAccounts();
+
       if (widget.initialSelected != null) {
-        _selectedAccounts = List.from(widget.initialSelected!);
+        _selectedAccounts = List<User>.from(widget.initialSelected!);
       } else {
-        _selectedAccounts = List.from(_allAccounts);
+        _selectedAccounts = List<User>.from(_allAccounts);
       }
 
       final currentUserId = AccountManager.currentSessionId;
-      _currentUser = AccountManager.getAccountById(currentUserId!);
+      _currentUser = currentUserId == null
+          ? null
+          : AccountManager.getAccountById(currentUserId);
     } catch (e) {
-      debugPrint('加载账号失败：$e');
+      debugPrint('加载账号失败: $e');
     }
-    // 通知外部初始选中状态
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() {
-          widget.onSelectionChanged(_selectedAccounts);
-          _isLoading = false;
-        });
+      if (!mounted) {
+        return;
       }
+      setState(() {
+        widget.onSelectionChanged(_selectedAccounts);
+        _isLoading = false;
+      });
     });
   }
 
-  // 全选/全不选逻辑
   void _toggleSelectAll(bool? value) {
-    bool selectAll = value ?? false;
-
+    final selectAll = value ?? false;
     final currentUser = _currentUser;
-    Set<User> newSelected = {?currentUser};
+    final newSelected = <User>[];
+
+    if (currentUser != null) {
+      newSelected.add(currentUser);
+    }
 
     if (selectAll) {
-      for (var user in _allAccounts) {
-        if (user != currentUser) {
+      for (final user in _allAccounts) {
+        if (user.uid != currentUser?.uid) {
           newSelected.add(user);
         }
       }
     }
+
     setState(() {
-      _selectedAccounts = newSelected.toList();
+      _selectedAccounts = newSelected;
       widget.onSelectionChanged(_selectedAccounts);
     });
   }
 
-  // 单个账号选择/取消
   void _toggleAccountSelection(User user, bool? value) {
     setState(() {
       if (value == true) {
@@ -128,21 +136,21 @@ class _AccountsSelectorState extends State<AccountsSelector> {
               const Text('全选'),
               Checkbox(
                 tristate: true,
-                value: !_hasSelectableAccounts ?
-                false : _selectedSelectableCount == _selectableCount ?
-                true : _selectedSelectableCount == 0 ?
-                false : null,
+                value: !_hasSelectableAccounts
+                    ? false
+                    : _selectedSelectableCount == _selectableCount
+                    ? true
+                    : _selectedSelectableCount == 0
+                    ? false
+                    : null,
                 onChanged: _hasSelectableAccounts ? _toggleSelectAll : null,
-                fillColor: WidgetStateProperty.resolveWith<Color>(
-                      (Set<WidgetState> states) {
-                    if (states.contains(WidgetState.selected)) {
-                      return Theme.of(context).colorScheme.primary;
-                    }
-                    return Colors.transparent;
-                  },
-                ),
+                fillColor: WidgetStateProperty.resolveWith<Color>((states) {
+                  if (states.contains(WidgetState.selected)) {
+                    return Theme.of(context).colorScheme.primary;
+                  }
+                  return Colors.transparent;
+                }),
               ),
-              // 展开/收起图标
               Icon(
                 _isExpanded ? Icons.expand_less : Icons.expand_more,
                 color: Colors.grey,
@@ -152,9 +160,9 @@ class _AccountsSelectorState extends State<AccountsSelector> {
           children: [
             if (_allAccounts.isEmpty)
               const Padding(
-                padding: EdgeInsets.all(16.0),
+                padding: EdgeInsets.all(16),
                 child: Text(
-                  '没有账户',
+                  '没有账号',
                   style: TextStyle(fontSize: 18, color: Colors.grey),
                 ),
               )
@@ -165,8 +173,8 @@ class _AccountsSelectorState extends State<AccountsSelector> {
                 itemCount: _allAccounts.length,
                 itemBuilder: (context, index) {
                   final user = _allAccounts[index];
-                  bool isCurrentUser = user == _currentUser;
-                  bool isSelected = _selectedAccounts.contains(user);
+                  final isCurrentUser = user.uid == _currentUser?.uid;
+                  final isSelected = _selectedAccounts.contains(user);
 
                   return CheckboxListTile(
                     title: Row(
@@ -176,7 +184,9 @@ class _AccountsSelectorState extends State<AccountsSelector> {
                           const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: Theme.of(context).colorScheme.primary,
                               borderRadius: BorderRadius.circular(12),
@@ -194,8 +204,9 @@ class _AccountsSelectorState extends State<AccountsSelector> {
                       ],
                     ),
                     value: isSelected,
-                    onChanged: isCurrentUser ?
-                    null : (bool? value) => _toggleAccountSelection(user, value),
+                    onChanged: isCurrentUser
+                        ? null
+                        : (value) => _toggleAccountSelection(user, value),
                     enabled: !isCurrentUser,
                     checkColor: isCurrentUser ? Colors.white : null,
                     activeColor: Theme.of(context).colorScheme.primary,

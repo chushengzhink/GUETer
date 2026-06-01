@@ -1,18 +1,24 @@
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:vibration/vibration.dart';
 import 'package:uuid/uuid.dart';
+import 'package:vibration/vibration.dart';
 
 import '../api/tronclass_sign_api.dart';
 import '../utils/tronclass_qr_parser.dart';
+import 'widget/tronclass_liquid_glass.dart';
 
 class TronclassQrSignPage extends StatefulWidget {
+  const TronclassQrSignPage({
+    super.key,
+    required this.rollcallId,
+    this.activityName,
+  });
+
   final String rollcallId;
   final String? activityName;
-
-  const TronclassQrSignPage({super.key, required this.rollcallId, this.activityName});
 
   @override
   State<TronclassQrSignPage> createState() => _TronclassQrSignPageState();
@@ -25,10 +31,9 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
   MobileScannerController? controller;
   double _currentScale = 1.0;
   double _baseScale = 1.0;
-  final double _scaleThreshold = 0.15;
   double _lastScaleUpdate = 1.0;
+  final double _scaleThreshold = 0.15;
   final double _zoomFactor = 2.0;
-
   bool isProcessing = false;
 
   @override
@@ -50,148 +55,72 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      if (mounted && !isProcessing) {
-        _ensureCameraRunning();
-      }
-    }
-  }
-
-  void _ensureCameraRunning() {
-    if (controller != null && mounted) {
+    if (state == AppLifecycleState.resumed && mounted && !isProcessing) {
       controller?.start();
     }
   }
 
   Future<void> _initAsync() async {
     try {
-      final hasVibration = await Vibration.hasCustomVibrationsSupport();
+      final supported = await Vibration.hasCustomVibrationsSupport();
       if (mounted) {
         setState(() {
-          hasCustomVibrationsSupport = hasVibration == true;
+          hasCustomVibrationsSupport = supported == true;
         });
       }
 
       final permission = await Permission.camera.request();
-      if (!permission.isGranted) {
-        if (mounted) {
-          _showResultAndExit(false, '请允许相机权限才能进行扫描二维码');
-        }
-        return;
+      if (!permission.isGranted && mounted) {
+        _showErrorAndRestart('请允许相机权限后再扫码');
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
-        _showResultAndExit(false, '初始化失败，请重试');
+        _showErrorAndRestart('初始化失败，请重试');
       }
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-        extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          iconTheme: const IconThemeData(color: Colors.white),
-          backgroundColor: Colors.transparent,
-          titleTextStyle: const TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-          elevation: 0,
-          actions: [
-            IconButton(
-              onPressed: () {
-                controller?.toggleTorch();
-                setState(() {
-                  isFlash = !isFlash;
-                });
-              },
-              icon: Icon(
-                isFlash ? Icons.flash_off_outlined : Icons.flash_on_outlined,
-              ),
-            ),
-          ],
-          title: const Text('二维码签到'),
-        ),
-        body: GestureDetector(
-          onScaleStart: (details) {
-            _baseScale = _currentScale;
-          },
-          onScaleUpdate: (details) {
-            double newScale =
-                (_baseScale * pow(details.scale, _zoomFactor)).clamp(1.0, 10.0);
-            if ((newScale - _lastScaleUpdate).abs() > _scaleThreshold) {
-              setState(() {
-                _currentScale = newScale;
-                double normalizedScale = log(_currentScale) / log(10.0);
-                controller?.setZoomScale(normalizedScale);
-                _lastScaleUpdate = newScale;
-              });
-            }
-          },
-          child: MobileScanner(
-            controller: controller,
-            onDetect: (capture) async {
-              if (isProcessing) return;
-
-              controller?.stop();
-              setState(() {
-                isProcessing = true;
-              });
-
-              if (hasCustomVibrationsSupport) {
-                Vibration.vibrate(duration: 100);
-              } else {
-                Vibration.vibrate();
-              }
-
-              await Future.delayed(const Duration(milliseconds: 100));
-              _handleScanResult(capture);
-            },
-            overlayBuilder: (context, constraints) => Center(
-              child: _ScannerBox(width: 300, height: 300),
-            ),
-          ),
-        ),
-      );
+  void _showErrorAndRestart(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+    _restartScan();
   }
 
-  void _handleScanResult(BarcodeCapture capture) {
-    try {
-      final code = capture.barcodes.firstOrNull?.rawValue;
-      if (code == null) {
-        _showResultAndRestart(false, '未识别到二维码');
-        return;
-      }
+  void _restartScan() {
+    if (!mounted) return;
+    setState(() {
+      isProcessing = false;
+    });
+    controller?.start();
+  }
 
-      final parsed = TronclassQrParser.parse(code);
-      if (parsed == null || parsed.isEmpty) {
-        _showResultAndRestart(false, '二维码格式错误');
-        return;
-      }
-
-      final scannedRollcallId = parsed['rollcallId']?.toString();
-      final data = parsed['data']?.toString();
-
-      if (scannedRollcallId == null || data == null) {
-        _showResultAndRestart(false, '二维码格式错误');
-        return;
-      }
-
-      if (scannedRollcallId != widget.rollcallId) {
-        _showResultAndRestart(false, '该二维码不属于当前签到会话');
-        return;
-      }
-
-      _navigateToSignResult(data);
-    } catch (e) {
-      _showResultAndRestart(false, '处理扫描结果时出错');
+  Future<void> _handleCapture(BarcodeCapture capture) async {
+    final raw = capture.barcodes.firstOrNull?.rawValue;
+    if (raw == null) {
+      _showErrorAndRestart('未识别到二维码');
+      return;
     }
-  }
 
-  void _navigateToSignResult(String data) {
-    Navigator.push(
+    final parsed = TronclassQrParser.parse(raw);
+    if (parsed == null || parsed.isEmpty) {
+      _showErrorAndRestart('二维码格式错误');
+      return;
+    }
+
+    final scannedRollcallId = parsed['rollcallId']?.toString();
+    final data = parsed['data']?.toString();
+    if (scannedRollcallId == null || data == null) {
+      _showErrorAndRestart('二维码格式错误');
+      return;
+    }
+
+    if (scannedRollcallId != widget.rollcallId) {
+      _showErrorAndRestart('该二维码不属于当前签到');
+      return;
+    }
+
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => _QrSignResultPage(
@@ -200,44 +129,223 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
           onBack: _restartScan,
         ),
       ),
-    ).then((_) {
-      if (mounted) _restartScan();
-    });
-  }
+    );
 
-  void _restartScan() {
     if (mounted) {
-      setState(() {
-        isProcessing = false;
-      });
-      controller?.start();
+      _restartScan();
     }
   }
 
-  void _showResultAndRestart(bool success, String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-    _restartScan();
-  }
+  @override
+  Widget build(BuildContext context) {
+    final title = widget.activityName?.trim().isNotEmpty == true
+        ? widget.activityName!.trim()
+        : '二维码签到';
 
-  void _showResultAndExit(bool success, String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('二维码签到'),
+        foregroundColor: Colors.white,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Tooltip(
+              message: isFlash ? '关闭闪光灯' : '打开闪光灯',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(999),
+                onTap: () {
+                  controller?.toggleTorch();
+                  setState(() {
+                    isFlash = !isFlash;
+                  });
+                },
+                child: Ink(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.22),
+                    ),
+                  ),
+                  child: Icon(
+                    isFlash
+                        ? Icons.flash_off_outlined
+                        : Icons.flash_on_outlined,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: GestureDetector(
+        onScaleStart: (_) {
+          _baseScale = _currentScale;
+        },
+        onScaleUpdate: (details) {
+          final nextScale = (_baseScale * pow(details.scale, _zoomFactor))
+              .clamp(1.0, 10.0);
+          if ((nextScale - _lastScaleUpdate).abs() > _scaleThreshold) {
+            setState(() {
+              _currentScale = nextScale;
+              final normalizedScale = log(_currentScale) / log(10.0);
+              controller?.setZoomScale(normalizedScale);
+              _lastScaleUpdate = nextScale;
+            });
+          }
+        },
+        child: MobileScanner(
+          controller: controller,
+          overlayBuilder: (context, _) => _ScannerOverlay(
+            title: title,
+            isFlashOn: isFlash,
+            isProcessing: isProcessing,
+          ),
+          onDetect: (capture) async {
+            if (isProcessing) return;
+
+            controller?.stop();
+            setState(() {
+              isProcessing = true;
+            });
+
+            if (hasCustomVibrationsSupport) {
+              await Vibration.vibrate(duration: 100);
+            } else {
+              await Vibration.vibrate();
+            }
+
+            await Future.delayed(const Duration(milliseconds: 100));
+            await _handleCapture(capture);
+          },
+        ),
+      ),
     );
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) Navigator.pop(context);
-    });
+  }
+}
+
+class _ScannerOverlay extends StatelessWidget {
+  const _ScannerOverlay({
+    required this.title,
+    required this.isFlashOn,
+    required this.isProcessing,
+  });
+
+  final String title;
+  final bool isFlashOn;
+  final bool isProcessing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withValues(alpha: 0.58),
+            Colors.black.withValues(alpha: 0.18),
+            Colors.black.withValues(alpha: 0.62),
+          ],
+        ),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 86, 16, 24),
+          child: Column(
+            children: [
+              TronclassGlassCard(
+                padding: const EdgeInsets.all(18),
+                tintColor: const Color(0x33FFFFFF),
+                boxShadows: const [],
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const TronclassGlassPill(
+                          label: '扫码识别',
+                          icon: Icons.qr_code_scanner_rounded,
+                          color: TronclassGlassPalette.mint,
+                          foregroundColor: Colors.white,
+                        ),
+                        const SizedBox(width: 8),
+                        TronclassGlassPill(
+                          label: isFlashOn ? '闪光灯已开' : '闪光灯已关',
+                          icon: isFlashOn
+                              ? Icons.flash_on_rounded
+                              : Icons.flash_off_rounded,
+                          color: Colors.white,
+                          foregroundColor: Colors.white,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      isProcessing
+                          ? '正在校验二维码并提交签到结果。'
+                          : '将二维码置于扫描框中央，系统会自动识别并提交。',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.86),
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              const Center(child: _ScannerBox(width: 300, height: 300)),
+              const Spacer(),
+              TronclassGlassCard(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 16,
+                ),
+                tintColor: const Color(0x26FFFFFF),
+                boxShadows: const [],
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.pinch_rounded, color: Colors.white, size: 18),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '支持双指缩放取景。识别失败时请确认二维码是否属于当前课程签到。',
+                        style: TextStyle(color: Colors.white, height: 1.45),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
 class _ScannerBox extends StatefulWidget {
+  const _ScannerBox({required this.width, required this.height});
+
   final double width;
   final double height;
-
-  const _ScannerBox({required this.width, required this.height});
 
   @override
   State<_ScannerBox> createState() => _ScannerBoxState();
@@ -245,8 +353,8 @@ class _ScannerBox extends StatefulWidget {
 
 class _ScannerBoxState extends State<_ScannerBox>
     with SingleTickerProviderStateMixin {
-  late AnimationController _animationController;
-  late Animation<double> _animation;
+  late final AnimationController _animationController;
+  late final Animation<double> _animation;
 
   @override
   void initState() {
@@ -255,8 +363,9 @@ class _ScannerBoxState extends State<_ScannerBox>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
-    _animation = Tween<double>(begin: 0.0, end: widget.height)
-        .animate(_animationController);
+    _animation = Tween<double>(begin: 18, end: widget.height - 18).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
   }
 
   @override
@@ -273,9 +382,7 @@ class _ScannerBoxState extends State<_ScannerBox>
       child: AnimatedBuilder(
         animation: _animation,
         builder: (context, child) {
-          return CustomPaint(
-            painter: _ScannerBoxPainter(_animation.value),
-          );
+          return CustomPaint(painter: _ScannerBoxPainter(_animation.value));
         },
       ),
     );
@@ -283,56 +390,112 @@ class _ScannerBoxState extends State<_ScannerBox>
 }
 
 class _ScannerBoxPainter extends CustomPainter {
-  final double position;
+  const _ScannerBoxPainter(this.position);
 
-  _ScannerBoxPainter(this.position);
+  final double position;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final gradient = const LinearGradient(
-      colors: [Colors.blue, Colors.lightBlueAccent],
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(30));
+
+    final fillPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.08)
+      ..style = PaintingStyle.fill;
+    final borderPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF95F2FF), Color(0xFF2FE1D4), Color(0xFF7AB8FF)],
+      ).createShader(rect)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2;
+    final sweepPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: [Color(0x0044F0FF), Color(0xCC8EF8FF), Color(0x0044F0FF)],
+      ).createShader(Rect.fromLTWH(0, position - 12, size.width, 24))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+
+    canvas.drawRRect(rrect, fillPaint);
+    canvas.drawRRect(rrect, borderPaint);
+    canvas.drawLine(
+      Offset(28, position),
+      Offset(size.width - 28, position),
+      sweepPaint,
     );
 
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(8.0));
-
-    final borderPaint = Paint()
-      ..shader = gradient.createShader(rect)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-
-    canvas.drawRRect(rrect, borderPaint);
-
-    final linePaint = Paint()
-      ..shader = gradient.createShader(rect)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+    const cornerLength = 28.0;
+    final cornerPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round;
 
     canvas.drawLine(
-      Offset(0, position),
-      Offset(size.width, position),
-      linePaint,
+      const Offset(0, cornerLength),
+      const Offset(0, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      const Offset(0, 0),
+      const Offset(cornerLength, 0),
+      cornerPaint,
+    );
+
+    canvas.drawLine(
+      Offset(size.width - cornerLength, 0),
+      Offset(size.width, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      Offset(size.width, 0),
+      Offset(size.width, cornerLength),
+      cornerPaint,
+    );
+
+    canvas.drawLine(
+      Offset(0, size.height - cornerLength),
+      Offset(0, size.height),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      Offset(0, size.height),
+      Offset(cornerLength, size.height),
+      cornerPaint,
+    );
+
+    canvas.drawLine(
+      Offset(size.width - cornerLength, size.height),
+      Offset(size.width, size.height),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      Offset(size.width, size.height - cornerLength),
+      Offset(size.width, size.height),
+      cornerPaint,
     );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant _ScannerBoxPainter oldDelegate) {
+    return oldDelegate.position != position;
+  }
 }
 
 enum _QrSignState { loading, success, failure }
 
 class _QrSignResultPage extends StatefulWidget {
-  final String rollcallId;
-  final String data;
-  final VoidCallback? onBack;
-
   const _QrSignResultPage({
     required this.rollcallId,
     required this.data,
     this.onBack,
   });
+
+  final String rollcallId;
+  final String data;
+  final VoidCallback? onBack;
 
   @override
   State<_QrSignResultPage> createState() => _QrSignResultPageState();
@@ -350,34 +513,41 @@ class _QrSignResultPageState extends State<_QrSignResultPage> {
 
   Future<void> _performSignIn() async {
     try {
-      final deviceId = const Uuid().v4();
+      final response =
+          await TronclassSignApi.signQr(
+            rollcallId: widget.rollcallId,
+            data: widget.data,
+            deviceId: const Uuid().v4(),
+          ).timeout(
+            const Duration(seconds: 30),
+            onTimeout: () => throw Exception('timeout'),
+          );
 
-      final response = await TronclassSignApi.signQr(
-        rollcallId: widget.rollcallId,
-        data: widget.data,
-        deviceId: deviceId,
-      ).timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => throw Exception('网络请求超时'),
-      );
-
-      final responseData = response.data;
-      final isSuccessful = TronclassSignApi.isSignSuccess(responseData);
-
-      if (mounted) {
-        setState(() {
-          currentState = isSuccessful ? _QrSignState.success : _QrSignState.failure;
-          message = TronclassSignApi.getSignMessage(response);
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        currentState = TronclassSignApi.isSignSuccess(response)
+            ? _QrSignState.success
+            : _QrSignState.failure;
+        message = TronclassSignApi.getSignMessage(response.data);
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          currentState = _QrSignState.failure;
-          message = e.toString().contains('超时') ? '网络连接超时，请检查网络' : '签到失败，请重试';
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        currentState = _QrSignState.failure;
+        message = e.toString().contains('timeout')
+            ? '网络连接超时，请检查网络后重试'
+            : '签到失败，请重试';
+      });
     }
+  }
+
+  void _handlePrimaryAction(bool success) {
+    if (success) {
+      Navigator.pop(context);
+      return;
+    }
+    widget.onBack?.call();
+    Navigator.pop(context);
   }
 
   @override
@@ -391,57 +561,51 @@ class _QrSignResultPageState extends State<_QrSignResultPage> {
           }
         },
         child: Scaffold(
-          body: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0xFF01b9bb), Color(0xFF29cbcd)],
-              ),
-            ),
+          backgroundColor: Colors.transparent,
+          body: TronclassGlassBackground(
             child: SafeArea(
-              child: Column(
-                children: [
-                  SizedBox(
-                    height: 60,
-                    child: Row(
-                      children: [
-                        IconButton(
-                          onPressed: () => widget.onBack?.call(),
-                          icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
-                        ),
-                        const Expanded(
-                          child: Center(
-                            child: Text(
-                              '二维码签到',
-                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: Colors.white),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 48),
-                      ],
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: IconButton(
+                        onPressed: widget.onBack,
+                        icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: Center(
+                    const Spacer(),
+                    TronclassGlassCard(
+                      padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
                       child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          const SizedBox(
-                            height: 200,
-                            child: Center(
-                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+                          const CircularProgressIndicator(),
+                          const SizedBox(height: 18),
+                          const Text(
+                            '正在提交二维码签到',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: TronclassGlassPalette.text,
                             ),
                           ),
-                          const SizedBox(height: 30),
-                          const Text('正在签到', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 10),
-                          Text(message, style: const TextStyle(fontSize: 14, color: Colors.white), textAlign: TextAlign.center),
+                          Text(
+                            message,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: TronclassGlassPalette.mutedText,
+                              height: 1.5,
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                  ),
-                ],
+                    const Spacer(),
+                  ],
+                ),
               ),
             ),
           ),
@@ -449,71 +613,82 @@ class _QrSignResultPageState extends State<_QrSignResultPage> {
       );
     }
 
+    final success = currentState == _QrSignState.success;
     return Scaffold(
-      appBar: AppBar(title: const Text('二维码签到')),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 64.0, vertical: 32),
-                      child: Icon(
-                        currentState == _QrSignState.success ? Icons.check_circle : Icons.error,
-                        size: 120,
-                        color: currentState == _QrSignState.success ? Colors.green : Colors.red,
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(title: const Text('二维码签到结果')),
+      body: TronclassGlassBackground(
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Column(
+              children: [
+                const Spacer(),
+                TronclassGlassCard(
+                  padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                  child: Column(
+                    children: [
+                      TronclassGlassPill(
+                        label: success ? '签到成功' : '签到失败',
+                        icon: success
+                            ? Icons.check_circle_rounded
+                            : Icons.error_rounded,
+                        color: success
+                            ? TronclassGlassPalette.success
+                            : TronclassGlassPalette.danger,
                       ),
+                      const SizedBox(height: 18),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 36),
+                        child: Image.asset(
+                          success
+                              ? 'assets/images/qr_sign_ok.png'
+                              : 'assets/images/qr_sign_failed.png',
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        success ? '签到完成' : '本次签到未通过',
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: TronclassGlassPalette.text,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.55,
+                          color: TronclassGlassPalette.mutedText,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                TronclassGlassCard(
+                  padding: const EdgeInsets.all(8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => _handlePrimaryAction(success),
+                      style: tronclassPrimaryButtonStyle(
+                        context,
+                        color: success
+                            ? TronclassGlassPalette.success
+                            : TronclassGlassPalette.danger,
+                      ),
+                      child: Text(success ? '完成' : '返回重新扫描'),
                     ),
-                    Text(
-                      currentState == _QrSignState.success ? '签到成功' : '签到失败',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(message),
-                  ],
+                  ),
                 ),
-              ),
+              ],
             ),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 10,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              child: FilledButton(
-                onPressed: () {
-                  if (currentState == _QrSignState.success) {
-                    Navigator.pop(context);
-                  } else {
-                    widget.onBack?.call();
-                  }
-                },
-                style: ButtonStyle(
-                  backgroundColor: WidgetStateProperty.all(
-                    currentState == _QrSignState.success ? const Color(0xff1DB6C2) : const Color(0xffff4853),
-                  ),
-                  elevation: WidgetStateProperty.all(0),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12.0),
-                  child: Text(
-                    currentState == _QrSignState.success ? '完成' : '重试',
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

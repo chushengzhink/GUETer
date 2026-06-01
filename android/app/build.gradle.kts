@@ -1,4 +1,4 @@
-﻿import java.io.FileInputStream
+import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
@@ -15,6 +15,16 @@ if (hasKeystoreProperties) {
 } else {
     println("key.properties not found. Release signing will use debug signing.")
 }
+
+val localPropertiesFile = rootProject.file("local.properties")
+val localProperties = Properties()
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+val baiduMapApiKey: String =
+    (project.findProperty("BAIDU_MAP_API_KEY") as String?)
+        ?: localProperties.getProperty("BAIDU_MAP_API_KEY")
+        ?: ""
 
 android {
     namespace = "com.gueter.cszm"
@@ -33,10 +43,22 @@ android {
 
     defaultConfig {
         applicationId = "com.gueter.cszm"
-        minSdk = flutter.minSdkVersion
+        minSdk = 29
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["BAIDU_MAP_API_KEY"] = baiduMapApiKey
+    }
+
+    packaging {
+        jniLibs {
+            pickFirsts += setOf(
+                "lib/arm64-v8a/libc++_shared.so",
+                "lib/armeabi-v7a/libc++_shared.so",
+                "lib/x86/libc++_shared.so",
+                "lib/x86_64/libc++_shared.so",
+            )
+        }
     }
 
     signingConfigs {
@@ -79,4 +101,5 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     implementation("com.baidu.lbsyun:BaiduMapSDK_Map:7.6.7")
     implementation("com.baidu.lbsyun:BaiduMapSDK_Util:7.6.7")
+    implementation("com.google.android.gms:play-services-nearby:19.3.0")
 }

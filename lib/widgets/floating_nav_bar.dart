@@ -52,6 +52,7 @@ class _FloatingNavBarState extends State<FloatingNavBar>
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final bottomSafeArea = MediaQuery.of(context).padding.bottom;
+    final isDark = colorScheme.brightness == Brightness.dark;
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomSafeArea),
@@ -59,25 +60,30 @@ class _FloatingNavBarState extends State<FloatingNavBar>
         margin: const EdgeInsets.only(
           left: AppSpacing.lg,
           right: AppSpacing.lg,
-          bottom: AppSpacing.sm,
+          bottom: AppSpacing.xs,
         ),
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md,
-          vertical: AppSpacing.sm,
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
         ),
         decoration: BoxDecoration(
-          color: colorScheme.surface,
-          borderRadius: BorderRadius.circular(AppRadius.xxlarge),
+          color: colorScheme.surface.withValues(alpha: isDark ? 0.96 : 0.98),
+          borderRadius: BorderRadius.circular(AppRadius.xlarge),
+          border: Border.all(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+          ),
           boxShadow: [
             BoxShadow(
-              color: colorScheme.shadow.withValues(alpha: 0.15),
-              blurRadius: 20,
+              color: colorScheme.shadow.withValues(alpha: isDark ? 0.26 : 0.12),
+              blurRadius: 18,
               offset: const Offset(0, 8),
             ),
             BoxShadow(
-              color: colorScheme.primary.withValues(alpha: 0.05),
-              blurRadius: 40,
-              offset: const Offset(0, 16),
+              color: colorScheme.primary.withValues(
+                alpha: isDark ? 0.08 : 0.05,
+              ),
+              blurRadius: 28,
+              offset: const Offset(0, 12),
             ),
           ],
         ),
@@ -104,14 +110,14 @@ class _FloatingNavBarState extends State<FloatingNavBar>
                     duration: AppDuration.normal,
                     curve: AppCurves.emphasized,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.md,
-                      vertical: AppSpacing.sm,
+                      horizontal: AppSpacing.xs,
+                      vertical: AppSpacing.xs,
                     ),
                     decoration: BoxDecoration(
                       color: isSelected
-                          ? colorScheme.primaryContainer
+                          ? colorScheme.primary.withValues(alpha: 0.12)
                           : Colors.transparent,
-                      borderRadius: BorderRadius.circular(AppRadius.large),
+                      borderRadius: BorderRadius.circular(AppRadius.medium),
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -119,16 +125,17 @@ class _FloatingNavBarState extends State<FloatingNavBar>
                         AnimatedContainer(
                           duration: AppDuration.normal,
                           curve: AppCurves.emphasized,
-                          padding: const EdgeInsets.all(AppSpacing.xs),
+                          width: 34,
+                          height: 30,
                           decoration: BoxDecoration(
                             color: isSelected
-                                ? colorScheme.primary.withValues(alpha: 0.1)
+                                ? colorScheme.primary.withValues(alpha: 0.14)
                                 : Colors.transparent,
-                            shape: BoxShape.circle,
+                            borderRadius: BorderRadius.circular(AppRadius.pill),
                           ),
                           child: Icon(
                             item.icon,
-                            size: 24,
+                            size: 22,
                             color: isSelected
                                 ? colorScheme.primary
                                 : colorScheme.onSurface.withValues(alpha: 0.6),
@@ -139,7 +146,7 @@ class _FloatingNavBarState extends State<FloatingNavBar>
                           duration: AppDuration.normal,
                           curve: AppCurves.emphasized,
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: 11,
                             fontWeight: isSelected
                                 ? FontWeight.w600
                                 : FontWeight.w500,
@@ -147,7 +154,11 @@ class _FloatingNavBarState extends State<FloatingNavBar>
                                 ? colorScheme.primary
                                 : colorScheme.onSurface.withValues(alpha: 0.6),
                           ),
-                          child: Text(item.label),
+                          child: Text(
+                            item.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),

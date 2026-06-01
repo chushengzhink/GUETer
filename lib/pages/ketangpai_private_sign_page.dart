@@ -6,7 +6,9 @@ import '../api/login.dart';
 import '../models/course.dart';
 import '../models/user.dart';
 import '../session/account.dart';
-import 'widget/scan.dart';
+import 'ketangpai_scan_sign_page.dart';
+import 'ketangpai_number_sign_page.dart';
+import 'ketangpai_gps_sign_dialog.dart';
 
 /// 本地签到页面
 /// 功能说明：针对正在进行的签到任务，支持多种签到方式（二维码、GPS、数字）
@@ -270,7 +272,7 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
   Future<void> _handleRoomScanSign() async {
     final result = await Navigator.push<String>(
       context,
-      MaterialPageRoute(builder: (_) => const ScanPage()),
+      MaterialPageRoute(builder: (_) => const KetangpaiScanSignPage()),
     );
     if (result == null || result.isEmpty) {
       return;
@@ -280,55 +282,17 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
 
   Future<void> _handleCourseSign(_SigningCourseEntry entry) async {
     if (entry.signType == 1) {
-      // 数字签到：弹出输入框
-      final code = await showDialog<String>(
-        context: context,
-        builder: (context) {
-          final controller = TextEditingController();
-          return AlertDialog(
-            title: const Text('数字签到'),
-            content: TextField(
-              controller: controller,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: '请输入签到码',
-                hintText: '输入数字签到码',
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(controller.text),
-                child: const Text('确定'),
-              ),
-            ],
-          );
-        },
+      // 数字签到：使用新的数字签到页面
+      final code = await Navigator.push<String>(
+        context,
+        MaterialPageRoute(builder: (_) => const KetangpaiNumberSignPage()),
       );
       if (code != null && code.isNotEmpty) {
         await _signSelectedByNumber(code, entry.signId, entry.course.name);
       }
     } else if (entry.signType == 2) {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('GPS签到'),
-          content: const Text('点击即可签到，无需担心，老师不会发现你溜了'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('确定'),
-            ),
-          ],
-        ),
-      );
+      // GPS签到：使用新的 GPS 签到对话框
+      final confirm = await KetangpaiGpsSignDialog.show(context);
       if (confirm == true) {
         await _signSelectedByGps(
           entry.signId,
@@ -337,9 +301,10 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
         );
       }
     } else if (entry.signType == 3) {
+      // 二维码签到：使用新的扫码页面
       final result = await Navigator.push<String>(
         context,
-        MaterialPageRoute(builder: (_) => const ScanPage()),
+        MaterialPageRoute(builder: (_) => const KetangpaiScanSignPage()),
       );
       if (result != null && result.isNotEmpty) {
         await _signSelectedByScan(result);

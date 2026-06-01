@@ -12,7 +12,20 @@ import '../session/cookie.dart';
 import '../session/app_settings.dart';
 import '../session/account.dart';
 import '../session/credential_manager.dart';
+import '../session/login_context.dart';
 import '../platform.dart';
+
+typedef DebugSendRequestOverride =
+    Future<Response<dynamic>> Function(
+      String url, {
+      required String method,
+      Map<String, String>? params,
+      Map<String, String>? headers,
+      dynamic body,
+      ResponseType responseType,
+      bool allowRedirects,
+      bool skipCredentialValidation,
+    });
 
 class HeadersManager {
   static const _brand = 'google';
@@ -78,8 +91,8 @@ class HeadersManager {
       _uniqueId = EncryptionUtil.getUniqueId();
       prefs.setString(_uniqueIdKey, _uniqueId);
     }
-    // 内测版：@Azeroth
-    // 正式版：@Kalimdor
+    // 鍐呮祴鐗堬細@Azeroth
+    // 姝ｅ紡鐗堬細@Kalimdor
     final userAgentTemp =
         '(device:$_deviceModel) Language/zh_CN com.chaoxing.mobile/ChaoXingStudy_${_cxProductId}_${_cxVersion}_android_phone_${_cxVersionCode}_$_cxApiVersion (@Kalimdor)_$_uniqueId';
     final schild = EncryptionUtil.md5Hash(
@@ -111,7 +124,15 @@ class HeadersManager {
 }
 
 class ApiService {
+  static const String _consolePlatformAll = '\u5168\u90e8';
+  static const String _consolePlatformCommon = '\u901a\u7528';
+  static const String _consolePlatformChaoxing = '\u5b66\u4e60\u901a';
+  static const String _consolePlatformRainClassroom = '\u96e8\u8bfe\u5802';
+  static const String _consolePlatformTronclass = '\u7545\u8bfe';
+  static const String _consolePlatformKetangpai = '\u8bfe\u5802\u6d3e';
+
   static late Dio _dio;
+  static SharedPreferences? _consolePrefs;
   static void Function()? onPlatformChange;
   static Future<void> _throttleTail = Future.value();
   static DateTime _lastRequestAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -120,17 +141,35 @@ class ApiService {
   static final Random _random = Random();
   static bool _strictSecurityMode = false;
 
-  // 全局请求节流：避免短时间连续请求触发风控误判
+  // 鍏ㄥ眬璇锋眰鑺傛祦锛氶伩鍏嶇煭鏃堕棿杩炵画璇锋眰瑙﹀彂椋庢帶璇垽
   static const int _minRequestIntervalMs = 350;
   static const int _requestJitterMs = 120;
   static const int _highRiskSignIntervalMs = 1400;
   static const int _maxRetryCount = 2;
   static const bool _enableVerboseLogsInRelease = true;
   static const int _maxConsoleLogLines = 800;
+  static const int _maxStartupLogLines = 200;
+  static const String _startupActiveLogsKey = 'startup_recovery_active_logs_v1';
+  static const String _startupLastLogsKey = 'startup_recovery_last_logs_v1';
   static final List<Map<String, String>> _consoleLogs = <Map<String, String>>[];
   static final ValueNotifier<int> consoleLogVersion = ValueNotifier<int>(0);
+  static final List<String> _startupActiveLogs = <String>[];
+  static Future<void> _startupLogPersistTail = Future.value();
+  static bool _startupRecoverySessionActive = false;
 
-  /// 获取雨课堂服务器对应的 baseUrl
+  @visibleForTesting
+  static DebugSendRequestOverride? debugSendRequestOverride;
+
+  @visibleForTesting
+  static Future<bool> Function(String userId)? debugCredentialValidatorOverride;
+
+  @visibleForTesting
+  static String get startupActiveLogsKey => _startupActiveLogsKey;
+
+  @visibleForTesting
+  static String get startupLastLogsKey => _startupLastLogsKey;
+
+  /// 鑾峰彇闆ㄨ鍫傛湇鍔″櫒瀵瑰簲鐨?baseUrl
   static const _serverBaseUrlMap = {
     RainClassroomServerType.yuketang: 'https://www.yuketang.cn',
     RainClassroomServerType.pro: 'https://pro.yuketang.cn',
@@ -158,7 +197,7 @@ class ApiService {
   static void _appendConsoleLog(String line) {
     _consoleLogs.add({
       'timestamp': DateTime.now().toIso8601String(),
-      'platform': '通用',
+      'platform': _consolePlatformCommon,
       'message': line,
     });
     if (_consoleLogs.length > _maxConsoleLogLines) {
@@ -174,16 +213,17 @@ class ApiService {
     final mm = now.minute.toString().padLeft(2, '0');
     final ss = now.second.toString().padLeft(2, '0');
 
-    // 根据 tag 判断平台
-    String platform = '通用';
-    if (tag.contains('学习通') || tag == 'chaoxing') {
-      platform = '学习通';
-    } else if (tag.contains('雨课堂') || tag == 'yuketang' || tag == 'rainclassroom') {
-      platform = '雨课堂';
-    } else if (tag.contains('畅课') || tag == 'tronclass') {
-      platform = '畅课';
-    } else if (tag.contains('课堂派') || tag == 'ketangpai') {
-      platform = '课堂派';
+    String platform = _consolePlatformCommon;
+    if (tag.contains(_consolePlatformChaoxing) || tag == 'chaoxing') {
+      platform = _consolePlatformChaoxing;
+    } else if (tag.contains(_consolePlatformRainClassroom) ||
+        tag == 'yuketang' ||
+        tag == 'rainclassroom') {
+      platform = _consolePlatformRainClassroom;
+    } else if (tag.contains(_consolePlatformTronclass) || tag == 'tronclass') {
+      platform = _consolePlatformTronclass;
+    } else if (tag.contains(_consolePlatformKetangpai) || tag == 'ketangpai') {
+      platform = _consolePlatformKetangpai;
     }
 
     _consoleLogs.add({
@@ -217,7 +257,7 @@ class ApiService {
   }
 
   static List<Map<String, String>> getConsoleLogs({String? platform}) {
-    if (platform == null || platform == '全部') {
+    if (platform == null || platform == _consolePlatformAll) {
       return List<Map<String, String>>.unmodifiable(_consoleLogs);
     }
     return List<Map<String, String>>.unmodifiable(
@@ -231,6 +271,118 @@ class ApiService {
     consoleLogVersion.value++;
   }
 
+  static Future<void> _loadPersistedStartupLogs() async {
+    final prefs = _consolePrefs;
+    if (prefs == null) {
+      return;
+    }
+
+    _appendRecoveredStartupLogs(
+      prefs.getStringList(_startupLastLogsKey),
+      label: 'LastStartup',
+    );
+    _appendRecoveredStartupLogs(
+      prefs.getStringList(_startupActiveLogsKey),
+      label: 'LastStartup/Incomplete',
+    );
+  }
+
+  static void _appendRecoveredStartupLogs(
+    List<String>? lines, {
+    required String label,
+  }) {
+    if (lines == null || lines.isEmpty) {
+      return;
+    }
+
+    for (final line in lines) {
+      _consoleLogs.add({
+        'timestamp': DateTime.now().toIso8601String(),
+        'platform': '\u901a\u7528',
+        'message': '[$label] $line',
+      });
+    }
+
+    if (_consoleLogs.length > _maxConsoleLogLines) {
+      final overflow = _consoleLogs.length - _maxConsoleLogLines;
+      _consoleLogs.removeRange(0, overflow);
+    }
+    consoleLogVersion.value++;
+  }
+
+  static String _formatClock(DateTime time) {
+    final hh = time.hour.toString().padLeft(2, '0');
+    final mm = time.minute.toString().padLeft(2, '0');
+    final ss = time.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
+
+  static Future<void> beginStartupRecoverySession({
+    String reason = 'cold_start',
+  }) async {
+    _startupActiveLogs.clear();
+    _startupRecoverySessionActive = true;
+    await _persistStartupActiveLogs();
+    logStartupRecovery('[Main] startup session opened reason=$reason');
+  }
+
+  static void logStartupRecovery(String message) {
+    final line = '[${_formatClock(DateTime.now())}] $message';
+    appendExternalConsoleLog('StartupRecovery', message);
+
+    if (!_startupRecoverySessionActive) {
+      return;
+    }
+
+    _startupActiveLogs.add(line);
+    if (_startupActiveLogs.length > _maxStartupLogLines) {
+      final overflow = _startupActiveLogs.length - _maxStartupLogLines;
+      _startupActiveLogs.removeRange(0, overflow);
+    }
+    _startupLogPersistTail = _startupLogPersistTail.then((_) async {
+      await _persistStartupActiveLogs();
+    });
+  }
+
+  static Future<void> finishStartupRecoverySession({
+    required String status,
+    String? summary,
+  }) async {
+    final suffix = summary == null || summary.isEmpty ? '' : ' $summary';
+    if (_startupRecoverySessionActive) {
+      logStartupRecovery(
+        '[Main] startup session finished status=$status$suffix',
+      );
+      _startupRecoverySessionActive = false;
+      await _startupLogPersistTail;
+      final prefs = _consolePrefs;
+      if (prefs != null) {
+        await prefs.setStringList(
+          _startupLastLogsKey,
+          List<String>.from(_startupActiveLogs),
+        );
+        await prefs.remove(_startupActiveLogsKey);
+      }
+      return;
+    }
+
+    appendExternalConsoleLog(
+      'StartupRecovery',
+      '[Main] startup session finished status=$status$suffix',
+    );
+  }
+
+  static Future<void> _persistStartupActiveLogs() async {
+    final prefs = _consolePrefs;
+    if (prefs == null) {
+      return;
+    }
+    await prefs.setStringList(
+      _startupActiveLogsKey,
+      List<String>.from(_startupActiveLogs),
+    );
+  }
+
   // 初始化平台变化回调函数
   static void _setupPlatformChangeCallback() {
     onPlatformChange = () async {
@@ -238,30 +390,46 @@ class ApiService {
       if (PlatformManager().isChaoxing) {
         _dio.options.baseUrl = 'https://www.chaoxing.com';
         _dio.options.headers = HeadersManager.chaoxingHeaders;
-        debugPrint('[ApiService] 切换到学习通，baseUrl已更新为 ${_dio.options.baseUrl}');
+        debugPrint(
+          '[ApiService] 鍒囨崲鍒板涔犻€氾紝baseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
+        );
       } else if (PlatformManager().isRainClassroom) {
         _dio.options.baseUrl =
             _serverBaseUrlMap[PlatformManager().currentServer]!;
         _dio.options.headers = HeadersManager.rainClassroomHeaders;
-        debugPrint('[ApiService] 切换到雨课堂，baseUrl已更新为 ${_dio.options.baseUrl}');
+        debugPrint(
+          '[ApiService] 鍒囨崲鍒伴洦璇惧爞锛宐aseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
+        );
       } else if (PlatformManager().isTronclass) {
         _dio.options.baseUrl = PlatformManager().tronclassBaseUrl;
         _dio.options.headers = HeadersManager.tronclassHeaders;
-        debugPrint('[ApiService] 切换到畅课，baseUrl已更新为 ${_dio.options.baseUrl}');
+        debugPrint(
+          '[ApiService] 鍒囨崲鍒扮晠璇撅紝baseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
+        );
       } else if (PlatformManager().isKetangpai) {
         _dio.options.baseUrl = PlatformManager().ketangpaiBaseUrl;
         _dio.options.headers = HeadersManager.ketangpaiHeaders;
-        debugPrint('[ApiService] 切换到课堂派，baseUrl已更新为 ${_dio.options.baseUrl}');
+        debugPrint(
+          '[ApiService] 鍒囨崲鍒拌鍫傛淳锛宐aseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
+        );
       } else if (PlatformManager().isWeizhuojiao) {
         _dio.options.baseUrl = 'https://v18.teachermate.cn';
         _dio.options.headers = HeadersManager._wzjHeaders;
-        debugPrint('[ApiService] 切换到微助教，baseUrl已更新为 ${_dio.options.baseUrl}');
+        debugPrint(
+          '[ApiService] 鍒囨崲鍒板井鍔╂暀锛宐aseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
+        );
       }
-      appendExternalConsoleLog('ApiService', '平台切换完成: platform=$platform baseUrl=${_dio.options.baseUrl}');
+      appendExternalConsoleLog(
+        'ApiService',
+        '骞冲彴鍒囨崲瀹屾垚: platform=$platform baseUrl=${_dio.options.baseUrl}',
+      );
     };
   }
 
   static Future<void> initialize() async {
+    _consolePrefs = await SharedPreferences.getInstance();
+    await _loadPersistedStartupLogs();
+
     await HeadersManager.updateChaoxingHeaders();
     await BrowserHeadersManager.getUserAgent();
     _strictSecurityMode = AppSettings.strictSecurityModeNotifier.value;
@@ -279,22 +447,17 @@ class ApiService {
         sendTimeout: const Duration(seconds: 10),
         followRedirects: false,
         validateStatus: (status) => status! < 500,
-        headers: {
-          'User-Agent': userAgent,
-          ...standardHeaders,
-        },
+        headers: {'User-Agent': userAgent, ...standardHeaders},
       ),
     );
 
     /*
-    // 初始化平台变化回调
-    (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+    // 鍒濆鍖栧钩鍙板彉鍖栧洖璋?    (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
       client.userAgent = HeadersManager._cxUserAgent;
       return client;
-    }; // dio 自动重定向会使用默认的 User-Agent
-    // 似乎无法在初始化结束后进行更改
-     */
+    }; // dio 鑷姩閲嶅畾鍚戜細浣跨敤榛樿鐨?User-Agent
+    // 浼间箮鏃犳硶鍦ㄥ垵濮嬪寲缁撴潫鍚庤繘琛屾洿鏀?     */
     _setupPlatformChangeCallback();
 
     _dio.interceptors.add(CookieInterceptor());
@@ -323,8 +486,8 @@ class ApiService {
     _strictSecurityMode = AppSettings.strictSecurityModeNotifier.value;
   }
 
-  /// 发送 HTTP 请求
-  static Future<Response> sendRequest(
+  /// 鍙戦€?HTTP 璇锋眰
+  static Future<Response<dynamic>> sendRequest(
     String url, {
     String method = 'GET',
     Map<String, String>? params,
@@ -332,32 +495,54 @@ class ApiService {
     dynamic body,
     ResponseType responseType = ResponseType.json,
     bool allowRedirects = true,
+    bool skipCredentialValidation = false,
+    LoginContext? loginContext,
   }) async {
     // Validate credential before request (skip during login)
-    if (!CookieManager.isLoggingIn) {
+    if (!skipCredentialValidation && !CookieManager.isLoggingIn) {
       final currentUserId = AccountManager.currentSessionId;
       if (currentUserId != null && currentUserId.isNotEmpty) {
-        final isValid = await CredentialManager.ensureCredentialValid(currentUserId);
+        final validator =
+            debugCredentialValidatorOverride ??
+            CredentialManager.ensureCredentialValid;
+        final isValid = await validator(currentUserId);
         if (!isValid) {
           final user = AccountManager.getAccountById(currentUserId);
           if (user != null) {
-            appendExternalConsoleLog(
-              user.platform,
-              '凭证验证失败，请重新登录',
-            );
+            appendExternalConsoleLog(user.platform, '鍑瘉楠岃瘉澶辫触锛岃閲嶆柊鐧诲綍');
           }
         }
       }
+    }
+
+    final debugOverride = debugSendRequestOverride;
+    if (debugOverride != null) {
+      return debugOverride(
+        url,
+        method: method,
+        params: params,
+        headers: headers,
+        body: body,
+        responseType: responseType,
+        allowRedirects: allowRedirects,
+        skipCredentialValidation: skipCredentialValidation,
+      );
     }
 
     final options = Options(
       method: method,
       headers: headers,
       responseType: responseType,
+      extra: {
+        if (loginContext != null) 'loginContext': loginContext,
+      },
     );
 
-    final isAbsoluteUrl = url.startsWith('http://') || url.startsWith('https://');
-    final fullUrl = isAbsoluteUrl || _dio.options.baseUrl.isEmpty ? url : '${_dio.options.baseUrl}$url';
+    final isAbsoluteUrl =
+        url.startsWith('http://') || url.startsWith('https://');
+    final fullUrl = isAbsoluteUrl || _dio.options.baseUrl.isEmpty
+        ? url
+        : '${_dio.options.baseUrl}$url';
     _logRequest(
       'request',
       url,
@@ -417,6 +602,7 @@ class ApiService {
             method: 'GET',
             headers: options.headers,
             responseType: options.responseType,
+            extra: options.extra,
           ),
         );
         redirectCount++;
@@ -427,8 +613,7 @@ class ApiService {
       if (response.data is String) {
         response.data = jsonDecode(response.data);
       }
-    } // dio 的 json 解析有问题
-
+    } // dio 鐨?json 瑙ｆ瀽鏈夐棶棰?
     _logRequest(
       'response',
       url,
@@ -513,7 +698,8 @@ class ApiService {
     Response? lastResponse;
     Object? lastError;
 
-    final isAbsoluteUrl = url.startsWith('http://') || url.startsWith('https://');
+    final isAbsoluteUrl =
+        url.startsWith('http://') || url.startsWith('https://');
 
     for (var attempt = 0; attempt <= _maxRetryCount; attempt++) {
       await _throttleRequest(url, options.method ?? 'GET');
@@ -592,7 +778,20 @@ class ApiService {
     await Future.delayed(Duration(milliseconds: baseMs + jitterMs));
   }
 
-  /// 将学习通的Star3图片转换为Star4 减少一次重定向
+  /// 灏嗗涔犻€氱殑Star3鍥剧墖杞崲涓篠tar4 鍑忓皯涓€娆￠噸瀹氬悜
+  @visibleForTesting
+  static void resetForTests() {
+    _dio = Dio();
+    _consolePrefs = null;
+    _consoleLogs.clear();
+    _startupActiveLogs.clear();
+    _startupLogPersistTail = Future.value();
+    _startupRecoverySessionActive = false;
+    debugSendRequestOverride = null;
+    debugCredentialValidatorOverride = null;
+    consoleLogVersion.value = 0;
+  }
+
   String toNewImageUrl(String url) {
     try {
       final uri = Uri.parse(url);
@@ -612,7 +811,7 @@ class ApiService {
         }
       }
     } catch (e) {
-      debugPrint('URL转换失败: $e');
+      debugPrint('URL杞崲澶辫触: $e');
     }
     return url;
   }

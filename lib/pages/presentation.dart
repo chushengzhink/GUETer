@@ -108,7 +108,12 @@ class _PresentationPageState extends State<PresentationPage> {
 
       for (final user in allAccounts) {
         AccountManager.setCurrentSessionTemp(user.uid);
-        final result = await RCCourseApi.checkIn(widget.lessonId);
+        final result = await RCCourseApi.checkIn(
+          widget.lessonId,
+          source: 23,
+          joinIfNotIn: true,
+          bearerToken: RCCourseApi.getBearerToken(),
+        );
         if (result != 0) {
           if (result == 50070) {
             // 该课堂已开启动态二维码签到，请扫码签到进班

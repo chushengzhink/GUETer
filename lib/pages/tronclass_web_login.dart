@@ -143,7 +143,7 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
 
     try {
       await _controller.runJavaScript(script);
-      await Future<void>.delayed(const Duration(milliseconds: 1800));
+      await Future<void>.delayed(const Duration(milliseconds: 3600));
       await _controller.runJavaScript(script);
     } catch (_) {
       // ignore JS injection failures and let the user interact manually
@@ -628,8 +628,12 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage> {
     if (result['ok'] == true) {
       final sessionId = (result['sessionId'] ?? '').toString();
       final accountId = widget.accountId;
-      if (accountId != null && accountId.isNotEmpty && sessionId.isNotEmpty) {
-        await TronclassAuthManager.setSessionIdForUser(accountId, sessionId);
+      if (accountId != null && accountId.isNotEmpty) {
+        if (sessionId.isNotEmpty) {
+          await TronclassAuthManager.setSessionIdForUser(accountId, sessionId);
+        } else {
+          await TronclassAuthManager.clearSessionIdForUser(accountId);
+        }
         await AccountManager.setCurrentSession(accountId);
         if (!mounted) {
           return;

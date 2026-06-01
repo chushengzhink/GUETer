@@ -5,7 +5,6 @@ import 'dart:async';
 
 import '../api/api_service.dart';
 import '../session/account.dart';
-import 'pages/accounts.dart';
 
 /// 平台类型枚举
 enum PlatformType {

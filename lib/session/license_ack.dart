@@ -48,4 +48,14 @@ void registerCustomAcknowledgementLicenses() {
       '该条目用于记录源码参考来源，请同时遵循对应仓库发布的 LICENSE 条款。',
     );
   });
+  LicenseRegistry.addLicense(() async* {
+    yield const LicenseEntryWithLineBreaks(
+      <String>['LocalSend Reference'],
+      'This app includes a modular local transfer feature adapted from '
+      'LocalSend.\n\n'
+      'Project: https://github.com/localsend/localsend\n'
+      'Protocol: https://github.com/localsend/protocol\n'
+      'License: Apache License 2.0\n',
+    );
+  });
 }

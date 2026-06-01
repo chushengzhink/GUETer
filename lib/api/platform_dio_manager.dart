@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Directory;
 import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -12,7 +13,6 @@ import '../session/cookie.dart';
 import '../session/login_context.dart';
 import '../session/tronclass_auth.dart';
 import '../utils/browser_headers.dart';
-import '../pages/accounts.dart';
 import 'api_service.dart';
 
 /// 每用户独立 Dio 实例管理器（借鉴 tronclass_plus 的 ChangkeClient 设计）
@@ -21,6 +21,8 @@ class PlatformDioManager {
 
   static final Map<String, Dio> _dioInstances = {};
   static final Map<String, CookieJar> _cookieJars = {};
+  static Future<Directory>? _supportDirectoryFuture;
+  static Future<String>? _userAgentFuture;
 
   static const int _maxRetryCount = 2;
   static const int _retryBaseDelayMs = 600;
@@ -40,8 +42,12 @@ class PlatformDioManager {
 
     final baseUrl = _getBaseUrl(platform);
     final platformName = _getPlatformName(platform);
+    ApiService.logStartupRecovery(
+      '[PlatformDioManager] create dio begin platform=$platformName userId=$userId',
+    );
     final cookieJar = await _getCookieJarForUser(userId, platformName);
-    final userAgent = await BrowserHeadersManager.getUserAgent();
+    final userAgent = await (_userAgentFuture ??=
+        BrowserHeadersManager.getUserAgent());
     final referer = BrowserHeadersManager.getRefererForPlatform(platformName);
 
     final headers = <String, String>{
@@ -61,25 +67,32 @@ class PlatformDioManager {
       ),
     );
 
-    dio.interceptors.add(_PlatformCookieInterceptor(
-      platform: platform,
-      userId: userId,
-      cookieJar: cookieJar,
-      platformName: platformName,
-    ));
+    dio.interceptors.add(
+      _PlatformCookieInterceptor(
+        platform: platform,
+        userId: userId,
+        cookieJar: cookieJar,
+        platformName: platformName,
+      ),
+    );
 
     dio.interceptors.add(_RetryInterceptor());
 
     _dioInstances[key] = dio;
     _cookieJars[key] = cookieJar;
 
-    debugPrint('[PlatformDioManager] Created isolated Dio: platform=$platformName userId=$userId baseUrl=$baseUrl');
+    debugPrint(
+      '[PlatformDioManager] Created isolated Dio: platform=$platformName userId=$userId baseUrl=$baseUrl',
+    );
 
     ApiService.appendExternalConsoleLog(
       platformName,
       '创建独立 Dio 实例: userId=$userId baseUrl=$baseUrl',
     );
 
+    ApiService.logStartupRecovery(
+      '[PlatformDioManager] create dio done platform=$platformName userId=$userId',
+    );
     return dio;
   }
 
@@ -113,7 +126,9 @@ class PlatformDioManager {
     }
 
     if (keysToRemove.isNotEmpty) {
-      debugPrint('[PlatformDioManager] Cleared ${keysToRemove.length} Dio instances for platform: $platformName');
+      debugPrint(
+        '[PlatformDioManager] Cleared ${keysToRemove.length} Dio instances for platform: $platformName',
+      );
     }
   }
 
@@ -127,13 +142,21 @@ class PlatformDioManager {
     debugPrint('[PlatformDioManager] Cleared all Dio instances');
   }
 
-  static Future<CookieJar> _getCookieJarForUser(String userId, String platformName) async {
+  static Future<CookieJar> _getCookieJarForUser(
+    String userId,
+    String platformName,
+  ) async {
     if (kIsWeb) {
       return CookieJar();
     }
 
-    final dir = await getApplicationSupportDirectory();
+    final dir = await (_supportDirectoryFuture ??=
+        getApplicationSupportDirectory());
     final cookiePath = path.join(dir.path, 'cookies', platformName, userId);
+    ApiService.appendExternalConsoleLog(
+      platformName,
+      '[PlatformDioManager] CookieJar path resolved: $cookiePath',
+    );
     return PersistCookieJar(
       storage: FileStorage(cookiePath),
       ignoreExpires: false,
@@ -192,9 +215,15 @@ class _PlatformCookieInterceptor extends Interceptor {
   ) async {
     if (options.headers['Cookie'] == null) {
       if (platform == PlatformType.chaoxing) {
-        final cookieStr = await AccountManager.getCookieForPlatform(platform, userId);
+        final cookieStr = await AccountManager.getCookieForPlatform(
+          platform,
+          userId,
+        );
         if (cookieStr == null || cookieStr.isEmpty) {
-          ApiService.appendExternalConsoleLog('学习通', 'Cookie为空，请检查登录状态 userId=$userId');
+          ApiService.appendExternalConsoleLog(
+            '学习通',
+            'Cookie为空，请检查登录状态 userId=$userId',
+          );
           throw Exception('[学习通] Cookie为空，无法发起请求');
         }
         options.headers['Cookie'] = cookieStr;
@@ -203,9 +232,15 @@ class _PlatformCookieInterceptor extends Interceptor {
           '已注入 Cookie (长度=${cookieStr.length}) userId=$userId',
         );
       } else if (platform == PlatformType.rainClassroom) {
-        final cookieStr = await AccountManager.getCookieForPlatform(platform, userId);
+        final cookieStr = await AccountManager.getCookieForPlatform(
+          platform,
+          userId,
+        );
         if (cookieStr == null || cookieStr.isEmpty) {
-          ApiService.appendExternalConsoleLog('雨课堂', 'Cookie为空，请检查登录状态 userId=$userId');
+          ApiService.appendExternalConsoleLog(
+            '雨课堂',
+            'Cookie为空，请检查登录状态 userId=$userId',
+          );
           throw Exception('[雨课堂] Cookie为空，无法发起请求');
         }
         options.headers['Cookie'] = cookieStr;
@@ -250,7 +285,9 @@ class _PlatformCookieInterceptor extends Interceptor {
         List<Cookie> cookies = await cookieJar.loadForRequest(uri);
 
         if (cookies.isNotEmpty) {
-          final cookieStr = cookies.map((c) => '${c.name}=${c.value}').join('; ');
+          final cookieStr = cookies
+              .map((c) => '${c.name}=${c.value}')
+              .join('; ');
           options.headers['Cookie'] = cookieStr;
           ApiService.appendExternalConsoleLog(
             platformName,
@@ -262,7 +299,9 @@ class _PlatformCookieInterceptor extends Interceptor {
       if (platform == PlatformType.tronclass) {
         final url = options.uri.toString();
         if (url.contains('https://courses.guet.edu.cn/')) {
-          final sessionId = await TronclassAuthManager.getSessionIdForUser(userId);
+          final sessionId = await TronclassAuthManager.getSessionIdForUser(
+            userId,
+          );
           if (sessionId != null && sessionId.isNotEmpty) {
             options.headers['x-session-id'] = sessionId;
             ApiService.appendExternalConsoleLog(
@@ -346,8 +385,17 @@ class _PlatformCookieInterceptor extends Interceptor {
         return;
       }
 
-      final code = data['code'] ?? data['errcode'] ?? data['error_code'] ?? data['result'];
-      final message = data['message'] ?? data['errmsg'] ?? data['msg'] ?? data['error'] ?? '';
+      final code =
+          data['code'] ??
+          data['errcode'] ??
+          data['error_code'] ??
+          data['result'];
+      final message =
+          data['message'] ??
+          data['errmsg'] ??
+          data['msg'] ??
+          data['error'] ??
+          '';
 
       // 各平台登录态失效检测
       switch (platform) {
@@ -415,7 +463,9 @@ class _PlatformCookieInterceptor extends Interceptor {
 
   /// 处理登录态失效
   Future<void> _handleAuthExpired(String reason) async {
-    debugPrint('[_PlatformCookieInterceptor] 登录已过期: platform=$platformName userId=$userId reason=$reason');
+    debugPrint(
+      '[_PlatformCookieInterceptor] 登录已过期: platform=$platformName userId=$userId reason=$reason',
+    );
 
     ApiService.appendExternalConsoleLog(
       platformName,
@@ -436,8 +486,7 @@ class _PlatformCookieInterceptor extends Interceptor {
     }
 
     // 通知账号页刷新
-    final accountChangeNotifier = AccountChangeNotifier();
-    accountChangeNotifier.notifyAccountChanged(null);
+    AccountManager.notifyStateChanged();
   }
 }
 
@@ -458,8 +507,10 @@ class _RetryInterceptor extends Interceptor {
       return;
     }
 
-    final delayMs = (PlatformDioManager._retryBaseDelayMs * (retryCount + 1) +
-        Random().nextInt(PlatformDioManager._retryJitterMs)).toInt();
+    final delayMs =
+        (PlatformDioManager._retryBaseDelayMs * (retryCount + 1) +
+                Random().nextInt(PlatformDioManager._retryJitterMs))
+            .toInt();
 
     ApiService.appendExternalConsoleLog(
       'RetryInterceptor',

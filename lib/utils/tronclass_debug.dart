@@ -15,7 +15,7 @@ class TronclassDebug {
     }
 
     final account = AccountManager.getAccountById(currentUserId);
-    debugPrint('2. 账号信息: ${account?.username ?? "未找到"}');
+    debugPrint('2. 账号信息: ${account?.name ?? "未找到"}');
     debugPrint('   平台: ${account?.platform ?? "未知"}');
 
     final sessionId = await TronclassAuthManager.getCurrentSessionId();

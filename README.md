@@ -1,127 +1,133 @@
-# GUETer - 多平台课程助手
+# GUETer
 
-GUETer 是一个面向多教学平台的课程辅助应用，支持**学习通、雨课堂、畅课、课堂派**四大主流教学平台，为学生提供统一的课程管理、签到、待办汇总等功能。
+GUETer 是一个面向高校教学平台的 Flutter 课程助手，当前聚合学习通、雨课堂、畅课、课堂派、微助教等平台入口，提供课程管理、账号管理、签到、待办提醒、阅读、PDF 工具、局域网传输和虚拟局域网辅助功能。
 
-项目仓库：https://github.com/chushengzhink/GUETer
+本项目仅用于学习交流与技术研究，不是任何教学平台或学校的官方客户端。使用者应确保自己有权访问相关账号、课程和资源，并遵守学校及平台规则。
 
-## 核心功能
+## 功能特性
 
-### 📚 多平台课程管理
-- 支持学习通、雨课堂、畅课、课堂派四大平台
-- 统一课程列表展示与管理
-- 多账号保存与快速切换
-- 登录态自动检查与维护
-- 平台地址管理与健康检测
+### 多平台课程与账号
 
-### ✅ 智能签到系统
-- 多平台扫码签到（雨课堂/课堂派）
-- 多账号批量签到支持
-- 课堂派共享签到房间（单次扫码，多账号并行）
-- 雨课堂课程详情与课堂入口串联
-- 签到状态实时反馈
+- 聚合学习通、雨课堂、畅课、课堂派、微助教等平台的课程入口与课程详情。
+- 支持多账号本地保存、快速切换、登录状态检查和会话维护。
+- 提供平台请求控制台，便于查看请求结果、错误日志和重试状态。
+- 支持中英文界面、深色模式和多套 Material Design 3 主题风格。
 
-### 📋 待办汇总与通知
-- 跨平台待办事项统一汇总
-- 作业、考试、任务提醒
-- 本地通知推送
-- 精确定时提醒
-- 待办完成状态追踪
+### 签到与课堂活动
 
-### 🌤️ 天气查看
-- 实时天气信息展示
-- 基于百度地图定位
-- 支持位置权限管理
+- 支持学习通、雨课堂、畅课、课堂派等平台的二维码、数字码、位置、雷达等签到能力，具体可用性取决于平台接口和账号权限。
+- 支持课堂派多账号签到、共享签到房间、课程资料、公告、成员、话题、作业和考试入口。
+- 支持畅课签到列表、数字签到、二维码签到、雷达签到、课程待办和仪表盘视图。
+- 支持学习通课程章节、作业、测验、讨论、问卷、投票、评价和课堂活动入口。
 
-### 🛠️ PDF 工具集
-- PDF 转图片
-- 图片合并为 PDF
-- PDF 压缩优化
-- PDF 页面提取
-- 添加水印（防篡改）
-- 自定义输出目录
-- 文件直接打开/分享
-- 最近任务记录
+### 待办、通知与工具
 
-### 📖 阅读功能
-- 内置 PDF 文档阅读器
-- 目录/书签导航
-- 全文搜索与页码跳转
-- 夜间模式
-- 阅读进度持久化
+- 汇总跨平台待办事项，支持本地提醒和通知。
+- 内置 PDF 阅读器，支持目录、页码跳转、夜间阅读和阅读进度保存。
+- 提供 PDF 转图片、图片合并 PDF、压缩、页面提取、水印、打开和分享等文件工具。
+- 提供学术检索、电脑帮助文档、每日天文图等扩展工具入口。
 
-### 🔧 其他特性
-- 请求控制台（查看请求结果、重试、错误日志）
-- 畅课门户策略与重认证
-- Material Design 3 设计语言
-- 深色模式支持
-- 多语言支持
+### 局域网与网络辅助
 
-## 代码来源与参考说明
+- 局域网传输模块支持附近设备发现、发送/接收文件、传输进度和设备名设置。
+- 附近聊天室模块支持基于局域网/近场连接的临时会话。
+- ZeroTier 模块提供虚拟局域网连接管理入口，便于在受支持平台上配置远程互联。
 
-本项目包含三类代码来源：
+## 平台与权限
 
-### A. 原项目继承代码
-- 本仓库历史版本中原有模块与逻辑
-- 包括基础页面结构、平台接入骨架、会话与网络基础设施
+Android 版本会按功能申请相机、网络、定位、蓝牙、附近设备、通知、前台服务、文件读取等权限。权限用途如下：
 
-### B. 开源项目参考实现（按模块）
-- 学习通登录 + 签到： https://github.com/AneryCoft/course_helper
-- 畅课模块： https://github.com/wilinz/tronclass_plus
-- 课堂派模块： https://github.com/roselle-luo/fuckketangpai_app
-- 学习通自动学习核心逻辑（课程管理、任务执行、倍速、进度、任务追踪、会话管理）： https://github.com/dsxksss/chaoxing_ft/tree/v0.1
-- 微助教： https://github.com/zn-cn/wzj-sign-in-weixin
+- 相机：扫描课程、签到、登录或分享二维码。
+- 网络：访问教学平台接口、更新检查、局域网传输和扩展工具。
+- 定位、蓝牙、附近设备、Wi-Fi 状态：用于位置签到、雷达签到、附近设备发现和局域网传输。
+- 文件读取与媒体访问：用于选择、读取、分享 PDF、图片和传输文件。
+- 通知与精确闹钟：用于待办提醒和本地通知。
 
-说明：以上为“参考与借鉴来源”，并非逐文件完全拷贝；本项目已结合当前工程结构做了二次整合与改造。
+## 开发环境
 
-## GPL v3 来源声明（补充）
-
-为符合 GPL v3 及来源可追溯要求，现补充声明如下：
-
-- 学习通登录 + 签到部分源码来源： https://github.com/AneryCoft/course_helper
-- 畅课部分源码来源： https://github.com/wilinz/tronclass_plus
-- 课堂派部分源码来源： https://github.com/roselle-luo/fuckketangpai_app
-- 学习通以下能力的实现思路与接口流程来源： https://github.com/dsxksss/chaoxing_ft/tree/v0.1
-	- 课程管理（自动获取课程列表）
-	- 作业任务（视频、文档等学习任务）
-	- 视频学习（1.0x / 2.0x）
-	- 进度同步（任务进度展示）
-	- 任务追踪（任务完成状态）
-	- 会话管理（登录状态维护）
-
-### C. 当前版本新增实现（本仓库）
-- 工具分区（阅读 + PDF 工具）
-- PDF 工具链与任务记录
-- 请求控制台入口
-- 设置页分组重构（外观主题前置）
-- 更新检查地址切换到本仓库
-
-## 开发与运行
-
-### 环境
-- Flutter: >= 3.35.x
-- Dart: >= 3.9.x
-
-### 安装依赖
-```bash
+```powershell
+flutter --version
 flutter pub get
-```
-
-### 运行
-```bash
 flutter run
 ```
 
-### 静态检查
-```bash
+推荐环境：
+
+- Flutter 3.35 或更高版本
+- Dart 3.9 或更高版本
+- JDK 17
+- Android SDK 与 Gradle 环境
+
+## Android 构建
+
+公开仓库不保存签名证书、签名密码或第三方 API Key。Release 构建需要在本机准备被 Git 忽略的配置文件。
+
+在 `android/local.properties` 中添加百度地图 Key：
+
+```properties
+BAIDU_MAP_API_KEY=your_baidu_map_api_key
+```
+
+在 `android/key.properties` 中配置本地签名：
+
+```properties
+storePassword=your_store_password
+keyPassword=your_key_password
+keyAlias=your_key_alias
+storeFile=app/your-release-key.jks
+```
+
+构建三个 Android 轻量包：
+
+```powershell
+flutter pub get
+flutter build apk --release --split-per-abi
+```
+
+构建完成后，APK 位于：
+
+- `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`
+- `build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk`
+- `build/app/outputs/flutter-apk/app-x86_64-release.apk`
+
+## 测试与检查
+
+```powershell
 flutter analyze
+flutter test
 ```
 
-### Android Release 构建
-```bash
-flutter build apk --release --target-platform android-arm64
+推送公开仓库前应额外检查：
+
+```powershell
+git status --short
+git diff --cached
+rg -n "api_key|secret|password|token|storePassword|keyAlias|Bearer|BAIDU_MAP_API_KEY" -S
 ```
 
-## 许可与免责声明
+命中账号字段、测试用例或接口变量名不一定是泄露，但真实账号、真实 token、签名密码、证书和 API Key 不应提交。
 
-- License: GPL-3.0，详见 LICENSE
-- 本项目仅用于学习交流，请遵守学校与平台相关规定
+## 来源与致谢
+
+本项目包含原仓库历史代码、当前仓库新增实现，以及对以下开源项目的参考、适配或改造。相关来源在 README 和 NOTICE 中保留，便于追溯。
+
+- 学习通登录、课程与签到相关能力参考或改造自 [AneryCoft/course_helper](https://github.com/AneryCoft/course_helper)。
+- 畅课相关能力参考或改造自 [wilinz/tronclass_plus](https://github.com/wilinz/tronclass_plus)。
+- 课堂派课程、签到、作业、考试等模块参考或改造自 [roselle-luo/fuckketangpai_app](https://github.com/roselle-luo/fuckketangpai_app)。
+- 学习通自动学习、任务流程、进度追踪等实现思路参考 [dsxksss/chaoxing_ft v0.1](https://github.com/dsxksss/chaoxing_ft/tree/v0.1)。
+- 微助教相关接口流程参考 [zn-cn/wzj-sign-in-weixin](https://github.com/zn-cn/wzj-sign-in-weixin)。
+- 局域网传输模块参考 [LocalSend](https://github.com/localsend/localsend) 和 [LocalSend Protocol](https://github.com/localsend/protocol)，相关 Apache-2.0 notice 见 `NOTICE`。
+- Flutter 腾讯验证码插件依赖来自 [AneryCoft/flutter_tencent_captcha](https://github.com/AneryCoft/flutter_tencent_captcha)。
+
+以上说明表示功能设计、接口流程、局部实现或协议存在参考与改造关系，并不表示逐文件完整复制。后续如继续引入外部代码，应在对应文件、README 或 NOTICE 中补充来源和许可证信息。
+
+## 隐私与安全
+
+- 本项目不提供云端账号同步，不主动上传用户账号、密码、cookie 或 token 到项目服务器。
+- 账号、会话和本地记录仅保存在用户设备本地；请自行保护设备安全。
+- 仓库不应包含个人账号、真实 cookie、真实 token、签名证书、签名密码、第三方 API Key 或本地抓包数据。
+- `key/`、`*.jks`、`key.properties`、`local.properties`、`.dart_appdata/`、抓取目录和参考工程目录均应保持忽略状态。
+
+## 许可证
+
+本仓库以 GPL-3.0 发布，详见 `LICENSE`。部分第三方来源或改造代码可能同时受其原许可证约束，相关说明见 `NOTICE` 及上方来源列表。

@@ -63,6 +63,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   };
 
   bool _isInitializing = true;
+  bool _showTodosOnLockScreen = true;
   StreamSubscription<String?>? _accountChangeSubscription;
   Timer? _countdownTimer;
   String? _selectedDateFilter;
@@ -120,6 +121,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   Future<void> _autoRefreshOnOpen() async {
     setState(() => _isInitializing = true);
     await NotificationService().initialize();
+    _showTodosOnLockScreen = NotificationService().showTodosOnLockScreen;
     await _checkAndRequestNotificationPermission();
 
     // 先加载本地持久化数据
@@ -277,11 +279,25 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           data.pendingTodos,
           platformName,
         );
-        allPendingTodos.addAll(data.pendingTodos);
+        allPendingTodos.addAll(
+          data.pendingTodos.map(
+            (todo) => <String, dynamic>{...todo, 'platform_name': platformName},
+          ),
+        );
       }
     }
 
     await NotificationService().updateOngoingNotification(allPendingTodos);
+  }
+
+  Future<void> _updateLockScreenTodoVisibility(bool enabled) async {
+    setState(() {
+      _showTodosOnLockScreen = enabled;
+    });
+
+    await NotificationService().setShowTodosOnLockScreen(enabled);
+    await NotificationService().cancelAllNotifications();
+    await _scheduleNotificationsForAllPlatforms();
   }
 
   @override
@@ -484,9 +500,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      if (coursesResponse.data is! Map<String, dynamic>) return;
-      final coursesData = coursesResponse.data['data'];
-      if (coursesData is! List) return;
+      final coursesData = _extractTronclassCourses(coursesResponse.data);
+      if (coursesData.isEmpty) return;
 
       final courseItems = <Map<String, dynamic>>[];
       final existingIds = data.pendingTodos
@@ -494,7 +509,6 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           .toSet();
 
       for (final course in coursesData) {
-        if (course is! Map<String, dynamic>) continue;
         final courseId = course['id']?.toString() ?? '';
         final courseName = course['name']?.toString() ?? '';
         if (courseId.isEmpty) continue;
@@ -587,27 +601,43 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         // 获取互动列表
         try {
           final interactionResponse = await context.sendRequest(
-            '/api/courses/$courseId/interactions',
+            '/api/courses/$courseId/classroom-list',
           );
 
           if (interactionResponse.data is Map<String, dynamic>) {
-            final interactions = interactionResponse.data['interactions'];
+            final interactions = interactionResponse.data['classrooms'];
             if (interactions is List) {
               for (final interaction in interactions) {
                 if (interaction is! Map<String, dynamic>) continue;
-                final isFinished = interaction['is_finished'] == true;
-                if (isFinished) continue;
 
                 final id = interaction['id']?.toString() ?? '';
                 if (id.isEmpty || existingIds.contains(id)) continue;
 
+                final skipReason =
+                    TCCourseApi.tronclassInteractionSkipReason(interaction);
+                if (skipReason != null) {
+                  ApiService.appendExternalConsoleLog(
+                    'TodosPage',
+                    'Tronclass: skip interaction id=$id title=${interaction['title']} '
+                        'status=${interaction['status']} finish_at=${interaction['finish_at']} '
+                        'start_at=${interaction['start_at']} updated_status_at=${interaction['updated_status_at']} '
+                        'skipReason=$skipReason',
+                  );
+                  continue;
+                }
+
                 existingIds.add(id);
+                final stateLabel =
+                    TCCourseApi.evaluateTronclassInteractionState(interaction);
                 courseItems.add({
                   'id': id,
                   'title': interaction['title']?.toString() ?? '',
-                  'type': 'questionnaire',
+                  'type': 'classroom',
+                  'course_id': courseId,
                   'course_name': courseName,
+                  'start_time': interaction['start_at']?.toString() ?? '',
                   'end_time': interaction['end_time']?.toString() ?? '',
+                  'interaction_state': stateLabel,
                   'is_locked': false,
                 });
               }
@@ -651,6 +681,35 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         'Tronclass: load course items error: $e',
       );
     }
+  }
+
+  List<Map<String, dynamic>> _extractTronclassCourses(dynamic responseData) {
+    if (responseData is! Map) return const [];
+    final root = responseData.map(
+      (key, value) => MapEntry(key.toString(), value),
+    );
+    final data = root['data'];
+    final dataMap = data is Map
+        ? data.map((key, value) => MapEntry(key.toString(), value))
+        : null;
+    final candidates = <dynamic>[
+      root['courses'],
+      root['data'],
+      dataMap?['list'],
+    ];
+
+    for (final candidate in candidates) {
+      if (candidate is List) {
+        return candidate
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  item.map((key, value) => MapEntry(key.toString(), value)),
+            )
+            .toList();
+      }
+    }
+    return const [];
   }
 
   Future<void> _loadChaoxingTodos(String userId) async {
@@ -1212,6 +1271,11 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
               padding: EdgeInsets.zero,
               children: [
                 _buildTimelineSection(context, groupedByDate, palette),
+                if (Theme.of(context).platform == TargetPlatform.android)
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                    child: _buildNotificationPreferenceCard(context),
+                  ),
                 Padding(
                   padding: EdgeInsets.all(AppSpacing.lg),
                   child: Column(
@@ -1316,6 +1380,49 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildNotificationPreferenceCard(BuildContext context) {
+    return Card(
+      elevation: AppElevation.low,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.large),
+      ),
+      child: SwitchListTile.adaptive(
+        value: _showTodosOnLockScreen,
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.xs,
+        ),
+        secondary: Container(
+          padding: EdgeInsets.all(AppSpacing.sm),
+          decoration: BoxDecoration(
+            color: Theme.of(
+              context,
+            ).colorScheme.primary.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(AppRadius.medium),
+          ),
+          child: Icon(
+            Icons.lock_outline_rounded,
+            color: Theme.of(context).colorScheme.primary,
+            size: 22,
+          ),
+        ),
+        title: const Text(
+          '锁屏显示待办',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          '关闭后，Android 锁屏页面不会显示待办通知内容',
+          style: TextStyle(
+            color: Theme.of(
+              context,
+            ).colorScheme.onSurface.withValues(alpha: 0.7),
+          ),
+        ),
+        onChanged: _updateLockScreenTodoVisibility,
       ),
     );
   }
@@ -1723,6 +1830,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     final title = todo['title']?.toString() ?? '未知任务';
     final courseName = todo['course_name']?.toString() ?? '';
     final endTimeStr = todo['end_time']?.toString() ?? '';
+    final startTimeStr = todo['start_time']?.toString() ?? '';
+    final interactionState = todo['interaction_state']?.toString() ?? '';
     final isLocked = todo['is_locked'] == true;
 
     DateTime? endTime;
@@ -1763,6 +1872,26 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                 ).colorScheme.onSurface.withValues(alpha: 0.6),
               ),
             ),
+            if (type == 'classroom' && startTimeStr.isNotEmpty) ...[
+              SizedBox(height: AppSpacing.xs / 2),
+              Text(
+                '开始时间：${_formatTronclassDateLabel(startTimeStr)}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+              ),
+            ],
+            if (type == 'classroom' && interactionState.isNotEmpty) ...[
+              SizedBox(height: AppSpacing.xs / 2),
+              AppBadge(
+                label: interactionState,
+                type: _tronclassInteractionBadgeType(interactionState),
+                isSmall: true,
+              ),
+            ],
             if (endTime != null) ...[
               Row(
                 children: [
@@ -1842,7 +1971,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             ? null
             : () {
                 // 检查当前平台是否为畅课
-                if (PlatformManager().currentPlatform != PlatformType.tronclass) {
+                if (PlatformManager().currentPlatform !=
+                    PlatformType.tronclass) {
                   showDialog(
                     context: context,
                     builder: (context) => AlertDialog(
@@ -1870,6 +2000,22 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     );
   }
 
+  String _formatTronclassDateLabel(String raw) {
+    try {
+      return DateFormat('MM-dd HH:mm').format(DateTime.parse(raw).toLocal());
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  AppBadgeType _tronclassInteractionBadgeType(String state) {
+    return switch (state) {
+      '已过截止时间' => AppBadgeType.error,
+      '疑似旧互动' => AppBadgeType.warning,
+      _ => AppBadgeType.info,
+    };
+  }
+
   Widget _buildRainClassroomTodoItem(Map<String, dynamic> todo) {
     final title = todo['title']?.toString() ?? '未知考试';
     final classroomName = todo['classroom_name']?.toString() ?? '';
@@ -1887,7 +2033,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         isOverdue = endDateTime.isBefore(now);
         isUrgent = !isOverdue && endDateTime.difference(now).inHours < 24;
 
-        debugPrint('[TodosPage] 雨课堂考试 "$title" end_time=$endTime 状态=${isOverdue ? "已过期" : "进行中"}');
+        debugPrint(
+          '[TodosPage] 雨课堂考试 "$title" end_time=$endTime 状态=${isOverdue ? "已过期" : "进行中"}',
+        );
       } catch (_) {}
     } else {
       debugPrint('[TodosPage] 雨课堂考试 "$title" end_time=$endTime (无截止时间)，判定为进行中');

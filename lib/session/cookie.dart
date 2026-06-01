@@ -12,6 +12,18 @@ import 'tronclass_auth.dart';
 import 'credential_manager.dart';
 import 'login_context.dart';
 import '../platform.dart';
+import '../tronclass_guet_constants.dart';
+
+List<Map<String, dynamic>> _decodeStoredCookies(String cookiesJson) {
+  final decoded = json.decode(cookiesJson);
+  if (decoded is! List) {
+    return const <Map<String, dynamic>>[];
+  }
+  return decoded
+      .whereType<Map>()
+      .map((entry) => Map<String, dynamic>.from(entry))
+      .toList(growable: false);
+}
 
 class CookieInterceptor extends Interceptor {
   @override
@@ -20,15 +32,20 @@ class CookieInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     if (options.headers['Cookie'] == null) {
+      final extraLoginContext = options.extra['loginContext'];
+      final loginContext = extraLoginContext is LoginContext
+          ? extraLoginContext
+          : null;
       final uri = options.uri;
       List<Cookie> cookies = [];
-      CookieJar? cookieJar = CookieManager.isLoggingIn
+      CookieJar? cookieJar = loginContext?.tempCookieJar;
+      cookieJar ??= CookieManager.isLoggingIn
           ? CookieManager.getTempCookieJar()
           : CookieManager.getCurrentUserCookieJar();
       if (cookieJar != null) {
         cookies = await cookieJar.loadForRequest(uri);
 
-        // 学习通特殊处理：从多个子域名加载Cookie
+        // 学习通特殊处理：从多个子域名加载 Cookie
         if (PlatformManager().isChaoxing) {
           final probeUris = [
             Uri.parse('https://chaoxing.com'),
@@ -49,7 +66,7 @@ class CookieInterceptor extends Interceptor {
           }
         }
 
-        // 雨课堂特殊处理：如果当前域名没有Cookie，尝试从.yuketang.cn域加载
+        // 雨课堂特殊处理：如果当前域名没有 Cookie，尝试从 .yuketang.cn 域加载
         if (cookies.isEmpty && PlatformManager().isRainClassroom) {
           final fallbackUri = Uri.parse('https://.yuketang.cn');
           cookies = await cookieJar.loadForRequest(fallbackUri);
@@ -62,8 +79,8 @@ class CookieInterceptor extends Interceptor {
 
         if (PlatformManager().isChaoxing) {
           ApiService.appendExternalConsoleLog(
-            '学习通',
-            '已注入 Cookie，总长度: ${cookieStr.length}',
+            'chaoxing',
+            'Injected Cookie header, length=${cookieStr.length}',
           );
         }
 
@@ -104,9 +121,10 @@ class CookieInterceptor extends Interceptor {
       }
 
       if (PlatformManager().isTronclass &&
+          loginContext == null &&
           options.headers['x-session-id'] == null) {
         final url = options.uri.toString();
-        if (url.contains('https://courses.guet.edu.cn/')) {
+        if (url.contains('${TronclassGuetConstants.portalBaseUrl}/')) {
           final currentUserId = AccountManager.currentSessionId;
           final sessionId = await TronclassAuthManager.getCurrentSessionId();
           if (sessionId != null && sessionId.isNotEmpty) {
@@ -131,8 +149,8 @@ class CookieInterceptor extends Interceptor {
           if (account != null && account.token.isNotEmpty) {
             options.headers['token'] = account.token;
             ApiService.appendExternalConsoleLog(
-              '课堂派',
-              '[CookieInterceptor] 已注入 token (长度=${account.token.length}) userId=$currentUserId',
+              'ketangpai',
+              '[CookieInterceptor] Injected token (length=${account.token.length}) userId=$currentUserId',
             );
           }
         }
@@ -146,9 +164,23 @@ class CookieInterceptor extends Interceptor {
   void onResponse(Response response, ResponseInterceptorHandler handler) async {
     final setCookieHeaders = response.headers['set-cookie'];
     if (setCookieHeaders != null) {
+      final extraLoginContext = response.requestOptions.extra['loginContext'];
+      final loginContext = extraLoginContext is LoginContext
+          ? extraLoginContext
+          : null;
       final cookies = setCookieHeaders
           .map((s) => Cookie.fromSetCookieValue(s))
           .toList();
+
+      if (loginContext != null) {
+        loginContext.setCookieHeaders = setCookieHeaders;
+        await loginContext.tempCookieJar.saveFromResponse(
+          response.requestOptions.uri,
+          cookies,
+        );
+        handler.next(response);
+        return;
+      }
 
       if (CookieManager.isLoggingIn) {
         final platform = PlatformManager().currentPlatformName;
@@ -158,11 +190,11 @@ class CookieInterceptor extends Interceptor {
         );
         ApiService.appendExternalConsoleLog(
           platform,
-          '请求URL: ${response.requestOptions.uri}',
+          '请求 URL: ${response.requestOptions.uri}',
         );
         ApiService.appendExternalConsoleLog(
           platform,
-          'Cookie名称: ${cookies.map((c) => c.name).join(", ")}',
+          'Cookie 名称: ${cookies.map((c) => c.name).join(", ")}',
         );
 
         await CookieManager.tempSaveCookie(
@@ -173,10 +205,10 @@ class CookieInterceptor extends Interceptor {
 
         ApiService.appendExternalConsoleLog(
           platform,
-          'Cookie已临时存储到内存，等待登录完成后迁移',
+          'Cookie 已临时存储到内存，等待登录完成后迁移',
         );
 
-        // 登录期间不检查认证状态，只保存 Cookie
+        // 登录期间不检查认证状态，只保留 Cookie
         handler.next(response);
         return;
       } else {
@@ -184,7 +216,9 @@ class CookieInterceptor extends Interceptor {
         if (cookieJar != null) {
           await cookieJar.saveFromResponse(response.realUri, cookies);
           await CookieManager.saveCurrentUserCookies();
-          await CookieManager.updateCredentialExpiryFromResponse(setCookieHeaders);
+          await CookieManager.updateCredentialExpiryFromResponse(
+            setCookieHeaders,
+          );
         }
       }
     }
@@ -195,33 +229,89 @@ class CookieInterceptor extends Interceptor {
 class CookieManager {
   static const cxDomain = '.chaoxing.com';
   static const rcDomain = '.yuketang.cn';
-  static const tcDomain = 'courses.guet.edu.cn';
+  static const tcDomain = TronclassGuetConstants.defaultCookieHost;
 
   @Deprecated('使用 LoginContextManager.instance.hasActiveContexts 代替')
   static bool isLoggingIn = false;
 
   static final Map<String, CookieJar> _userCookieJars = {};
+  static final Map<String, Future<CookieJar>> _cookieJarLoadFutures = {};
+
+  @visibleForTesting
+  static Future<void> Function(String cookieKey, CookieJar cookieJar)?
+  debugLoadCookiesOverride;
 
   @Deprecated('使用 LoginContext.tempCookieJar 代替')
-  static CookieJar? _tempCookieJar; // 临时保存登录的 Cookie
+  static CookieJar? _tempCookieJar; // 临时保存登录 Cookie
 
   static List<String>? _tempSetCookieHeaders;
-  static bool _isMigratingCookies = false; // 防止 Cookie 迁移死循环 // 临时保存 Set-Cookie 头
+  static bool _isMigratingCookies = false; // 防止 Cookie 迁移死循环，并临时保存 Set-Cookie 头
   static late SharedPreferences _prefs;
 
   static int refreshCounts = 0; // 只为每个平台刷新一次
 
   static Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
-    await loadAllCookies(refreshOnlineState: false);
-    // Avoid blocking first screen with network refresh; keep it running in background.
-    unawaited(refreshAccountsInBackground());
+    ApiService.logStartupRecovery('[CookieManager] quick initialize done');
   }
 
-  static Future<void> refreshAccountsInBackground() async {
+  static Future<void> refreshAccountsInBackground({
+    bool startupMode = false,
+    Duration perAccountTimeout = const Duration(seconds: 5),
+  }) async {
     if (refreshCounts < 3) {
-      await _refreshAccounts();
+      await _refreshAccounts(
+        startupMode: startupMode,
+        perAccountTimeout: perAccountTimeout,
+      );
     }
+  }
+
+  static Future<void> restoreCookiesForStartup({
+    Duration perAccountTimeout = const Duration(seconds: 5),
+  }) async {
+    final accounts = AccountManager.getAllAccounts();
+    ApiService.logStartupRecovery(
+      '[CookieManager] startup restore begin accounts=${accounts.length}',
+    );
+
+    for (final user in accounts) {
+      final platformName = user.platform.toLowerCase();
+      final cookieKey = '${platformName}_${user.uid}';
+      ApiService.logStartupRecovery(
+        '[CookieManager] restore begin key=$cookieKey',
+      );
+
+      try {
+        await getCookieJarForUser(
+          user.uid,
+          platformName: platformName,
+        ).timeout(perAccountTimeout);
+        ApiService.logStartupRecovery(
+          '[CookieManager] restore success key=$cookieKey',
+        );
+      } on TimeoutException {
+        ApiService.logStartupRecovery(
+          '[CookieManager] restore timeout key=$cookieKey',
+        );
+        if (AccountManager.currentSessionId == user.uid) {
+          await AccountManager.clearCurrentSessionForStartupRecovery(
+            reason: 'cookie restore timeout key=$cookieKey',
+          );
+        }
+      } catch (e) {
+        ApiService.logStartupRecovery(
+          '[CookieManager] restore error key=$cookieKey error=$e',
+        );
+        if (AccountManager.currentSessionId == user.uid) {
+          await AccountManager.clearCurrentSessionForStartupRecovery(
+            reason: 'cookie restore error key=$cookieKey error=$e',
+          );
+        }
+      }
+    }
+
+    ApiService.logStartupRecovery('[CookieManager] startup restore done');
   }
 
   static Future<void> loadAllCookies({bool refreshOnlineState = true}) async {
@@ -246,46 +336,84 @@ class CookieManager {
     }
   }
 
-  /// 刷新所有账号的Cookie和用户信息
-  static Future<void> _refreshAccounts() async {
+  /// 刷新所有账号的 Cookie 和用户信息
+  /// 刷新当前平台所有账号的 Cookie 和用户信息
+  static Future<void> _refreshAccounts({
+    bool startupMode = false,
+    Duration perAccountTimeout = const Duration(seconds: 5),
+  }) async {
     refreshCounts++;
     final accounts = AccountManager.getAllAccounts();
+    final refreshPlatform = PlatformManager().currentPlatform;
 
     int successCount = 0;
     int failCount = 0;
 
     final currentUserId = AccountManager.currentSessionId;
-    if (currentUserId == null) return;
-
-    if (PlatformManager().isTronclass) {
+    if (currentUserId == null || PlatformManager().isTronclass) {
+      if (startupMode) {
+        ApiService.logStartupRecovery(
+          '[CookieManager] skip background refresh currentUserId=$currentUserId tronclass=${PlatformManager().isTronclass}',
+        );
+      }
       return;
     }
 
-    final getUserInfoApi = PlatformManager().isChaoxing
-        ? CXLoginApi.getUserInfo
-        : RCLoginApi.getUserInfo;
-
     for (final user in accounts) {
-      try {
-        AccountManager.setCurrentSessionTemp(user.uid);
-        final refreshedUser = await getUserInfoApi();
+      Future<void> refreshSingleAccount() async {
+        final refreshedUser = user.isChaoxing
+            ? await CXLoginApi.getUserInfoForAccount(user.uid)
+            : user.isRainClassroom
+            ? await RCLoginApi.getUserInfoForAccount(user.uid)
+            : null;
 
         if (refreshedUser != null) {
-          await AccountManager.addAccount(refreshedUser);
+          await AccountManager.addAccountForPlatformName(
+            user.platform,
+            refreshedUser,
+            notify: false,
+          );
           successCount++;
         }
+      }
+
+      try {
+        if (startupMode) {
+          ApiService.logStartupRecovery(
+            '[CookieManager] refresh account begin userId=${user.uid} platform=${user.platform}',
+          );
+          await refreshSingleAccount().timeout(perAccountTimeout);
+          ApiService.logStartupRecovery(
+            '[CookieManager] refresh account done userId=${user.uid}',
+          );
+        } else {
+          await refreshSingleAccount();
+        }
+      } on TimeoutException {
+        failCount++;
+        ApiService.logStartupRecovery(
+          '[CookieManager] refresh account timeout userId=${user.uid}',
+        );
       } catch (e) {
         failCount++;
-        debugPrint('刷新账号 ${user.name} 失败：$e');
+        debugPrint('Refresh account ${user.name} failed: $e');
+        if (startupMode) {
+          ApiService.logStartupRecovery(
+            '[CookieManager] refresh account error userId=${user.uid} error=$e',
+          );
+        }
       }
     }
-    // 恢复原始会话（如果原始会话为空，则不恢复，避免退出登录后被错误恢复）
-    if (currentUserId.isNotEmpty) {
-      AccountManager.setCurrentSessionTemp(currentUserId);
+
+    if (successCount > 0 &&
+        PlatformManager().currentPlatform == refreshPlatform) {
+      AccountManager.notifyStateChanged();
     }
 
     if (successCount > 0 || failCount > 0) {
-      debugPrint('账号刷新完成：成功 $successCount 个，失败 $failCount 个');
+      debugPrint(
+        'Account refresh completed: success=$successCount failed=$failCount',
+      );
     }
   }
 
@@ -336,7 +464,7 @@ class CookieManager {
     }
   }
 
-  /// 临时保存Cookie到内存
+  /// 临时保存 Cookie 到内存
   static Future<void> tempSaveCookie(
     List<Cookie> cookies, {
     Uri? responseUri,
@@ -361,7 +489,7 @@ class CookieManager {
       } else {
         uri = responseUri ?? getDomainUri();
         cookie.domain = uri.host;
-        // 某些平台的 Set-Cookie 不带 domain，使用当前响应域来避免跨域丢 Cookie。
+        // 某些平台的 Set-Cookie 不带 domain，使用当前响应域避免跨域丢 Cookie。
       }
       await _tempCookieJar!.saveFromResponse(uri, [cookie]);
     }
@@ -377,15 +505,37 @@ class CookieManager {
     _tempSetCookieHeaders = null;
   }
 
-  static Future<CookieJar> getCookieJarForUser(String userId, {String? platformName}) async {
-    // Cookie按 platform_userId 存储
-    final platform = (platformName ?? PlatformManager().currentPlatformName).toLowerCase();
+  static Future<CookieJar> getCookieJarForUser(
+    String userId, {
+    String? platformName,
+  }) async {
+    // Cookie 按 platform_userId 存储
+    final platform = (platformName ?? PlatformManager().currentPlatformName)
+        .toLowerCase();
     final cookieKey = '${platform}_$userId';
+
+    final inFlight = _cookieJarLoadFutures[cookieKey];
+    if (inFlight != null) {
+      return inFlight;
+    }
 
     if (_userCookieJars.containsKey(cookieKey)) {
       return _userCookieJars[cookieKey]!;
     }
 
+    final future = _createAndLoadCookieJar(cookieKey);
+    _cookieJarLoadFutures[cookieKey] = future;
+
+    try {
+      return await future;
+    } finally {
+      if (identical(_cookieJarLoadFutures[cookieKey], future)) {
+        _cookieJarLoadFutures.remove(cookieKey);
+      }
+    }
+  }
+
+  static Future<CookieJar> _createAndLoadCookieJar(String cookieKey) async {
     final cookieJar = CookieJar();
     _userCookieJars[cookieKey] = cookieJar;
     await _loadCookiesForUser(cookieKey, cookieJar);
@@ -397,12 +547,20 @@ class CookieManager {
     String cookieKey,
     CookieJar cookieJar,
   ) async {
+    final loadOverride = debugLoadCookiesOverride;
+    if (loadOverride != null) {
+      await loadOverride(cookieKey, cookieJar);
+      return;
+    }
+
     final String? cookiesJson = _prefs.getString('cookies_$cookieKey');
-    debugPrint('[CookieManager] 加载Cookie: key=cookies_$cookieKey, 存在=${cookiesJson != null}');
+    debugPrint(
+      '[CookieManager] 加载 Cookie: key=cookies_$cookieKey, 存在=${cookiesJson != null}',
+    );
     if (cookiesJson == null) return;
 
     try {
-      final List<dynamic> cookiesData = json.decode(cookiesJson);
+      final cookiesData = await compute(_decodeStoredCookies, cookiesJson);
       for (var cookieData in cookiesData) {
         final cookie = Cookie(
           cookieData['name'] as String,
@@ -442,7 +600,7 @@ class CookieManager {
 
     final jar = await getCookieJarForUser(userId);
 
-    // 学习通需要从多个子域名收集Cookie
+    // 学习通需要从多个子域名收集 Cookie
     final List<Cookie> allCookies = [];
     if (PlatformManager().isChaoxing) {
       final domains = [
@@ -464,6 +622,11 @@ class CookieManager {
       ];
       for (final domain in domains) {
         final cookies = await jar.loadForRequest(Uri.parse(domain));
+        allCookies.addAll(cookies);
+      }
+    } else if (PlatformManager().isTronclass) {
+      for (final uri in TronclassGuetConstants.cookieProbeUris) {
+        final cookies = await jar.loadForRequest(uri);
         allCookies.addAll(cookies);
       }
     } else {
@@ -511,7 +674,7 @@ class CookieManager {
       return null;
     }
 
-    // Cookie按 platform_userId 存储，避免不同平台账号混用
+    // Cookie 按 platform_userId 存储，避免不同平台账号混用
     final platform = PlatformManager().currentPlatformName.toLowerCase();
     final cookieKey = '${platform}_$currentUserId';
     final cookieJar = _userCookieJars[cookieKey];
@@ -525,6 +688,7 @@ class CookieManager {
     final cookieKey = '${platform}_$userId';
 
     _userCookieJars.remove(cookieKey);
+    _cookieJarLoadFutures.remove(cookieKey);
     await _prefs.remove('cookies_$cookieKey');
     await TronclassAuthManager.clearSessionIdForUser(userId);
   }
@@ -537,8 +701,19 @@ class CookieManager {
     }
   }
 
-  /// 临时Cookie保存到账号（旧方法，已弃用）
+  /// 临时 Cookie 保存到账号（旧方法，已废弃）
   @Deprecated('使用 saveTempCookiesFromContext(userId, context) 代替')
+  @visibleForTesting
+  static void resetForTests() {
+    _userCookieJars.clear();
+    _cookieJarLoadFutures.clear();
+    _tempCookieJar = null;
+    _tempSetCookieHeaders = null;
+    _isMigratingCookies = false;
+    refreshCounts = 0;
+    debugLoadCookiesOverride = null;
+  }
+
   static Future<void> saveTempCookies(String userId) async {
     if (_isMigratingCookies) {
       debugPrint('[CookieManager] 跳过重复的 Cookie 迁移调用');
@@ -547,7 +722,7 @@ class CookieManager {
 
     final tempJar = getTempCookieJar();
     if (tempJar == null) {
-      debugPrint('[学习通] 警告：没有临时 Cookie 需要迁移');
+      debugPrint('[CookieManager] No temp cookie jar to migrate');
       return;
     }
 
@@ -558,7 +733,7 @@ class CookieManager {
 
     ApiService.appendExternalConsoleLog(
       platform,
-      '开始迁移临时Cookie到用户账号，存储Key: $cookieKey',
+      '开始迁移临时 Cookie 到用户账号，存储 Key: $cookieKey',
     );
 
     // Parse credential expiry from Set-Cookie headers
@@ -608,6 +783,8 @@ class CookieManager {
         Uri.parse('https://sso.chaoxing.com/'),
         Uri.parse('https://i.chaoxing.com/'),
       ]);
+    } else if (PlatformManager().isTronclass) {
+      probeUris.addAll(TronclassGuetConstants.cookieProbeUris);
     } else {
       probeUris.add(getDomainUri());
     }
@@ -636,16 +813,18 @@ class CookieManager {
 
     ApiService.appendExternalConsoleLog(
       platform,
-      'Cookie已成功存储，数量: ${merged.length}',
+      'Cookie 已成功存储，数量: ${merged.length}',
     );
     ApiService.appendExternalConsoleLog(
       platform,
-      'Cookie键名: ${merged.keys.take(15).join(", ")}',
+      'Cookie 键名: ${merged.keys.take(15).join(", ")}',
     );
 
     for (final cookie in merged.values) {
       final host = _normalizeCookieHost(cookie.domain);
-      final uri = Uri.parse('https://${host.isNotEmpty ? host : getDomainUri().host}');
+      final uri = Uri.parse(
+        'https://${host.isNotEmpty ? host : getDomainUri().host}',
+      );
       await targetJar.saveFromResponse(uri, [cookie]);
     }
 
@@ -655,7 +834,7 @@ class CookieManager {
 
     ApiService.appendExternalConsoleLog(
       platform,
-      'Cookie迁移完成，已持久化到SharedPreferences',
+      'Cookie 迁移完成，已持久化到 SharedPreferences',
     );
   }
 
@@ -684,12 +863,13 @@ class CookieManager {
 
       ApiService.appendExternalConsoleLog(
         platformName,
-        '开始从上下文迁移Cookie到用户账号，存储Key: $cookieKey',
+        '开始从上下文迁移 Cookie 到用户账号，存储 Key: $cookieKey',
       );
 
       // 解析凭证过期时间
       int? credentialExpiry;
-      if (context.setCookieHeaders != null && context.setCookieHeaders!.isNotEmpty) {
+      if (context.setCookieHeaders != null &&
+          context.setCookieHeaders!.isNotEmpty) {
         for (final header in context.setCookieHeaders!) {
           final expiry = CredentialManager.parseCookieExpiry(header);
           if (expiry != null) {
@@ -717,7 +897,10 @@ class CookieManager {
       }
 
       // 从上下文的临时 CookieJar 迁移到用户 CookieJar
-      final targetJar = await getCookieJarForUser(userId, platformName: platformName);
+      final targetJar = await getCookieJarForUser(
+        userId,
+        platformName: platformName,
+      );
       final probeUris = _getProbeUrisForPlatform(context.platform);
 
       final merged = <String, Cookie>{};
@@ -742,16 +925,18 @@ class CookieManager {
 
       ApiService.appendExternalConsoleLog(
         platformName,
-        'Cookie已成功存储，数量: ${merged.length}',
+        'Cookie 已成功存储，数量: ${merged.length}',
       );
       ApiService.appendExternalConsoleLog(
         platformName,
-        'Cookie键名: ${merged.keys.take(15).join(", ")}',
+        'Cookie 键名: ${merged.keys.take(15).join(", ")}',
       );
 
       for (final cookie in merged.values) {
         final host = _normalizeCookieHost(cookie.domain);
-        final uri = Uri.parse('https://${host.isNotEmpty ? host : _getDefaultHostForPlatform(context.platform)}');
+        final uri = Uri.parse(
+          'https://${host.isNotEmpty ? host : _getDefaultHostForPlatform(context.platform)}',
+        );
         await targetJar.saveFromResponse(uri, [cookie]);
       }
 
@@ -759,10 +944,10 @@ class CookieManager {
 
       ApiService.appendExternalConsoleLog(
         platformName,
-        'Cookie迁移完成，已持久化到SharedPreferences',
+        'Cookie 迁移完成，已持久化到 SharedPreferences',
       );
     } catch (e) {
-      debugPrint('[CookieManager] Cookie迁移异常: $e');
+      debugPrint('[CookieManager] Cookie 迁移异常: $e');
       rethrow;
     } finally {
       _isMigratingCookies = false;
@@ -811,7 +996,7 @@ class CookieManager {
       case PlatformType.ketangpai:
         return [Uri.parse('https://openapiv5.ketangpai.com/')];
       case PlatformType.tronclass:
-        return [Uri.parse('https://www.tronclass.com.cn/')];
+        return TronclassGuetConstants.cookieProbeUris;
       case PlatformType.weizhuojiao:
         return [Uri.parse('https://www.weizhuojiao.com/')];
     }
@@ -827,7 +1012,7 @@ class CookieManager {
       case PlatformType.ketangpai:
         return 'openapiv5.ketangpai.com';
       case PlatformType.tronclass:
-        return 'www.tronclass.com.cn';
+        return TronclassGuetConstants.defaultCookieHost;
       case PlatformType.weizhuojiao:
         return 'www.weizhuojiao.com';
     }

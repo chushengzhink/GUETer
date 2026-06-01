@@ -20,6 +20,8 @@ class AppSettings {
   static const String readingLastPageKey = 'app_reading_last_page';
   static const String readingLastOpenAtKey = 'app_reading_last_open_at';
   static const String readingNightModeKey = 'app_reading_night_mode';
+  static const String academicApiEmailKey = 'app_academic_api_email';
+  static const String appLocaleKey = 'app_locale';
 
   static const String portalOpenModeExternalPreferred = 'external_preferred';
   static const String portalOpenModeEmbeddedPreferred = 'embedded_preferred';
@@ -50,6 +52,8 @@ class AppSettings {
   static const String themeStyleBold = 'bold';
   static const String themeStyleSoft = 'soft';
   static const String themeStyleKey = 'app_theme_style';
+  static const String localeCodeZh = 'zh';
+  static const String localeCodeEn = 'en';
 
   static final ValueNotifier<String> globalColorSchemeNotifier =
       ValueNotifier<String>(colorSchemeAqua);
@@ -57,8 +61,10 @@ class AppSettings {
       ValueNotifier<ThemeMode>(ThemeMode.system);
   static final ValueNotifier<bool> strictSecurityModeNotifier =
       ValueNotifier<bool>(false);
-  static final ValueNotifier<String> themeStyleNotifier =
-      ValueNotifier<String>(themeStyleModern);
+  static final ValueNotifier<String> themeStyleNotifier = ValueNotifier<String>(
+    themeStyleModern,
+  );
+  static Locale _currentLocale = const Locale(localeCodeZh);
 
   static Future<void> initialize() async {
     globalColorSchemeNotifier.value = await getGlobalColorScheme();
@@ -68,7 +74,10 @@ class AppSettings {
       false,
     );
     themeStyleNotifier.value = await getThemeStyle();
+    _currentLocale = await getLocale();
   }
+
+  static Locale get currentLocale => _currentLocale;
 
   static Future<bool> getBool(String key, bool defaultValue) async {
     final prefs = await SharedPreferences.getInstance();
@@ -151,5 +160,23 @@ class AppSettings {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(themeStyleKey, style);
     themeStyleNotifier.value = style;
+  }
+
+  static Future<Locale> getLocale() async {
+    final prefs = await SharedPreferences.getInstance();
+    final code = prefs.getString(appLocaleKey) ?? localeCodeZh;
+    return Locale(code == localeCodeEn ? localeCodeEn : localeCodeZh);
+  }
+
+  static Future<String> getLocaleCode() async {
+    final locale = await getLocale();
+    return locale.languageCode;
+  }
+
+  static Future<void> setLocaleCode(String code) async {
+    final normalized = code == localeCodeEn ? localeCodeEn : localeCodeZh;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(appLocaleKey, normalized);
+    _currentLocale = Locale(normalized);
   }
 }

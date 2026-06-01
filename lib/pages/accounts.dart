@@ -6,37 +6,20 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api/login.dart';
-import '../api/platform_dio_manager.dart';
 import '../session/account.dart';
+import '../session/account_events.dart';
 import '../session/app_settings.dart';
 import '../session/cookie.dart';
 import '../session/tronclass_auth.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import '../utils/global_palette.dart';
+import '../theme/design_tokens.dart';
+import '../theme/components/dashboard_components.dart';
 import 'widget/avatar.dart';
 import 'login.dart';
 import 'tronclass_web_login.dart';
 import 'ketangpai_main_struct.dart';
-
-class AccountChangeNotifier {
-  static final AccountChangeNotifier _instance =
-      AccountChangeNotifier._internal();
-  factory AccountChangeNotifier() => _instance;
-  AccountChangeNotifier._internal();
-
-  final StreamController<String?> _controller = StreamController.broadcast();
-
-  Stream<String?> get accountChanges => _controller.stream;
-
-  void notifyAccountChanged(String? accountId) {
-    _controller.add(accountId);
-  }
-
-  void dispose() {
-    _controller.close();
-  }
-}
 
 class AccountsPage extends StatefulWidget {
   const AccountsPage({super.key});
@@ -68,7 +51,9 @@ class _AccountsPageState extends State<AccountsPage>
     AppSettings.globalColorSchemeNotifier.addListener(_onGlobalSchemeChanged);
     _loadGlobalPalette();
     _loadAccounts();
-    _platformChangeSubscription = PlatformManager().platformChanges.listen((platform) {
+    _platformChangeSubscription = PlatformManager().platformChanges.listen((
+      platform,
+    ) {
       if (!mounted) return;
       // 立即清空旧数据并显示加载态，避免 UI 残留
       setState(() {
@@ -126,12 +111,7 @@ class _AccountsPageState extends State<AccountsPage>
   Future<void> _loadAccounts() async {
     final targetPlatform = PlatformManager().currentPlatform;
     final current = AccountManager.currentSessionId;
-    final allAccounts = AccountManager.getAllAccounts();
-
-    final platformName = PlatformManager().currentPlatformName.toLowerCase();
-    final filteredAccounts = allAccounts.where((user) {
-      return user.platform.toLowerCase() == platformName;
-    }).toList();
+    final filteredAccounts = AccountManager.getCurrentPlatformAccounts();
 
     try {
       if (filteredAccounts.isEmpty) {
@@ -150,30 +130,44 @@ class _AccountsPageState extends State<AccountsPage>
         return;
       }
 
-      // 并行执行所有平台的登录状态检查
-      final results = await Future.wait([
-        _refreshChaoxingLoginState(allAccounts).timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => <String, bool>{},
-        ),
-        _refreshRainClassroomLoginState(allAccounts).timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => <String, bool>{},
-        ),
-        _refreshTronclassLoginState(allAccounts).timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => <String, bool>{},
-        ),
-        _refreshKetangpaiLoginState(allAccounts).timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => <String, bool>{},
-        ),
-      ]);
+      // 只探测当前平台的登录状态，避免无意义的跨平台探活
+      var chaoxingState = <String, bool>{};
+      var rainClassroomState = <String, bool>{};
+      var tronclassState = <String, bool>{};
+      var ketangpaiState = <String, bool>{};
 
-      final chaoxingState = results[0];
-      final rainClassroomState = results[1];
-      final tronclassState = results[2];
-      final ketangpaiState = results[3];
+      switch (targetPlatform) {
+        case PlatformType.chaoxing:
+          chaoxingState = await _refreshChaoxingLoginState(filteredAccounts)
+              .timeout(
+                const Duration(seconds: 5),
+                onTimeout: () => <String, bool>{},
+              );
+          break;
+        case PlatformType.rainClassroom:
+          rainClassroomState =
+              await _refreshRainClassroomLoginState(filteredAccounts).timeout(
+                const Duration(seconds: 5),
+                onTimeout: () => <String, bool>{},
+              );
+          break;
+        case PlatformType.tronclass:
+          tronclassState = await _refreshTronclassLoginState(filteredAccounts)
+              .timeout(
+                const Duration(seconds: 5),
+                onTimeout: () => <String, bool>{},
+              );
+          break;
+        case PlatformType.ketangpai:
+          ketangpaiState = await _refreshKetangpaiLoginState(filteredAccounts)
+              .timeout(
+                const Duration(seconds: 5),
+                onTimeout: () => <String, bool>{},
+              );
+          break;
+        case PlatformType.weizhuojiao:
+          break;
+      }
 
       if (!mounted || PlatformManager().currentPlatform != targetPlatform) {
         return;
@@ -301,10 +295,7 @@ class _AccountsPageState extends State<AccountsPage>
       if (!user.isTronclass) {
         continue;
       }
-      final sessionId = await TronclassAuthManager.getSessionIdForUser(
-        user.uid,
-      );
-      state[user.uid] = sessionId != null && sessionId.isNotEmpty;
+      state[user.uid] = await AccountManager.hasValidTronclassSession(user);
     }
     return state;
   }
@@ -339,8 +330,10 @@ class _AccountsPageState extends State<AccountsPage>
     if (user.uid == _currentAccountId) {
       return;
     }
-    await AccountManager.setCurrentSession(user.uid);
-    AccountChangeNotifier().notifyAccountChanged(user.uid);
+    final switched = await AccountManager.switchAccount(user.uid);
+    if (!switched) {
+      return;
+    }
 
     setState(() {
       _currentAccountId = user.uid;
@@ -474,7 +467,9 @@ class _AccountsPageState extends State<AccountsPage>
                         return;
                       }
 
-                      debugPrint('[PlatformSwitch] 从 $currentPlatform 切换到 $platform');
+                      debugPrint(
+                        '[PlatformSwitch] 从 $currentPlatform 切换到 $platform',
+                      );
 
                       // 立即清空旧平台账户详情，显示切换中
                       setState(() {
@@ -489,12 +484,14 @@ class _AccountsPageState extends State<AccountsPage>
 
                       try {
                         // 用户主动点击平台切换按钮，设置 2 秒超时
-                        await PlatformManager().setPlatform(platform, userInitiated: true).timeout(
-                          const Duration(seconds: 2),
-                          onTimeout: () {
-                            debugPrint('[PlatformSwitch] 切换超时，强制完成 UI 更新');
-                          },
-                        );
+                        await PlatformManager()
+                            .setPlatform(platform, userInitiated: true)
+                            .timeout(
+                              const Duration(seconds: 2),
+                              onTimeout: () {
+                                debugPrint('[PlatformSwitch] 切换超时，强制完成 UI 更新');
+                              },
+                            );
                       } catch (e) {
                         debugPrint('[PlatformSwitch] 切换失败: $e');
                       } finally {
@@ -566,10 +563,7 @@ class _AccountsPageState extends State<AccountsPage>
 
   Future<void> _logoutAccount(User user) async {
     final isLoggedIn = user.isTronclass
-        ? (await TronclassAuthManager.getSessionIdForUser(
-                user.uid,
-              ))?.isNotEmpty ==
-              true
+        ? await AccountManager.hasValidTronclassSession(user)
         : user.isKetangpai
         ? user.token.isNotEmpty
         : true;
@@ -608,37 +602,8 @@ class _AccountsPageState extends State<AccountsPage>
       return;
     }
 
-    if (user.uid == _currentAccountId) {
-      await AccountManager.clearCurrentSession();
-      AccountChangeNotifier().notifyAccountChanged(null);
-    } else {
-      await CookieManager.clearCookiesForUser(user.uid);
-      await TronclassAuthManager.clearSessionIdForUser(user.uid);
-    }
+    await AccountManager.logoutAccount(user);
     CookieManager.clearTempCookies();
-
-    // 清理该用户的独立 Dio 实例
-    PlatformDioManager.clearDioForUser(
-      platform: PlatformType.values.firstWhere(
-        (p) => p.toString().split('.').last == user.platform,
-        orElse: () => PlatformType.tronclass,
-      ),
-      userId: user.uid,
-    );
-
-    if (user.isKetangpai) {
-      await AccountManager.addAccount(
-        User(
-          uid: user.uid,
-          name: user.name,
-          avatar: user.avatar,
-          phone: user.phone,
-          school: user.school,
-          platform: user.platform,
-          token: '',
-        ),
-      );
-    }
 
     await _loadAccounts();
 
@@ -667,13 +632,19 @@ class _AccountsPageState extends State<AccountsPage>
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.pop(context, AppSettings.portalOpenModeEmbeddedPreferred);
+                Navigator.pop(
+                  context,
+                  AppSettings.portalOpenModeEmbeddedPreferred,
+                );
               },
               child: const Text('内置门户'),
             ),
             FilledButton(
               onPressed: () {
-                Navigator.pop(context, AppSettings.portalOpenModeExternalPreferred);
+                Navigator.pop(
+                  context,
+                  AppSettings.portalOpenModeExternalPreferred,
+                );
               },
               child: const Text('系统浏览器'),
             ),
@@ -686,9 +657,9 @@ class _AccountsPageState extends State<AccountsPage>
     if (defaultTargetPlatform == TargetPlatform.windows &&
         mode == AppSettings.portalOpenModeEmbeddedPreferred) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Windows 下已自动改为系统浏览器打开')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Windows 下已自动改为系统浏览器打开')));
       }
       mode = AppSettings.portalOpenModeExternalPreferred;
     }
@@ -783,15 +754,17 @@ class _AccountsPageState extends State<AccountsPage>
           sessionId: savedSessionId,
         );
         if (reused) {
-          final refreshed = await TCLoginApi.getUserInfo(fallbackUid: account.uid);
+          final refreshed = await TCLoginApi.getUserInfo(
+            fallbackUid: account.uid,
+          );
           if (refreshed != null) {
             await AccountManager.addAccount(refreshed);
           }
           await _loadAccounts();
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('会话复用成功，无需再次输入验证码')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('会话复用成功，无需再次输入验证码')));
           }
           return;
         }
@@ -818,18 +791,21 @@ class _AccountsPageState extends State<AccountsPage>
 
     if (result?['ok'] == true) {
       final sessionId = result?['sessionId']?.toString().trim();
-      await AccountManager.setCurrentSession(account.uid);
+      await AccountManager.setCurrentSession(account.uid, notify: false);
       if (sessionId != null && sessionId.isNotEmpty) {
         await TronclassAuthManager.setSessionIdForUser(account.uid, sessionId);
         await TCLoginApi.bootstrapPortalSession(sessionId: sessionId);
+      } else {
+        await TronclassAuthManager.clearSessionIdForUser(account.uid);
       }
       final refreshed = await TCLoginApi.getUserInfo(fallbackUid: account.uid);
       if (refreshed != null) {
         await AccountManager.addAccount(
           refreshed.copyWith(password: account.password),
+          notify: false,
         );
       }
-      AccountChangeNotifier().notifyAccountChanged(account.uid);
+      AccountManager.notifyStateChanged();
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -1154,17 +1130,17 @@ class _AccountsPageState extends State<AccountsPage>
     bool isCurrentAccount,
   ) {
     final canLogout =
-      (user.isChaoxing && (_chaoxingLoginState[user.uid] ?? false)) ||
-      (user.isRainClassroom &&
-        (_rainClassroomLoginState[user.uid] ?? false)) ||
-      (user.isTronclass && (_tronclassLoginState[user.uid] ?? false)) ||
-      (user.isKetangpai && (_ketangpaiLoginState[user.uid] ?? false));
+        (user.isChaoxing && (_chaoxingLoginState[user.uid] ?? false)) ||
+        (user.isRainClassroom &&
+            (_rainClassroomLoginState[user.uid] ?? false)) ||
+        (user.isTronclass && (_tronclassLoginState[user.uid] ?? false)) ||
+        (user.isKetangpai && (_ketangpaiLoginState[user.uid] ?? false));
     final chaoxingStatus = user.isChaoxing
-      ? ((_chaoxingLoginState[user.uid] ?? false) ? '已登录' : '未登录')
-      : null;
+        ? ((_chaoxingLoginState[user.uid] ?? false) ? '已登录' : '未登录')
+        : null;
     final rainClassroomStatus = user.isRainClassroom
-      ? ((_rainClassroomLoginState[user.uid] ?? false) ? '已登录' : '未登录')
-      : null;
+        ? ((_rainClassroomLoginState[user.uid] ?? false) ? '已登录' : '未登录')
+        : null;
     final tronclassStatus = user.isTronclass
         ? ((_tronclassLoginState[user.uid] ?? false) ? '已登录' : '未登录')
         : null;
@@ -1174,11 +1150,11 @@ class _AccountsPageState extends State<AccountsPage>
     final weizhuojiaoStatus = user.isWeizhuojiao ? '工具页' : null;
 
     final platformStatus =
-      chaoxingStatus ??
-      rainClassroomStatus ??
-      tronclassStatus ??
-      ketangpaiStatus ??
-      weizhuojiaoStatus;
+        chaoxingStatus ??
+        rainClassroomStatus ??
+        tronclassStatus ??
+        ketangpaiStatus ??
+        weizhuojiaoStatus;
     final subtitle = platformStatus == null
         ? 'ID: ${user.uid}\n手机号: ${user.phone}'
         : 'ID: ${user.uid}\n手机号: ${user.phone}\n平台状态: $platformStatus';
@@ -1216,77 +1192,112 @@ class _AccountsPageState extends State<AccountsPage>
 
   Widget _buildOverviewCard() {
     final currentUser = _currentAccountId != null
-        ? _accounts.firstWhere((u) => u.uid == _currentAccountId, orElse: () => _accounts.isNotEmpty ? _accounts.first : User(uid: '', name: '', avatar: '', phone: '', school: '', platform: ''))
+        ? _accounts.firstWhere(
+            (u) => u.uid == _currentAccountId,
+            orElse: () => _accounts.isNotEmpty
+                ? _accounts.first
+                : User(
+                    uid: '',
+                    name: '',
+                    avatar: '',
+                    phone: '',
+                    school: '',
+                    platform: '',
+                  ),
+          )
         : null;
+    final loggedInCount = _accounts.where(_isAccountLoggedIn).length;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [_globalPrimary, _globalSecondary],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    if (_isPlatformSwitching ||
+        (_accounts.isEmpty && _currentAccountId == null)) {
+      return DashboardHeader(
+        eyebrow: 'ACCOUNT CENTER',
+        title: '账户管理',
+        subtitle: '正在读取当前平台账号和登录状态。',
+        icon: Icons.manage_accounts_outlined,
+        primary: _globalPrimary,
+        secondary: _globalSecondary,
+        children: const [
+          Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+              SizedBox(width: AppSpacing.sm),
+              Text('加载中...', style: TextStyle(color: Colors.white)),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return DashboardHeader(
+      eyebrow: 'ACCOUNT CENTER',
+      title: '账户管理',
+      subtitle: currentUser != null && currentUser.uid.isNotEmpty
+          ? '当前账户：${currentUser.name} (${currentUser.uid})'
+          : '当前平台：${_selectedPlatformLabel()}',
+      icon: Icons.manage_accounts_outlined,
+      primary: _globalPrimary,
+      secondary: _globalSecondary,
+      children: [
+        Wrap(
+          spacing: AppSpacing.sm,
+          runSpacing: AppSpacing.sm,
+          children: [
+            _buildOverviewMetric('当前平台', _selectedPlatformLabel()),
+            _buildOverviewMetric('已绑定', '${_accounts.length} 个'),
+            _buildOverviewMetric('已登录', '$loggedInCount 个'),
+          ],
         ),
-        borderRadius: BorderRadius.circular(16),
+      ],
+    );
+  }
+
+  Widget _buildOverviewMetric(String label, String value) {
+    return Container(
+      constraints: const BoxConstraints(minWidth: 96),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
       ),
-      child: (_isPlatformSwitching || (_accounts.isEmpty && _currentAccountId == null))
-          ? const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '账户管理',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Row(
-                  children: [
-                    SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    ),
-                    SizedBox(width: 8),
-                    Text(
-                      '加载中...',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ],
-                ),
-              ],
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '账户管理',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '当前平台：${_selectedPlatformLabel()}  ·  已绑定 ${_accounts.length} 个账号',
-                  style: const TextStyle(color: Colors.white),
-                ),
-                if (currentUser != null && currentUser.uid.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    '当前账户：${currentUser.name} (${currentUser.uid})',
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                ],
-              ],
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppRadius.medium),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
             ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.76),
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1490,7 +1501,9 @@ class _AccountsPageState extends State<AccountsPage>
                 await _loadAccounts();
                 if (!mounted) return;
                 ScaffoldMessenger.of(this.context).showSnackBar(
-                  SnackBar(content: Text('已切换到 ${PlatformManager().serverName} 服务器')),
+                  SnackBar(
+                    content: Text('已切换到 ${PlatformManager().serverName} 服务器'),
+                  ),
                 );
               },
               itemBuilder: (BuildContext context) => [
@@ -1512,7 +1525,11 @@ class _AccountsPageState extends State<AccountsPage>
                                 await _loadAccounts();
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(this.context).showSnackBar(
-                                  SnackBar(content: Text('已切换到 ${PlatformManager().serverName} 服务器')),
+                                  SnackBar(
+                                    content: Text(
+                                      '已切换到 ${PlatformManager().serverName} 服务器',
+                                    ),
+                                  ),
                                 );
                               }
                             },
@@ -1598,20 +1615,13 @@ class _AccountsPageState extends State<AccountsPage>
               child: _buildOverviewCard(),
             ),
             if (_accounts.isEmpty)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(24, 120, 24, 96),
-                child: Column(
-                  children: [
-                    Text(
-                      '暂无账号',
-                      style: TextStyle(fontSize: 18, color: Colors.grey),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      '点击右下角添加账号',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 28, 16, 96),
+                child: DashboardEmptyState(
+                  title: '暂无账号',
+                  subtitle: '点击右下角添加账号，或切换平台查看其他账号。',
+                  icon: Icons.person_add_alt_1_outlined,
+                  color: _globalPrimary,
                 ),
               )
             else
@@ -1625,7 +1635,7 @@ class _AccountsPageState extends State<AccountsPage>
                   final isCurrent =
                       user.uid == _currentAccountId && _isAccountLoggedIn(user);
                   return Card(
-                    elevation: isCurrent ? 3 : 1,
+                    elevation: isCurrent ? 2 : 0,
                     margin: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 8,
@@ -1634,11 +1644,11 @@ class _AccountsPageState extends State<AccountsPage>
                         ? Theme.of(context).colorScheme.primaryContainer
                         : Theme.of(context).colorScheme.surface,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(AppRadius.large),
                       side: BorderSide(
                         color: isCurrent
                             ? _globalPrimary.withValues(alpha: 0.35)
-                            : Colors.transparent,
+                            : Theme.of(context).colorScheme.outlineVariant,
                       ),
                     ),
                     child: _buildListItemContent(
@@ -1717,13 +1727,13 @@ class _AccountsPageState extends State<AccountsPage>
               onTap: _navigateToCaptchaLogin,
             ),
           if (_selectedPlatform != PlatformType.weizhuojiao)
-          SpeedDialChild(
-            child: const Icon(Icons.password),
-            label: _selectedPlatform == PlatformType.tronclass
-                ? '账号密码登录'
-                : '密码登录',
-            onTap: _navigateToPasswordLogin,
-          ),
+            SpeedDialChild(
+              child: const Icon(Icons.password),
+              label: _selectedPlatform == PlatformType.tronclass
+                  ? '账号密码登录'
+                  : '密码登录',
+              onTap: _navigateToPasswordLogin,
+            ),
         ],
       ),
     );

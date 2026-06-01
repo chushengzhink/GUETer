@@ -20,7 +20,7 @@ const List<ReadingBookEntry> readingBooks = <ReadingBookEntry>[
   ReadingBookEntry(
     title: '上海交通大学生存手册',
     subtitle: '随安装包内置的 PDF',
-    assetPath: 'pdf/上海交通大学生存手册.pdf',
+    assetPath: 'pdf/shanghai_jiaotong_university_survival_guide.pdf',
     icon: Icons.menu_book_rounded,
     colors: <Color>[Color(0xFF2D7C90), Color(0xFF58A39A)],
   ),

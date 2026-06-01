@@ -16,6 +16,9 @@ analyzer:
     - 1/**
     - chaoxing_ft-0.1/**
     - fuckketangpai_app-main/**
+    - tronclass_plus-main/**
+    - third_party/zerotier_sockets/example/**
+    - third_party/zerotier_sockets/test/**
     - yuketang/**
     - "**/*.g.dart"
     - "**/*.freezed.dart"

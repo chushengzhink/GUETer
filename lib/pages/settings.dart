@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../l10n/app_localizations.dart';
 import '../platform.dart';
 import '../session/account.dart';
 import '../session/app_settings.dart';
@@ -32,12 +33,15 @@ class _SettingsPageState extends State<SettingsPage> {
   ThemeMode _appThemeMode = ThemeMode.system;
   bool _isCheckingPlatformHealth = false;
   String? _lastPlatformHealthReport;
+  String _academicApiEmail = '';
+  late final TextEditingController _academicApiEmailController;
 
   String _tronclassPortalOpenMode = AppSettings.portalOpenModeExternalPreferred;
   String _tronclassReauthMode = AppSettings.reauthModeReuseSessionFirst;
 
   String _globalColorScheme = AppSettings.colorSchemeAqua;
   String _themeStyle = AppSettings.themeStyleModern;
+  String _selectedLocaleCode = AppSettings.localeCodeZh;
 
   final List<Map<String, dynamic>> _colorSchemeItems = const [
     {
@@ -96,10 +100,19 @@ class _SettingsPageState extends State<SettingsPage> {
     },
   ];
 
+  AppLocalizations get l10n => AppLocalizations.of(context)!;
+
   @override
   void initState() {
     super.initState();
+    _academicApiEmailController = TextEditingController();
     _loadAllSettings();
+  }
+
+  @override
+  void dispose() {
+    _academicApiEmailController.dispose();
+    super.dispose();
   }
 
   Future<void> _maybeShowSettingsAnnouncement() async {
@@ -146,18 +159,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               const SizedBox(width: 12),
-              const Expanded(child: Text('设置公告')),
+              Expanded(child: Text(l10n.settingsAnnouncementTitle)),
             ],
           ),
-          content: const SizedBox(
+          content: SizedBox(
             width: 460,
             child: SingleChildScrollView(
               child: Text(
-                '欢迎使用 GUETer。\n\n'
-                '本项目仅提供本地化的学习辅助能力，不提供账号云端同步、密码代收或后台上传服务。\n\n'
-                '账号、会话与相关本地记录采用加密后落盘保存；不会上传到本项目服务器，也不会主动发送你的账号密码。\n\n'
-                '本公告为版本化提示，后续条款更新时会再次提示一次。\n\n'
-                '如你所在学校、平台方或权利人对相关功能有异议，请以合规方式与我们联系处理。',
+                l10n.settingsAnnouncementContent,
                 style: TextStyle(fontSize: 13, height: 1.6),
               ),
             ),
@@ -165,11 +174,11 @@ class _SettingsPageState extends State<SettingsPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('稍后再看'),
+              child: Text(l10n.reviewLaterButton),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('我已知晓'),
+              child: Text(l10n.gotItButton),
             ),
           ],
         );
@@ -198,8 +207,12 @@ class _SettingsPageState extends State<SettingsPage> {
     final themeStyle =
         prefs.getString(AppSettings.themeStyleKey) ??
         AppSettings.themeStyleModern;
+    final localeCode =
+        prefs.getString(AppSettings.appLocaleKey) ?? AppSettings.localeCodeZh;
     final enableDiagnostic =
         prefs.getBool(AppSettings.enableDiagnosticToolsKey) ?? false;
+    final academicApiEmail =
+        prefs.getString(AppSettings.academicApiEmailKey) ?? '';
 
     if (!mounted) return;
 
@@ -212,9 +225,12 @@ class _SettingsPageState extends State<SettingsPage> {
       _tronclassReauthMode = reauthMode;
       _globalColorScheme = colorScheme;
       _themeStyle = themeStyle;
+      _selectedLocaleCode = localeCode;
       _enableDiagnosticTools = enableDiagnostic;
+      _academicApiEmail = academicApiEmail.trim();
       _loading = false;
     });
+    _academicApiEmailController.text = _academicApiEmail;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -231,6 +247,33 @@ class _SettingsPageState extends State<SettingsPage> {
     await AppSettings.setThemeStyle(_themeStyle);
   }
 
+  Future<void> _saveAcademicApiEmail() async {
+    final trimmed = _academicApiEmailController.text.trim();
+    await AppSettings.setString(AppSettings.academicApiEmailKey, trimmed);
+    if (!mounted) return;
+
+    setState(() {
+      _academicApiEmail = trimmed;
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(l10n.settingsSavedEmail)));
+  }
+
+  Future<void> _clearAcademicApiEmail() async {
+    _academicApiEmailController.clear();
+    await AppSettings.setString(AppSettings.academicApiEmailKey, '');
+    if (!mounted) return;
+
+    setState(() {
+      _academicApiEmail = '';
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(l10n.settingsClearedEmail)));
+  }
+
+  // ignore: unused_element
   Future<void> _showPortalModeHelpDialog() async {
     await showDialog<void>(
       context: context,
@@ -251,6 +294,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  // ignore: unused_element
   Future<void> _showReauthModeHelpDialog() async {
     await showDialog<void>(
       context: context,
@@ -271,6 +315,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  // ignore: unused_element
   Future<void> _restoreRecommendedTronclassModes() async {
     await AppSettings.setString(
       AppSettings.tronclassPortalOpenModeKey,
@@ -291,6 +336,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ).showSnackBar(const SnackBar(content: Text('已恢复为推荐策略')));
   }
 
+  // ignore: unused_element
   Future<void> _openTronclassPortalQuickly() async {
     final opened = await launchUrl(
       Uri.parse(PlatformManager().tronclassBaseUrl),
@@ -303,6 +349,7 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  // ignore: unused_element
   Future<void> _copyTronclassPortalUrl() async {
     final url = PlatformManager().tronclassBaseUrl;
     await Clipboard.setData(ClipboardData(text: url));
@@ -312,6 +359,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ).showSnackBar(SnackBar(content: Text('已复制门户地址：$url')));
   }
 
+  // ignore: unused_element
   Future<void> _resetTronclassBaseUrlToDefault() async {
     await PlatformManager().setTronclassBaseUrl('https://courses.guet.edu.cn');
     if (!mounted) return;
@@ -321,6 +369,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ).showSnackBar(const SnackBar(content: Text('已恢复畅课地址为桂电默认地址')));
   }
 
+  // ignore: unused_element
   Future<void> _resetKetangpaiBaseUrlToDefault() async {
     await PlatformManager().setKetangpaiBaseUrl(
       'https://openapiv5.ketangpai.com',
@@ -332,6 +381,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ).showSnackBar(const SnackBar(content: Text('已恢复课堂派地址为默认地址')));
   }
 
+  // ignore: unused_element
   Future<void> _checkCurrentTronclassAddress() async {
     final url = PlatformManager().tronclassBaseUrl;
     final stopwatch = Stopwatch()..start();
@@ -794,7 +844,7 @@ class _SettingsPageState extends State<SettingsPage> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('批量签到预检结果'),
+        title: Text(l10n.batchPrecheckResultTitle),
         content: SizedBox(
           width: 420,
           child: SingleChildScrollView(
@@ -805,16 +855,16 @@ class _SettingsPageState extends State<SettingsPage> {
           TextButton.icon(
             onPressed: () {
               Clipboard.setData(ClipboardData(text: report));
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('预检报告已复制')));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(l10n.precheckReportCopied)),
+              );
             },
             icon: const Icon(Icons.copy_all_outlined),
-            label: const Text('复制报告'),
+            label: Text(l10n.copyReportButton),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
+            child: Text(l10n.closeButton),
           ),
         ],
       ),
@@ -833,19 +883,14 @@ class _SettingsPageState extends State<SettingsPage> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('新手引导（可关闭）'),
-        content: const SingleChildScrollView(
-          child: Text(
-            '1. 先选平台再登录，对应平台账号互不影响。\n\n'
-            '2. 畅课建议用“系统浏览器优先 + 会话复用优先”。\n\n'
-            '3. 签到前先跑一次“批量签到预检”。\n\n'
-            '4. 异常时先点“一键修复常见问题”，再生成诊断包反馈。',
-          ),
+        title: Text(l10n.beginnerGuideDialogTitle),
+        content: SingleChildScrollView(
+          child: Text(l10n.beginnerGuideDialogContent),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
+            child: Text(l10n.closeButton),
           ),
         ],
       ),
@@ -862,7 +907,7 @@ class _SettingsPageState extends State<SettingsPage> {
         .toList();
     final picked = candidates[Random().nextInt(candidates.length)];
     final id = picked['id'] as String;
-    final name = picked['name'] as String;
+    final name = _getColorSchemeName(id);
 
     setState(() {
       _globalColorScheme = id;
@@ -872,9 +917,10 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('已切换盲盒配色：$name')));
+    ).showSnackBar(SnackBar(content: Text(l10n.randomPaletteSwitched(name))));
   }
 
+  // ignore: unused_element
   Future<void> _copySetupSummary() async {
     final summary = StringBuffer()
       ..writeln('GUETer 设置摘要')
@@ -894,15 +940,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _showDisclaimerDialog() async {
-    const content =
-        '免责声明（请先阅读）\n\n'
-        '1. 本应用仅供学习交流与技术研究使用，不得用于任何违法违规用途。\n\n'
-        '2. 本应用与学习通、雨课堂、畅课、课堂派、微助教等平台及其所属机构不存在官方合作关系。\n\n'
-        '3. 用户应确保本人已获得对应平台账号与课程的合法使用授权，因个人操作导致的账号风险、数据损失或其他后果由用户自行承担。\n\n'
-        '4. 本应用不提供账号云端同步、密码代收或后台上传服务；账号、会话与相关本地记录采用加密后落盘保存，不会上传到本项目服务器，也不会主动发送你的账号密码。\n\n'
-        '5. 本应用不承诺服务连续可用，不对因网络波动、平台策略调整、接口变更、设备兼容问题导致的功能异常承担责任。\n\n'
-        '6. 若你所在学校、平台方或权利人认为相关功能或展示内容存在不当，请及时联系我们处理。\n\n'
-        '如有侵权请联系邮箱3177401522a@gmai.com';
+    final content = l10n.disclaimerDialogContent;
 
     await showDialog<void>(
       context: context,
@@ -925,7 +963,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(child: Text('免责声明')),
+            Expanded(child: Text(l10n.disclaimerDialogTitle)),
           ],
         ),
         content: SizedBox(
@@ -936,7 +974,7 @@ class _SettingsPageState extends State<SettingsPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  '简要说明：本项目不代收账号密码，不做云端同步，账号数据仅加密保存在本机。',
+                  l10n.disclaimerDialogSummary,
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.45,
@@ -955,17 +993,17 @@ class _SettingsPageState extends State<SettingsPage> {
         actions: [
           TextButton.icon(
             onPressed: () {
-              Clipboard.setData(const ClipboardData(text: content));
+              Clipboard.setData(ClipboardData(text: content));
               ScaffoldMessenger.of(
                 context,
-              ).showSnackBar(const SnackBar(content: Text('免责声明已复制')));
+              ).showSnackBar(SnackBar(content: Text(l10n.disclaimerCopied)));
             },
             icon: const Icon(Icons.copy_all_outlined),
-            label: const Text('复制全文'),
+            label: Text(l10n.copyFullTextButton),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('我已知晓'),
+            child: Text(l10n.gotItButton),
           ),
         ],
       ),
@@ -982,6 +1020,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ).join();
   }
 
+  // ignore: unused_element
   Future<void> _showPasswordGeneratorDialog() async {
     String generated = _generateRandomPassword(length: 16);
     await showDialog<void>(
@@ -1037,17 +1076,17 @@ class _SettingsPageState extends State<SettingsPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('关闭'),
+              child: Text(l10n.closeButton),
             ),
             FilledButton.icon(
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: generated));
                 ScaffoldMessenger.of(
                   dialogContext,
-                ).showSnackBar(const SnackBar(content: Text('密码已复制到剪贴板')));
+                ).showSnackBar(SnackBar(content: Text(l10n.passwordCopied)));
               },
               icon: const Icon(Icons.copy_all_outlined),
-              label: const Text('复制'),
+              label: Text(l10n.copyButton),
             ),
           ],
         ),
@@ -1066,8 +1105,12 @@ class _SettingsPageState extends State<SettingsPage> {
     // 获取当前实际主题模式（考虑跟随系统的情况）
     final brightness = Theme.of(context).brightness;
     final actualThemeMode = _appThemeMode == ThemeMode.system
-        ? (brightness == Brightness.dark ? '深色' : '浅色')
-        : (_appThemeMode == ThemeMode.dark ? '深色' : '浅色');
+        ? (brightness == Brightness.dark
+              ? l10n.themeModeDark
+              : l10n.themeModeLight)
+        : (_appThemeMode == ThemeMode.dark
+              ? l10n.themeModeDark
+              : l10n.themeModeLight);
 
     return PanelCard(
       accentColor: themeColor,
@@ -1084,14 +1127,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 );
                 final nextIndex = (currentIndex + 1) % _colorSchemeItems.length;
                 final nextScheme = _colorSchemeItems[nextIndex]['id'] as String;
-                final nextName = _colorSchemeItems[nextIndex]['name'] as String;
+                final nextName = _getColorSchemeName(nextScheme);
 
                 setState(() => _globalColorScheme = nextScheme);
                 await _saveGlobalColorScheme();
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('已切换配色：$nextName'),
+                    content: Text(l10n.colorSchemeSwitched(nextName)),
                     duration: const Duration(milliseconds: 1500),
                   ),
                 );
@@ -1110,7 +1153,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          '配色方案',
+                          l10n.themePaletteLabel,
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.grey[600],
@@ -1136,7 +1179,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '长按切换',
+                      l10n.themePaletteLongPress,
                       style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                   ],
@@ -1169,11 +1212,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                      '已切换至${newMode == ThemeMode.light
-                          ? '浅色'
-                          : newMode == ThemeMode.dark
-                          ? '深色'
-                          : '跟随系统'}模式',
+                      l10n.themeModeSwitched(_themeModeLabel(newMode)),
                     ),
                     duration: const Duration(milliseconds: 1500),
                   ),
@@ -1187,13 +1226,15 @@ class _SettingsPageState extends State<SettingsPage> {
                     Row(
                       children: [
                         StatusDot(
-                          color: _appThemeMode == ThemeMode.dark ? Colors.purple : Colors.orange,
+                          color: _appThemeMode == ThemeMode.dark
+                              ? Colors.purple
+                              : Colors.orange,
                           size: 10,
                           pulsing: true,
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          '主题模式',
+                          l10n.themeModeStatLabel,
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.grey[600],
@@ -1214,14 +1255,16 @@ class _SettingsPageState extends State<SettingsPage> {
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
-                        color: _appThemeMode == ThemeMode.dark ? Colors.purple : Colors.orange,
+                        color: _appThemeMode == ThemeMode.dark
+                            ? Colors.purple
+                            : Colors.orange,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       _appThemeMode == ThemeMode.system
-                          ? '跟随系统'
-                          : '长按切换',
+                          ? l10n.themeModeSystem
+                          : l10n.themePaletteLongPress,
                       style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                   ],
@@ -1235,11 +1278,38 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   String _getColorSchemeName(String scheme) {
-    final item = _colorSchemeItems.firstWhere(
-      (item) => item['id'] == scheme,
-      orElse: () => _colorSchemeItems.first,
-    );
-    return item['name'] as String;
+    switch (scheme) {
+      case AppSettings.colorSchemeOcean:
+        return l10n.colorSchemeOcean;
+      case AppSettings.colorSchemeForest:
+        return l10n.colorSchemeForest;
+      case AppSettings.colorSchemeAmber:
+        return l10n.colorSchemeAmber;
+      case AppSettings.colorSchemeNight:
+        return l10n.colorSchemeNight;
+      case AppSettings.colorSchemeRose:
+        return l10n.colorSchemeRose;
+      case AppSettings.colorSchemePurple:
+        return l10n.colorSchemePurple;
+      case AppSettings.colorSchemeCyan:
+        return l10n.colorSchemeCyan;
+      case AppSettings.colorSchemeOrange:
+        return l10n.colorSchemeOrange;
+      case AppSettings.colorSchemeAqua:
+      default:
+        return l10n.colorSchemeAqua;
+    }
+  }
+
+  String _themeModeLabel(ThemeMode mode) {
+    switch (mode) {
+      case ThemeMode.light:
+        return l10n.themeModeLight;
+      case ThemeMode.dark:
+        return l10n.themeModeDark;
+      case ThemeMode.system:
+        return l10n.themeModeSystem;
+    }
   }
 
   Widget _buildQuickActionsSection() {
@@ -1261,8 +1331,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: const Icon(Icons.bolt, color: Colors.blue, size: 20),
               ),
               const SizedBox(width: 12),
-              const Text(
-                '快捷操作',
+              Text(
+                l10n.quickActionsTitle,
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
               ),
             ],
@@ -1273,7 +1343,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Expanded(
                 child: _buildQuickActionButton(
                   icon: Icons.monitor_heart_outlined,
-                  label: '平台体检',
+                  label: l10n.quickActionPlatformCheck,
                   color: Colors.blue,
                   onTap: _runPlatformHealthCheck,
                   isLoading: _isCheckingPlatformHealth,
@@ -1283,7 +1353,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Expanded(
                 child: _buildQuickActionButton(
                   icon: Icons.healing_outlined,
-                  label: '一键修复',
+                  label: l10n.quickActionFix,
                   color: Colors.green,
                   onTap: _quickFixCommonIssues,
                 ),
@@ -1292,7 +1362,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Expanded(
                 child: _buildQuickActionButton(
                   icon: Icons.casino_outlined,
-                  label: '随机配色',
+                  label: l10n.quickActionRandomPalette,
                   color: Colors.orange,
                   onTap: _applyRandomColorScheme,
                 ),
@@ -1395,7 +1465,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '免责声明（请先阅读）',
+                        l10n.disclaimerCardTitle,
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 15,
@@ -1404,7 +1474,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                       const SizedBox(height: 5),
                       Text(
-                        '本地加密存储，不上传服务器',
+                        l10n.disclaimerCardSubtitle,
                         style: TextStyle(
                           fontSize: 13,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1460,8 +1530,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        '新手引导',
+                      Text(
+                        l10n.beginnerGuideCardTitle,
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 15,
@@ -1469,7 +1539,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                       const SizedBox(height: 5),
                       Text(
-                        '首次使用与常见排障建议',
+                        l10n.beginnerGuideCardSubtitle,
                         style: TextStyle(
                           fontSize: 13,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1496,7 +1566,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: OutlinedButton.icon(
                 onPressed: _showBeginnerGuideDialog,
                 icon: const Icon(Icons.visibility_outlined, size: 18),
-                label: const Text('查看引导内容'),
+                label: Text(l10n.viewGuideButton),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   side: BorderSide(
@@ -1567,7 +1637,10 @@ class _SettingsPageState extends State<SettingsPage> {
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
-        title: const Text('设置', style: TextStyle(fontWeight: FontWeight.w600)),
+        title: Text(
+          l10n.appSettings,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
         elevation: 0,
         backgroundColor: Colors.transparent,
       ),
@@ -1593,8 +1666,8 @@ class _SettingsPageState extends State<SettingsPage> {
           // 外观与主题
           _buildFoldSection(
             icon: Icons.palette_outlined,
-            title: '外观与主题',
-            subtitle: '配色方案、主题风格、主题模式',
+            title: l10n.themeAndAppearanceTitle,
+            subtitle: l10n.themeAndAppearanceSubtitle,
             iconColor: Colors.orange,
             children: [
               Padding(
@@ -1605,19 +1678,22 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: DropdownButtonFormField<ThemeMode>(
                   key: ValueKey('theme-mode-${_appThemeMode.name}'),
                   initialValue: _appThemeMode,
-                  decoration: const InputDecoration(
-                    labelText: '主题模式',
+                  decoration: InputDecoration(
+                    labelText: l10n.themeModeLabel,
                     border: OutlineInputBorder(),
                   ),
-                  items: const [
+                  items: [
                     DropdownMenuItem(
                       value: ThemeMode.system,
-                      child: Text('跟随系统'),
+                      child: Text(l10n.themeModeSystem),
                     ),
-                    DropdownMenuItem(value: ThemeMode.light, child: Text('浅色')),
+                    DropdownMenuItem(
+                      value: ThemeMode.light,
+                      child: Text(l10n.themeModeLight),
+                    ),
                     DropdownMenuItem(
                       value: ThemeMode.dark,
-                      child: Text('深色护眼'),
+                      child: Text(l10n.themeModeDark),
                     ),
                   ],
                   onChanged: (mode) async {
@@ -1634,36 +1710,71 @@ class _SettingsPageState extends State<SettingsPage> {
                   vertical: 6,
                 ),
                 child: DropdownButtonFormField<String>(
+                  key: ValueKey('app-locale-$_selectedLocaleCode'),
+                  initialValue: _selectedLocaleCode,
+                  decoration: InputDecoration(
+                    labelText: l10n.languageLabel,
+                    helperText: l10n.languageRestartHint,
+                    border: const OutlineInputBorder(),
+                  ),
+                  items: [
+                    DropdownMenuItem(
+                      value: AppSettings.localeCodeZh,
+                      child: Text(l10n.languageChinese),
+                    ),
+                    DropdownMenuItem(
+                      value: AppSettings.localeCodeEn,
+                      child: Text(l10n.languageEnglish),
+                    ),
+                  ],
+                  onChanged: (code) async {
+                    if (code == null) return;
+                    setState(() => _selectedLocaleCode = code);
+                    await AppSettings.setLocaleCode(code);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(content: Text(l10n.languageSavedRestart)),
+                    );
+                  },
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
+                ),
+                child: DropdownButtonFormField<String>(
                   key: ValueKey('theme-style-$_themeStyle'),
                   initialValue: _themeStyle,
-                  decoration: const InputDecoration(
-                    labelText: '主题风格',
+                  decoration: InputDecoration(
+                    labelText: l10n.themeStyleLabel,
                     border: OutlineInputBorder(),
                   ),
-                  items: const [
+                  items: [
                     DropdownMenuItem(
                       value: AppSettings.themeStyleModern,
-                      child: Text('现代（推荐）'),
+                      child: Text(l10n.themeStyleModern),
                     ),
                     DropdownMenuItem(
                       value: AppSettings.themeStyleCompact,
-                      child: Text('紧凑'),
+                      child: Text(l10n.themeStyleCompact),
                     ),
                     DropdownMenuItem(
                       value: AppSettings.themeStylePlayful,
-                      child: Text('趣味'),
+                      child: Text(l10n.themeStylePlayful),
                     ),
                     DropdownMenuItem(
                       value: AppSettings.themeStyleMinimal,
-                      child: Text('极简'),
+                      child: Text(l10n.themeStyleMinimal),
                     ),
                     DropdownMenuItem(
                       value: AppSettings.themeStyleBold,
-                      child: Text('大胆'),
+                      child: Text(l10n.themeStyleBold),
                     ),
                     DropdownMenuItem(
                       value: AppSettings.themeStyleSoft,
-                      child: Text('柔和'),
+                      child: Text(l10n.themeStyleSoft),
                     ),
                   ],
                   onChanged: (style) async {
@@ -1676,8 +1787,8 @@ class _SettingsPageState extends State<SettingsPage> {
               const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.casino_outlined),
-                title: const Text('盲盒随机配色'),
-                subtitle: const Text('随机切换到一套不同的全局配色'),
+                title: Text(l10n.randomPaletteTitle),
+                subtitle: Text(l10n.randomPaletteSubtitle),
                 onTap: _applyRandomColorScheme,
               ),
               const Divider(height: 1),
@@ -1724,7 +1835,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           children: [
                             Expanded(
                               child: Text(
-                                item['name'] as String,
+                                _getColorSchemeName(id),
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w700,
@@ -1749,17 +1860,61 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 16),
           SwitchListTile(
             value: _autoCloseWebLogin,
-            title: const Text('网页登录成功后自动返回'),
-            subtitle: const Text('畅课网页登录拿到会话后自动关闭页面'),
+            title: Text(l10n.autoCloseWebLoginTitle),
+            subtitle: Text(l10n.autoCloseWebLoginSubtitle),
             onChanged: (v) async {
               setState(() => _autoCloseWebLogin = v);
-              await AppSettings.setBool(
-                AppSettings.autoCloseWebLoginKey,
-                v,
-              );
+              await AppSettings.setBool(AppSettings.autoCloseWebLoginKey, v);
             },
           ),
           const SizedBox(height: 16),
+          _buildFoldSection(
+            icon: Icons.auto_stories_outlined,
+            title: l10n.academicToolsTitle,
+            subtitle: l10n.academicToolsSubtitle,
+            iconColor: Colors.teal,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: TextField(
+                  controller: _academicApiEmailController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: InputDecoration(
+                    labelText: l10n.academicApiEmailLabel,
+                    hintText: l10n.academicApiEmailHint,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Text(
+                  l10n.academicApiEmailDescription,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.save_outlined),
+                title: Text(l10n.saveAcademicEmailTitle),
+                subtitle: Text(
+                  _academicApiEmail.isEmpty
+                      ? l10n.currentEmailUnset
+                      : l10n.currentEmailValue(_academicApiEmail),
+                ),
+                onTap: _saveAcademicApiEmail,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.clear_outlined),
+                title: Text(l10n.clearAcademicEmailTitle),
+                subtitle: Text(l10n.clearAcademicEmailSubtitle),
+                onTap: _clearAcademicApiEmail,
+              ),
+            ],
+          ),
           Container(
             decoration: BoxDecoration(
               color: Colors.green.withValues(alpha: 0.08),
@@ -1793,8 +1948,8 @@ class _SettingsPageState extends State<SettingsPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              '检查、诊断与修复工具',
+                            Text(
+                              l10n.diagnosticsToggleTitle,
                               style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 15,
@@ -1802,10 +1957,12 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                             const SizedBox(height: 5),
                             Text(
-                              '默认关闭，开启后可使用诊断功能',
+                              l10n.diagnosticsToggleSubtitle,
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ],
@@ -1831,97 +1988,99 @@ class _SettingsPageState extends State<SettingsPage> {
           if (_enableDiagnosticTools)
             _buildFoldSection(
               icon: Icons.health_and_safety_outlined,
-              title: '检查、诊断与修复',
-              subtitle: '平台体检、报告导出与一键修复',
+              title: l10n.diagnosticsTitle,
+              subtitle: l10n.diagnosticsSubtitle,
               iconColor: Colors.green,
               children: [
-              ListTile(
-                leading: _isCheckingPlatformHealth
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2.4),
-                      )
-                    : const Icon(Icons.monitor_heart_outlined),
-                title: const Text('检查四大平台连通性'),
-                subtitle: const Text('学习通、雨课堂、畅课、课堂派'),
-                trailing: _lastPlatformHealthReport == null
-                    ? const Icon(Icons.chevron_right)
-                    : IconButton(
-                        tooltip: '复制上次报告',
-                        icon: const Icon(Icons.copy_all_outlined),
-                        onPressed: () {
-                          final text = _lastPlatformHealthReport;
-                          if (text == null || text.isEmpty) return;
-                          Clipboard.setData(ClipboardData(text: text));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('上次检查报告已复制')),
-                          );
-                        },
+                ListTile(
+                  leading: _isCheckingPlatformHealth
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2.4),
+                        )
+                      : const Icon(Icons.monitor_heart_outlined),
+                  title: Text(l10n.checkPlatformsTitle),
+                  subtitle: Text(l10n.checkPlatformsSubtitle),
+                  trailing: _lastPlatformHealthReport == null
+                      ? const Icon(Icons.chevron_right)
+                      : IconButton(
+                          tooltip: l10n.copyLastReportTooltip,
+                          icon: const Icon(Icons.copy_all_outlined),
+                          onPressed: () {
+                            final text = _lastPlatformHealthReport;
+                            if (text == null || text.isEmpty) return;
+                            Clipboard.setData(ClipboardData(text: text));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(l10n.lastReportCopied)),
+                            );
+                          },
+                        ),
+                  enabled: !_isCheckingPlatformHealth,
+                  onTap: _runPlatformHealthCheck,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.assignment_outlined),
+                  title: Text(l10n.copyDiagnosticPackTitle),
+                  subtitle: Text(l10n.copyDiagnosticPackSubtitle),
+                  onTap: _copyDiagnosticPack,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.healing_outlined),
+                  title: Text(l10n.fixCommonIssuesTitle),
+                  subtitle: Text(l10n.fixCommonIssuesSubtitle),
+                  onTap: _quickFixCommonIssues,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.fact_check_outlined),
+                  title: Text(l10n.accountHealthTitle),
+                  subtitle: Text(l10n.accountHealthSubtitle),
+                  onTap: _runAccountHealthCheck,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.rule_folder_outlined),
+                  title: Text(l10n.batchPrecheckTitle),
+                  subtitle: Text(l10n.batchPrecheckSubtitle),
+                  onTap: _runBatchSignPrecheck,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.history_toggle_off_outlined),
+                  title: Text(l10n.signRecordsTitle),
+                  subtitle: Text(l10n.signRecordsSubtitle),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SignRecordsPage(),
                       ),
-                enabled: !_isCheckingPlatformHealth,
-                onTap: _runPlatformHealthCheck,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.assignment_outlined),
-                title: const Text('生成诊断包并复制'),
-                subtitle: const Text('包含设置快照、账号统计、权限状态'),
-                onTap: _copyDiagnosticPack,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.healing_outlined),
-                title: const Text('一键修复常见问题'),
-                subtitle: const Text('恢复推荐策略与默认平台地址'),
-                onTap: _quickFixCommonIssues,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.fact_check_outlined),
-                title: const Text('账号体检'),
-                subtitle: const Text('检查四平台账号可用状态'),
-                onTap: _runAccountHealthCheck,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.rule_folder_outlined),
-                title: const Text('批量签到预检'),
-                subtitle: const Text('检查账号、权限、网络是否就绪'),
-                onTap: _runBatchSignPrecheck,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.history_toggle_off_outlined),
-                title: const Text('签到记录查询'),
-                subtitle: const Text('按时间/平台/课程筛选，支持复制与分享'),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SignRecordsPage()),
-                  );
-                },
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.terminal_outlined),
-                title: const Text('请求控制台'),
-                subtitle: const Text('查看最近请求结果、重试与错误日志'),
-                onTap: _openRequestConsole,
-              ),
-              const Divider(height: 1),
-            ],
-          ),
+                    );
+                  },
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.terminal_outlined),
+                  title: Text(l10n.requestConsoleTitle),
+                  subtitle: Text(l10n.requestConsoleSubtitle),
+                  onTap: _openRequestConsole,
+                ),
+                const Divider(height: 1),
+              ],
+            ),
           const SizedBox(height: 16),
           _buildFoldSection(
             icon: Icons.shield_outlined,
-            title: '安全与请求节奏',
-            subtitle: '请求安全级别控制',
+            title: l10n.securityAndPacingTitle,
+            subtitle: l10n.securityAndPacingSubtitle,
             iconColor: Colors.green,
             children: [
               SwitchListTile(
                 value: _strictSecurityMode,
-                title: const Text('严格安全模式'),
-                subtitle: const Text('觉得可能请求过快的同学可以开启严格安全模式'),
+                title: Text(l10n.strictSecurityModeTitle),
+                subtitle: Text(l10n.strictSecurityModeSubtitle),
                 onChanged: (v) async {
                   setState(() => _strictSecurityMode = v);
                   await AppSettings.setBool(
@@ -1938,7 +2097,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: Row(
                   children: [
                     Text(
-                      '请求安全级别：',
+                      l10n.securityLevelLabel,
                       style: TextStyle(
                         fontSize: 12,
                         color: Theme.of(
@@ -1949,7 +2108,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     const SizedBox(width: 8),
                     Chip(
                       visualDensity: VisualDensity.compact,
-                      label: Text(_strictSecurityMode ? '严格' : '标准'),
+                      label: Text(
+                        _strictSecurityMode
+                            ? l10n.securityLevelStrict
+                            : l10n.securityLevelStandard,
+                      ),
                       avatar: Icon(
                         _strictSecurityMode
                             ? Icons.shield
@@ -1964,8 +2127,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
                 child: Text(
                   _strictSecurityMode
-                      ? '当前模式：严格安全模式（签到类请求会额外降频）'
-                      : '当前模式：标准（默认）',
+                      ? l10n.securityModeStrictDescription
+                      : l10n.securityModeStandardDescription,
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(

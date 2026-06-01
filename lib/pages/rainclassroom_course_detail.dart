@@ -60,6 +60,10 @@ class _RainClassroomCourseDetailPageState
     return const [];
   }
 
+  String _normalizedId(dynamic value) {
+    return value?.toString().trim() ?? '';
+  }
+
   Future<void> _loadDetail() async {
     setState(() {
       _loading = true;
@@ -77,6 +81,16 @@ class _RainClassroomCourseDetailPageState
     final resolvedCourse = _resolveCurrentCourse(courseList);
     final resolvedLessonId = _resolveLessonId(resolvedCourse, onlinePayload);
 
+    debugPrint(
+      '[YKT][detail-resolve] '
+      'clicked course_id=${_normalizedId(widget.course.courseId)} '
+      'classroom_id=${_normalizedId(widget.course.classId)} '
+      'resolved course_id=${_normalizedId(resolvedCourse.courseId)} '
+      'classroom_id=${_normalizedId(resolvedCourse.classId)} '
+      'lesson_id=${_normalizedId(resolvedLessonId)} '
+      'summary=${RCCourseApi.getLastCourseDebugSummary()}',
+    );
+
     setState(() {
       _resolvedCourse = resolvedCourse;
       _onlinePayload = onlinePayload;
@@ -91,10 +105,23 @@ class _RainClassroomCourseDetailPageState
       return widget.course;
     }
 
-    for (final course in courseList) {
-      if (course.courseId == widget.course.courseId ||
-          course.classId == widget.course.classId) {
-        return course;
+    final targetClassId = _normalizedId(widget.course.classId);
+    final targetCourseId = _normalizedId(widget.course.courseId);
+
+    if (targetClassId.isNotEmpty) {
+      for (final course in courseList) {
+        if (_normalizedId(course.classId) == targetClassId) {
+          return course;
+        }
+      }
+    }
+
+    if (targetClassId.isEmpty && targetCourseId.isNotEmpty) {
+      final matchedCourses = courseList.where((course) {
+        return _normalizedId(course.courseId) == targetCourseId;
+      }).toList();
+      if (matchedCourses.length == 1) {
+        return matchedCourses.first;
       }
     }
 
@@ -102,7 +129,7 @@ class _RainClassroomCourseDetailPageState
   }
 
   String? _resolveLessonId(Course course, Map<String, dynamic>? payload) {
-    final direct = (course.lessonId ?? '').trim();
+    final direct = _normalizedId(course.lessonId);
     if (direct.isNotEmpty) {
       return direct;
     }
@@ -111,37 +138,52 @@ class _RainClassroomCourseDetailPageState
       return null;
     }
 
-    String? search(dynamic node) {
-      if (node is Map) {
-        final map = node.map((key, value) => MapEntry(key.toString(), value));
-        final lessonId = (map['lessonId'] ?? map['lesson_id'])?.toString().trim();
-        if (lessonId != null && lessonId.isNotEmpty) {
-          return lessonId;
-        }
+    final onLessonClassrooms = payload['data']?['onLessonClassrooms'];
+    if (onLessonClassrooms is! List) {
+      return null;
+    }
 
-        for (final value in map.values) {
-          final found = search(value);
-          if (found != null && found.isNotEmpty) {
-            return found;
-          }
-        }
-      } else if (node is List) {
-        for (final item in node) {
-          final found = search(item);
-          if (found != null && found.isNotEmpty) {
-            return found;
-          }
+    final targetClassId = _normalizedId(course.classId);
+    final targetCourseId = _normalizedId(course.courseId);
+    final items = onLessonClassrooms.whereType<Map>().map((item) {
+      return item.map((key, value) => MapEntry(key.toString(), value));
+    }).toList();
+
+    if (targetClassId.isNotEmpty) {
+      for (final item in items) {
+        final classroomId = _normalizedId(
+          item['classroomId'] ?? item['classroom_id'],
+        );
+        if (classroomId == targetClassId) {
+          final lessonId = _normalizedId(item['lessonId'] ?? item['lesson_id']);
+          return lessonId.isEmpty ? null : lessonId;
         }
       }
       return null;
     }
 
-    return search(payload);
+    if (targetCourseId.isEmpty) {
+      return null;
+    }
+
+    final matchedByCourseId = items.where((item) {
+      final courseId = _normalizedId(item['courseId'] ?? item['course_id']);
+      return courseId == targetCourseId;
+    }).toList();
+
+    if (matchedByCourseId.length != 1) {
+      return null;
+    }
+
+    final lessonId = _normalizedId(
+      matchedByCourseId.first['lessonId'] ?? matchedByCourseId.first['lesson_id'],
+    );
+    return lessonId.isEmpty ? null : lessonId;
   }
 
   Future<void> _openPresentation() async {
     // 离线课程直接使用classroom_id，不需要lessonId
-    final classroomId = (_resolvedCourse?.classId ?? widget.course.classId ?? '').trim();
+    final classroomId = (_resolvedCourse?.classId ?? widget.course.classId).trim();
 
     if (classroomId.isEmpty) {
       if (!mounted) return;
