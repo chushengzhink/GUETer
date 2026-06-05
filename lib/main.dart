@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:dio/dio.dart';
 
 import './pages/accounts.dart';
 import './pages/courses.dart';
@@ -22,6 +21,7 @@ import './session/account.dart';
 import './session/app_settings.dart';
 import './session/license_ack.dart';
 import './session/startup_recovery_coordinator.dart';
+import './services/update_service.dart';
 import './utils/global_palette.dart';
 import './platform.dart';
 import './theme/design_tokens.dart';
@@ -294,21 +294,15 @@ class _MainPageState extends State<MainPage> {
       final packageInfo = await PackageInfo.fromPlatform();
       final currentVersion = packageInfo.version;
 
-      final dio = Dio();
-      final response = await dio.get(
-        'https://api.github.com/repos/chushengzhink/GUETer/releases/latest',
-      );
-      final data = response.data;
-      final latestVersion =
-          data['tag_name']?.toString().replaceAll('v', '') ?? '';
+      final updateInfo = await UpdateService().fetchLatest();
+      final latestVersion = updateInfo.version;
 
       if (_isNewerVersion(latestVersion, currentVersion)) {
         _showUpdateDialog(
           latestVersion: latestVersion,
-          releaseNotes: data['body'] ?? '暂无更新说明',
-          downloadUrl:
-              data['html_url'] ??
-              'https://github.com/chushengzhink/GUETer/releases/latest',
+          releaseNotes: updateInfo.releaseNotes,
+          downloadUrl: updateInfo.apk.downloadUrl,
+          forceUpdate: updateInfo.isForcedFor(currentVersion),
         );
       }
     } catch (e) {
@@ -317,65 +311,59 @@ class _MainPageState extends State<MainPage> {
   }
 
   bool _isNewerVersion(String latest, String current) {
-    try {
-      final latestParts = latest.split('.').map(int.parse).toList();
-      final currentParts = current.split('.').map(int.parse).toList();
-
-      for (int i = 0; i < 3; i++) {
-        final latestNum = i < latestParts.length ? latestParts[i] : 0;
-        final currentNum = i < currentParts.length ? currentParts[i] : 0;
-
-        if (latestNum > currentNum) return true;
-        if (latestNum < currentNum) return false;
-      }
-      return false;
-    } catch (e) {
-      return false;
-    }
+    return UpdateInfo.isNewerVersion(latest, current);
   }
 
   void _showUpdateDialog({
     required String latestVersion,
     required String releaseNotes,
     required String downloadUrl,
+    required bool forceUpdate,
   }) {
     final l10n = AppLocalizations.of(context)!;
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.updateAvailableTitle),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                l10n.latestVersionLabel(latestVersion),
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                l10n.updateNotesLabel,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Text(releaseNotes),
-            ],
+      barrierDismissible: !forceUpdate,
+      builder: (context) => PopScope(
+        canPop: !forceUpdate,
+        child: AlertDialog(
+          title: Text(l10n.updateAvailableTitle),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.latestVersionLabel(latestVersion),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  l10n.updateNotesLabel,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Text(releaseNotes),
+              ],
+            ),
           ),
+          actions: [
+            if (!forceUpdate)
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(l10n.laterButton),
+              ),
+            FilledButton(
+              onPressed: () {
+                if (!forceUpdate) {
+                  Navigator.pop(context);
+                }
+                launchUrl(Uri.parse(downloadUrl));
+              },
+              child: Text(l10n.downloadButton),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(l10n.laterButton),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context);
-              launchUrl(Uri.parse(downloadUrl));
-            },
-            child: Text(l10n.downloadButton),
-          ),
-        ],
       ),
     );
   }
