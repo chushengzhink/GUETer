@@ -73,6 +73,16 @@ void main() {
         'https://wwbix.lanzouu.com/filemoreajax.php?file=13573753',
       );
     });
+
+    test('extracts randomized t and k variable names from ajax data', () {
+      final params = LanzouFolderParams.parse(
+        _folderHtml(tVariable: 'iblgwh', kVariable: '_hjsya'),
+        Uri.parse('https://wwbix.lanzouu.com/b0188dwqsd'),
+      );
+
+      expect(params.t, '1780631275');
+      expect(params.k, '53ebc445780f61f05fea715118abc286');
+    });
   });
 
   group('UpdateService', () {
@@ -190,11 +200,11 @@ Dio _dioWith(HttpClientAdapter adapter) {
   )..httpClientAdapter = adapter;
 }
 
-String _folderHtml() {
+String _folderHtml({String tVariable = 'ibjbqp', String kVariable = '_hhnsi'}) {
   return '''
 <script>
-var ibjbqp = '1780631275';
-var _hhnsi = '53ebc445780f61f05fea715118abc286';
+var $tVariable = '1780631275';
+var $kVariable = '53ebc445780f61f05fea715118abc286';
 function file(){
   jQuery.ajax({
     type : 'post',
@@ -205,8 +215,8 @@ function file(){
       'uid':'4981610',
       'pg':pgs,
       'rep':'0',
-      't':ibjbqp,
-      'k':_hhnsi,
+      't':$tVariable,
+      'k':$kVariable,
       'up':1,
       'ls':1,
       'pwd':pwd

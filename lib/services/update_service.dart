@@ -357,9 +357,11 @@ class LanzouFolderParams {
         ]) ??
         (throw const FormatException('lanzou folder uid is missing'));
     final t =
+        _ajaxDataValue(html, 't') ??
         _firstMatch(html, [RegExp(r"var\s+ibjbqp\s*=\s*'([^']+)'")]) ??
         (throw const FormatException('lanzou folder t is missing'));
     final k =
+        _ajaxDataValue(html, 'k') ??
         _firstMatch(html, [RegExp(r"var\s+_hhnsi\s*=\s*'([^']+)'")]) ??
         (throw const FormatException('lanzou folder k is missing'));
 
@@ -374,6 +376,26 @@ class LanzouFolderParams {
       }
     }
     return null;
+  }
+
+  static String? _ajaxDataValue(String html, String key) {
+    final literal = RegExp(
+      "'${RegExp.escape(key)}'\\s*:\\s*'([^']+)'",
+    ).firstMatch(html);
+    if (literal != null) {
+      return literal.group(1);
+    }
+
+    final variable = RegExp(
+      "'${RegExp.escape(key)}'\\s*:\\s*([A-Za-z_][A-Za-z0-9_]*)",
+    ).firstMatch(html);
+    final variableName = variable?.group(1);
+    if (variableName == null) {
+      return null;
+    }
+    return RegExp(
+      "var\\s+${RegExp.escape(variableName)}\\s*=\\s*'([^']+)'",
+    ).firstMatch(html)?.group(1);
   }
 }
 
