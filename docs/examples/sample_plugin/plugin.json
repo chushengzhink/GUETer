@@ -1,0 +1,107 @@
+{
+  "id": "dev.example.mod",
+  "manifestVersion": 2,
+  "name": {
+    "zh": "示例 Mod",
+    "en": "Example Mod"
+  },
+  "version": "1.0.0",
+  "author": "GUETer",
+  "description": {
+    "zh": "演示工具入口、文件预览动作和健康中心入口",
+    "en": "Demonstrates tool entries, file preview actions, and health center entries"
+  },
+  "capabilities": ["toolEntry"],
+  "settingsSchema": [
+    {
+      "id": "prefix",
+      "type": "text",
+      "label": {
+        "zh": "复制前缀",
+        "en": "Copy Prefix"
+      },
+      "defaultValue": "GUETer"
+    }
+  ],
+  "permissions": ["clipboard", "localFileRead", "localFileWrite"],
+  "entries": [
+    {
+      "id": "manual",
+      "name": {
+        "zh": "Mod 说明",
+        "en": "Mod Manual"
+      },
+      "description": {
+        "zh": "打开插件自带 Markdown 文件",
+        "en": "Open bundled Markdown"
+      },
+      "icon": "markdown",
+      "slots": ["tool", "command"],
+      "badge": "文档",
+      "action": {
+        "type": "markdownPage",
+        "path": "README.md"
+      }
+    },
+    {
+      "id": "copy-file-path",
+      "name": {
+        "zh": "复制文件路径",
+        "en": "Copy File Path"
+      },
+      "description": {
+        "zh": "在文件预览页复制当前文件路径",
+        "en": "Copy the current file path from preview"
+      },
+      "icon": "copy",
+      "slots": ["filePreview"],
+      "contexts": ["file", "cloudFile"],
+      "fileExtensions": ["pdf", "txt", "md", "json", "csv", "zip"],
+      "requiresPermissions": ["clipboard"],
+      "badge": "文件",
+      "action": {
+        "type": "copyText",
+        "text": "{filePath}"
+      }
+    },
+    {
+      "id": "save-file-note",
+      "name": {
+        "zh": "保存文件备注",
+        "en": "Save File Note"
+      },
+      "description": {
+        "zh": "把当前文件名保存到插件私有目录",
+        "en": "Save current file name into the plugin private directory"
+      },
+      "icon": "save",
+      "slots": ["filePreview"],
+      "contexts": ["file", "cloudFile"],
+      "requiresPermissions": ["localFileWrite"],
+      "badge": "备注",
+      "action": {
+        "type": "saveTextFile",
+        "fileName": "last_file.txt",
+        "text": "{setting.prefix}: {fileName}"
+      }
+    },
+    {
+      "id": "health",
+      "name": {
+        "zh": "打开健康中心",
+        "en": "Open Health Center"
+      },
+      "description": {
+        "zh": "跳转请求与通知健康中心",
+        "en": "Open the request and notification health center"
+      },
+      "icon": "health",
+      "slots": ["tool", "health", "command"],
+      "contexts": ["healthIssue"],
+      "badge": "健康",
+      "action": {
+        "type": "openHealthCenter"
+      }
+    }
+  ]
+}

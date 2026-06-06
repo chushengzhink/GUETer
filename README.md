@@ -1,6 +1,6 @@
 # GUETer
 
-GUETer 是一个面向高校教学平台的 Flutter 课程助手，当前聚合学习通、雨课堂、畅课、课堂派、微助教等平台入口，提供课程管理、账号管理、签到、待办提醒、阅读、PDF 工具、局域网传输和虚拟局域网辅助功能。
+GUETer 是一个面向高校教学平台的 Flutter 课程助手，当前聚合学习通、雨课堂、畅课、课堂派、微助教等平台入口，提供课程管理、账号管理、签到、待办提醒、阅读、PDF 工具、云盘共享、局域网传输和虚拟局域网辅助功能。
 
 本项目仅用于学习交流与技术研究，不是任何教学平台或学校的官方客户端。使用者应确保自己有权访问相关账号、课程和资源，并遵守学校及平台规则。
 
@@ -25,7 +25,9 @@ GUETer 是一个面向高校教学平台的 Flutter 课程助手，当前聚合�
 - 汇总跨平台待办事项，支持本地提醒和通知。
 - 内置 PDF 阅读器，支持目录、页码跳转、夜间阅读和阅读进度保存。
 - 提供 PDF 转图片、图片合并 PDF、压缩、页面提取、水印、打开和分享等文件工具。
+- 提供云盘共享入口，支持文件浏览、下载、上传、目录导航和按权限显示可用操作。
 - 提供学术检索、电脑帮助文档、每日天文图等扩展工具入口。
+- 支持声明式 Mod 插件，可扩展工具入口、快捷命令、文件预览动作和健康中心动作。
 
 ### 局域网与网络辅助
 
@@ -84,11 +86,25 @@ flutter pub get
 flutter build apk --release --split-per-abi
 ```
 
+正式发布建议开启 Dart 混淆并输出符号文件：
+
+```powershell
+flutter build apk --target-platform android-arm64 --split-per-abi --obfuscate --split-debug-info=build\symbols
+```
+
 构建完成后，APK 位于：
 
 - `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`
 - `build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk`
 - `build/app/outputs/flutter-apk/app-x86_64-release.apk`
+
+## 应用更新
+
+应用支持从固定分享文件夹读取远端更新信息。公开仓库不内置真实分享地址、密码或私有部署信息，发布构建时应通过 `--dart-define` 注入更新源配置。
+
+远端更新元数据使用 `update.txt` 承载 JSON，包含版本号、构建号、更新说明和 APK 下载页。强制更新由远端显式控制：只有当 `update.txt` 写入强制字段，或分享文件夹中存在类似 `force_目标版本_from_来源版本.txt` 的标记文件时，命中的旧版本才会进入强制更新弹窗。
+
+强制更新弹窗不可通过返回键或点击外部关闭；未命中强制规则时仍保留普通“稍后 / 下载”更新提示。
 
 ## 测试与检查
 
@@ -96,6 +112,14 @@ flutter build apk --release --split-per-abi
 flutter analyze
 flutter test
 ```
+
+## 扩展与 Mod 插件
+
+GUETer 支持本地声明式 Mod 插件。插件通过 UTF-8 JSON 清单声明入口、能力、权限和受控动作，不加载 Dart、Flutter、脚本、shell 或原生代码。
+
+当前支持的扩展位置包括工具页入口、命令搜索、文件预览页动作和健康中心动作。插件可执行的能力限定在白名单内，例如打开链接、打开插件内 Markdown、复制文本、预览当前文件、分享当前文件、打开健康中心或打开内置查重清理页。
+
+插件开发和使用说明见 [docs/plugin_development.md](docs/plugin_development.md)，示例插件见 [docs/examples/sample_plugin](docs/examples/sample_plugin)。
 
 推送公开仓库前应额外检查：
 
@@ -125,7 +149,9 @@ rg -n "api_key|secret|password|token|storePassword|keyAlias|Bearer|BAIDU_MAP_API
 
 - 本项目不提供云端账号同步，不主动上传用户账号、密码、cookie 或 token 到项目服务器。
 - 账号、会话和本地记录仅保存在用户设备本地；请自行保护设备安全。
-- 仓库不应包含个人账号、真实 cookie、真实 token、签名证书、签名密码、第三方 API Key 或本地抓包数据。
+- 仓库不应包含个人账号、真实 cookie、真实 token、签名证书、签名密码、第三方 API Key、内网地址、私有服务端口或本地抓包数据。
+- 云盘发布、审计和管理相关凭据仅应保存在私有部署环境中，客户端和公开仓库不保存管理员凭据。
+- Mod 插件不执行任意代码，不能读取账号、Cookie、Token、OpenList 凭据、签到内部状态或私有服务配置。
 - `key/`、`*.jks`、`key.properties`、`local.properties`、`.dart_appdata/`、抓取目录和参考工程目录均应保持忽略状态。
 
 ## 许可证
