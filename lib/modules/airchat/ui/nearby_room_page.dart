@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 
 import '../controller/airchat_controller.dart';
 import '../models/nearby_room_models.dart';
-import '../services/connection_service.dart';
 import '../utility/display_name_prompt.dart';
 import '../utility/snackbar_util.dart';
 import 'nearby_room_session_page.dart';
@@ -63,19 +62,15 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_supported) {
-      return;
-    }
-    if (state == AppLifecycleState.resumed) {
+    if (_supported && state == AppLifecycleState.resumed) {
       unawaited(_controller.handleAppResumed());
     }
   }
 
   void _handleControllerChanged() {
-    if (!mounted) {
-      return;
+    if (mounted) {
+      setState(() {});
     }
-    setState(() {});
   }
 
   Future<void> _handleJoinResult(NearbyJoinResult result) async {
@@ -106,6 +101,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
         title: const Text('附近房间'),
         actions: <Widget>[
           IconButton(
+            tooltip: '附近房间设置',
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -196,7 +192,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
           ),
           const SizedBox(height: 16),
           Text(
-            usingFallback ? '无 GMS 设备也能进房' : '近场发现与房间配对',
+            usingFallback ? '无 Play 服务也能进房' : '近场发现与房间配对',
             style: theme.textTheme.headlineSmall?.copyWith(
               color: Colors.white,
               fontWeight: FontWeight.w800,
@@ -206,8 +202,8 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
           const SizedBox(height: 10),
           Text(
             usingFallback
-                ? '当前设备会通过 BLE 发现附近房间，并在进房后引导你加入房主热点。无需 Google Play 服务，但会多一个手动切换热点的步骤。'
-                : '当前设备将使用 Google Nearby Connections 进行发现、配对和进房，流程最短。',
+                ? '当前设备无需 Google Play 服务，将通过 BLE 发现附近房间并同步房主热点资料；进房后需要手动切换到房主热点。'
+                : '当前设备将优先使用 Google Nearby Connections 完成发现、配对和进房；如果 Play 服务不可用，会自动降级到 BLE + 热点模式。',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: Colors.white.withValues(alpha: 0.9),
               height: 1.45,
@@ -247,10 +243,14 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
         ? const <String>[
             '1. 打开附近房间并开始扫描',
             '2. 发现房主后点击加入',
-            '3. 读取热点信息并跳转系统 Wi-Fi',
-            '4. 加入房主热点后返回继续',
+            '3. 同步热点名称、密码和备注',
+            '4. 跳转系统 Wi-Fi，手动加入房主热点',
           ]
-        : const <String>['1. 打开附近房间并开始扫描', '2. 发现房主后点击加入', '3. Nearby 完成连接与入房'];
+        : const <String>[
+            '1. 打开附近房间并开始扫描',
+            '2. 发现房主后点击加入',
+            '3. Nearby 自动完成连接与进房确认',
+          ];
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
@@ -265,17 +265,17 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
             ),
             const SizedBox(height: 8),
             Text(
-              mode == NearbyTransportMode.bleHotspot
-                  ? 'BLE 发现 + 热点承载'
-                  : mode == NearbyTransportMode.nearbyConnections
-                  ? 'Google Nearby'
-                  : '不支持',
+              switch (mode) {
+                NearbyTransportMode.bleHotspot => 'BLE 发现 + 热点接力',
+                NearbyTransportMode.nearbyConnections => 'Google Nearby',
+                NearbyTransportMode.unsupported => '不支持',
+              },
               style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.w800,
               ),
             ),
             const SizedBox(height: 10),
-            for (final String step in steps)
+            for (final step in steps)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
                 child: Text(step),
@@ -290,9 +290,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
     final theme = Theme.of(context);
     final statuses = _controller.permissionStatuses;
     final environment = _controller.environmentStatus;
-    final hasPermanentDeny = statuses.any(
-      (AirChatPermissionSnapshot item) => item.isPermanentlyDenied,
-    );
+    final hasPermanentDeny = statuses.any((item) => item.isPermanentlyDenied);
 
     return Card(
       child: Padding(
@@ -352,7 +350,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
             ),
             if (statuses.isNotEmpty) ...<Widget>[
               const SizedBox(height: 16),
-              for (final AirChatPermissionSnapshot item in statuses)
+              for (final item in statuses)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Row(
@@ -385,19 +383,19 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
             ],
             if (_controller.blockingIssues.isNotEmpty) ...<Widget>[
               const SizedBox(height: 8),
-              for (final String issue in _controller.blockingIssues)
+              for (final issue in _controller.blockingIssues)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
-                  child: Text('• $issue'),
+                  child: Text('- $issue'),
                 ),
             ],
             if (_controller.advisoryMessages.isNotEmpty) ...<Widget>[
               const SizedBox(height: 8),
-              for (final String message in _controller.advisoryMessages)
+              for (final message in _controller.advisoryMessages)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
                   child: Text(
-                    '• $message',
+                    '- $message',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -457,7 +455,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    hasConfig ? '热点资料已就绪' : '需要准备热点资料',
+                    hasConfig ? '热点资料已准备' : '建议先准备热点资料',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
@@ -468,8 +466,8 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
             const SizedBox(height: 10),
             Text(
               hasConfig
-                  ? '当前广播会附带你保存的热点名称和密码，加入方读取后可直接跳转系统 Wi-Fi。'
-                  : '第一次使用 BLE + 热点模式，建议先去设置页填写热点名称和密码，再开始广播自己的房间。',
+                  ? '广播时会附带你保存的热点名称和密码，对方读取后可按提示加入你的热点。'
+                  : '第一次使用 BLE + 热点模式，建议先到设置页填写热点名称和密码，再广播自己的房间。',
             ),
             if (_controller.hotspotSsid.trim().isNotEmpty) ...<Widget>[
               const SizedBox(height: 12),
@@ -511,7 +509,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text(
-              '开始发现与广播',
+              '发现与广播',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -519,8 +517,8 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
             const SizedBox(height: 8),
             Text(
               mode == NearbyTransportMode.bleHotspot
-                  ? '开始后会同时进行 BLE 扫描与房间广播。加入别人房间时，会先同步热点资料，再引导你进入系统 Wi-Fi。'
-                  : '开始后会检查权限并同时进行 Nearby 发现和本机房间广播。',
+                  ? '开始后会通过 BLE 扫描并广播房间。加入别人房间时，只同步热点资料并引导你进入系统 Wi-Fi。'
+                  : '开始后会检查权限，并通过 Google Nearby 发现附近设备、广播本机房间。',
             ),
             const SizedBox(height: 16),
             SizedBox(
@@ -563,8 +561,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
         if (rooms.isEmpty)
           _buildEmptyState(mode)
         else
-          for (final NearbyRoomEndpoint room in rooms)
-            _buildRoomTile(room, mode),
+          for (final room in rooms) _buildRoomTile(room, mode),
       ],
     );
   }
@@ -645,7 +642,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
                   ),
                 if (room.requiresManualHotspotStep)
                   _buildChip(
-                    '需要手动切热点',
+                    '需要手动切换热点',
                     background: Colors.orange.withValues(alpha: 0.12),
                     foreground: Colors.orange.shade900,
                   ),
@@ -677,7 +674,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(
-                  '当前设备已进入 BLE 热点模式；该房间来自 GMS 通道，可能无法直接加入。',
+                  '当前设备处于 BLE + 热点模式；该房间来自 Google Nearby 通道，可能无法直接加入。',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: Colors.orange.shade800,
                   ),
@@ -730,7 +727,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
       child: ExpansionTile(
         leading: const Icon(Icons.terminal_rounded),
         title: const Text('调试日志'),
-        subtitle: const Text('仅用于排查发现、配对和热点切换问题'),
+        subtitle: const Text('用于排查发现、配对和热点切换问题'),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         children: <Widget>[
           if (logs.isEmpty)
@@ -747,7 +744,7 @@ class _NearbyRoomPageState extends State<NearbyRoomPage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: logs
                     .map(
-                      (String line) => Padding(
+                      (line) => Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Text(
                           line,

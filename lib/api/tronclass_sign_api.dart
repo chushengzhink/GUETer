@@ -1,9 +1,13 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 import '../models/tronclass_rollcalls.dart';
 import '../platform.dart';
 import '../session/account.dart';
 import '../utils/user_agent.dart';
+import 'api_service.dart';
+import 'sign_request_profile.dart';
 import 'tronclass_client.dart';
 
 class TronclassSignApi {
@@ -25,7 +29,7 @@ class TronclassSignApi {
     'success': '签到成功',
   };
 
-  static Future<Response<Map<String, dynamic>>> signQr({
+  static Future<Response<dynamic>> signQr({
     required String rollcallId,
     required String data,
     required String deviceId,
@@ -33,14 +37,25 @@ class TronclassSignApi {
     final client = await _client();
     final headers = await _headers();
 
-    return client.dio.put<Map<String, dynamic>>(
-      '/api/rollcall/$rollcallId/answer_qr_rollcall',
-      data: {'data': data, 'deviceId': deviceId},
-      options: Options(headers: headers, responseType: ResponseType.json),
+    return _sendRollcallRequest(
+      profile: SignRequestProfiles.tronclassRollcall(
+        baseUrl: PlatformManager().tronclassBaseUrl,
+      ),
+      headers: headers,
+      send: (effectiveHeaders) {
+        return client.dio.put<dynamic>(
+          '/api/rollcall/$rollcallId/answer_qr_rollcall',
+          data: {'data': data, 'deviceId': deviceId},
+          options: Options(
+            headers: effectiveHeaders,
+            responseType: ResponseType.json,
+          ),
+        );
+      },
     );
   }
 
-  static Future<Response<Map<String, dynamic>>> signNumber({
+  static Future<Response<dynamic>> signNumber({
     required String rollcallId,
     required String numberCode,
     required String deviceId,
@@ -48,14 +63,25 @@ class TronclassSignApi {
     final client = await _client();
     final headers = await _headers();
 
-    return client.dio.put<Map<String, dynamic>>(
-      '/api/rollcall/$rollcallId/answer_number_rollcall',
-      data: {'numberCode': numberCode, 'deviceId': deviceId},
-      options: Options(headers: headers, responseType: ResponseType.json),
+    return _sendRollcallRequest(
+      profile: SignRequestProfiles.tronclassRollcall(
+        baseUrl: PlatformManager().tronclassBaseUrl,
+      ),
+      headers: headers,
+      send: (effectiveHeaders) {
+        return client.dio.put<dynamic>(
+          '/api/rollcall/$rollcallId/answer_number_rollcall',
+          data: {'numberCode': numberCode, 'deviceId': deviceId},
+          options: Options(
+            headers: effectiveHeaders,
+            responseType: ResponseType.json,
+          ),
+        );
+      },
     );
   }
 
-  static Future<Response<Map<String, dynamic>>> signRadar({
+  static Future<Response<dynamic>> signRadar({
     required String rollcallId,
     required String deviceId,
     required double latitude,
@@ -69,19 +95,30 @@ class TronclassSignApi {
     final client = await _client();
     final headers = await _headers();
 
-    return client.dio.put<Map<String, dynamic>>(
-      '/api/rollcall/$rollcallId/answer?api_version=1.1.2',
-      data: {
-        'deviceId': deviceId,
-        'latitude': latitude,
-        'longitude': longitude,
-        'speed': speed,
-        'accuracy': accuracy,
-        'altitude': altitude,
-        'altitudeAccuracy': altitudeAccuracy,
-        'heading': heading,
+    return _sendRollcallRequest(
+      profile: SignRequestProfiles.tronclassRollcall(
+        baseUrl: PlatformManager().tronclassBaseUrl,
+      ),
+      headers: headers,
+      send: (effectiveHeaders) {
+        return client.dio.put<dynamic>(
+          '/api/rollcall/$rollcallId/answer?api_version=1.1.2',
+          data: {
+            'deviceId': deviceId,
+            'latitude': latitude,
+            'longitude': longitude,
+            'speed': speed,
+            'accuracy': accuracy,
+            'altitude': altitude,
+            'altitudeAccuracy': altitudeAccuracy,
+            'heading': heading,
+          },
+          options: Options(
+            headers: effectiveHeaders,
+            responseType: ResponseType.json,
+          ),
+        );
       },
-      options: Options(headers: headers, responseType: ResponseType.json),
     );
   }
 
@@ -111,19 +148,20 @@ class TronclassSignApi {
   }
 
   static String getSignMessage(dynamic responseData) {
-    if (responseData is! Map<String, dynamic>) {
-      return _mapMessage('retry');
+    final normalized = normalizeSignResponseData(responseData);
+    if (normalized is! Map<String, dynamic>) {
+      return '畅课返回异常，可能登录态失效';
     }
 
     final rawMessage =
-        responseData['message']?.toString() ??
-        responseData['msg']?.toString() ??
-        responseData['error']?.toString();
+        normalized['message']?.toString() ??
+        normalized['msg']?.toString() ??
+        normalized['error']?.toString();
     if (rawMessage != null && rawMessage.isNotEmpty) {
       return _mapMessage(rawMessage);
     }
 
-    switch (responseData['status']?.toString()) {
+    switch (normalized['status']?.toString()) {
       case 'on_call':
         return _mapMessage('success');
       case 'on_call_fine':
@@ -141,8 +179,54 @@ class TronclassSignApi {
     }
   }
 
+  static bool isQrCodeExpired(dynamic responseData) {
+    final normalized = normalizeSignResponseData(responseData);
+    if (normalized is! Map<String, dynamic>) {
+      return false;
+    }
+    final rawMessage =
+        normalized['message']?.toString() ??
+        normalized['msg']?.toString() ??
+        normalized['error']?.toString();
+    return rawMessage == 'QR_code_expired';
+  }
+
   static String _mapMessage(String key) {
     return _messageMap[key] ?? key;
+  }
+
+  static dynamic normalizeSignResponseData(dynamic data) {
+    if (data is Map<String, dynamic>) {
+      return data;
+    }
+    if (data is Map) {
+      return data.map((key, value) => MapEntry(key.toString(), value));
+    }
+    if (data is String) {
+      final trimmed = data.trim();
+      if (trimmed.isEmpty) {
+        return {'message': '畅课返回空响应，可能登录态失效', 'raw': ''};
+      }
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        if (decoded is Map) {
+          return decoded.map((key, value) => MapEntry(key.toString(), value));
+        }
+      } catch (_) {
+        // fall through to friendly non-JSON response
+      }
+      final snippet = trimmed.length > 120
+          ? '${trimmed.substring(0, 120)}...'
+          : trimmed;
+      return {'message': '畅课返回非 JSON，可能登录态失效', 'raw': snippet};
+    }
+    if (data == null) {
+      return {'message': '畅课返回空响应，可能登录态失效'};
+    }
+    return {'message': '畅课返回异常，可能登录态失效', 'raw': data.toString()};
   }
 
   static Future<TronclassClient> _client() async {
@@ -157,5 +241,33 @@ class TronclassSignApi {
     final userAgent = await UserAgentHelper.getTronclassUA();
     final base = PlatformManager().tronclassBaseUrl;
     return UserAgentHelper.getTronclassHeaders(userAgent, base);
+  }
+
+  static Future<Response<dynamic>> _sendRollcallRequest({
+    required SignRequestProfile profile,
+    required Map<String, dynamic> headers,
+    required Future<Response<dynamic>> Function(Map<String, dynamic>? headers)
+    send,
+  }) async {
+    final response = await SignRequestExecutor.run(
+      profile: profile,
+      headers: headers.map((key, value) => MapEntry(key, value.toString())),
+      legacyHeaders: headers.map(
+        (key, value) => MapEntry(key, value.toString()),
+      ),
+      operation: 'tronclass rollcall',
+      logSink: ApiService.appendExternalConsoleLog,
+      send: (effectiveHeaders) => send(effectiveHeaders),
+    );
+    return Response<dynamic>(
+      data: normalizeSignResponseData(response.data),
+      headers: response.headers,
+      requestOptions: response.requestOptions,
+      statusCode: response.statusCode,
+      statusMessage: response.statusMessage,
+      redirects: response.redirects,
+      extra: response.extra,
+      isRedirect: response.isRedirect,
+    );
   }
 }

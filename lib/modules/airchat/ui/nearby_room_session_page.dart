@@ -96,6 +96,14 @@ class NearbyRoomSessionPage extends StatelessWidget {
                       const SizedBox(height: 6),
                       Text('备注：${room.hotspotNote}'),
                     ],
+                    const SizedBox(height: 10),
+                    Text(
+                      '此模式不依赖 Google Play 服务。当前已完成附近发现和房间资料同步，下一步需要在系统 Wi-Fi 中手动加入房主热点。',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.4,
+                      ),
+                    ),
                     const SizedBox(height: 14),
                     Wrap(
                       spacing: 8,
@@ -133,8 +141,8 @@ class NearbyRoomSessionPage extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(
                     usingFallback
-                        ? '这一版先把附近发现、热点资料同步和进房确认做通；后续如果要加完整聊天或更深的房间协作，应继续在这个页面往下扩展。'
-                        : '当前已完成附近发现、连接和进房确认，不再跳回旧的共享签到链路。',
+                        ? '这一版在无 Play 服务设备上提供发现房间、同步热点资料和进房确认；聊天或文件传输仍需要后续扩展局域网通道。'
+                        : '当前已通过 Google Nearby 完成附近发现、连接和进房确认。',
                   ),
                 ],
               ),

@@ -5,7 +5,11 @@ import '../api/kt_follow_sign.dart';
 import '../api/login.dart';
 import '../models/course.dart';
 import '../models/user.dart';
+import '../platform.dart';
+import '../services/sign_platform_context.dart';
+import '../services/sign_run_console.dart';
 import '../session/account.dart';
+import '../widgets/sign_run_console_panel.dart';
 import 'ketangpai_scan_sign_page.dart';
 import 'ketangpai_number_sign_page.dart';
 import 'ketangpai_gps_sign_dialog.dart';
@@ -38,7 +42,16 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
   final List<_SigningCourseEntry> _signingCourses = [];
   final Set<String> _selectedUserIds = <String>{};
   final Map<String, bool> _tokenHealth = <String, bool>{};
+  final SignRunConsoleController _consoleController = SignRunConsoleController(
+    platformContext: SignPlatformContext.ketangpai,
+  );
   bool _loading = true;
+
+  @override
+  void dispose() {
+    _consoleController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -46,9 +59,8 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     _load();
   }
 
-  List<User> get _ketangpaiUsers => AccountManager.getAllAccounts()
-      .where((user) => user.isKetangpai)
-      .toList();
+  List<User> get _ketangpaiUsers =>
+      AccountManager.getAccountsForPlatform(PlatformType.ketangpai);
 
   Future<void> _load() async {
     setState(() {
@@ -132,9 +144,9 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
   Future<void> _openAddUserPage() async {
     // 功能已移除：添加用户页面
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('添加用户功能暂不可用')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('添加用户功能暂不可用')));
     }
   }
 
@@ -156,6 +168,9 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       users: selectedUsers,
       courseName: '课堂派扫码签到',
       tokenHealthHint: _tokenHealth,
+      context: context,
+      console: _consoleController,
+      isContextMounted: () => mounted,
     );
 
     if (!mounted) return;
@@ -210,6 +225,9 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       users: selectedUsers,
       courseName: courseName,
       tokenHealthHint: _tokenHealth,
+      context: context,
+      console: _consoleController,
+      isContextMounted: () => mounted,
     );
     if (!mounted) return;
     _showBatchSignResult(
@@ -224,6 +242,7 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     String signId,
     String courseName,
     String courseId,
+    KetangpaiGpsSignConfig gpsConfig,
   ) async {
     if (_selectedUserIds.isEmpty) {
       return;
@@ -237,6 +256,12 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       courseName: courseName,
       tokenHealthHint: _tokenHealth,
       courseId: courseId, // 传递 courseId 用于读取 GPS 坐标配置
+      latitude: gpsConfig.latitude,
+      longitude: gpsConfig.longitude,
+      accuracy: gpsConfig.accuracy,
+      context: context,
+      console: _consoleController,
+      isContextMounted: () => mounted,
     );
     if (!mounted) return;
     _showBatchSignResult(
@@ -247,7 +272,11 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     );
   }
 
-  Future<void> _signSelectedByCheckInOut(String signId, String courseName) async {
+  Future<void> _signSelectedByCheckInOut(
+    String signId,
+    String courseName,
+    KetangpaiGpsSignConfig? gpsConfig,
+  ) async {
     if (_selectedUserIds.isEmpty) {
       return;
     }
@@ -259,6 +288,12 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       users: selectedUsers,
       courseName: courseName,
       tokenHealthHint: _tokenHealth,
+      latitude: gpsConfig?.latitude,
+      longitude: gpsConfig?.longitude,
+      accuracy: gpsConfig?.accuracy,
+      context: context,
+      console: _consoleController,
+      isContextMounted: () => mounted,
     );
     if (!mounted) return;
     _showBatchSignResult(
@@ -292,12 +327,13 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       }
     } else if (entry.signType == 2) {
       // GPS签到：使用新的 GPS 签到对话框
-      final confirm = await KetangpaiGpsSignDialog.show(context);
-      if (confirm == true) {
+      final gpsConfig = await KetangpaiGpsSignDialog.show(context);
+      if (gpsConfig != null) {
         await _signSelectedByGps(
           entry.signId,
           entry.course.name,
           entry.course.courseId,
+          gpsConfig,
         );
       }
     } else if (entry.signType == 3) {
@@ -328,7 +364,7 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
         ),
       );
       if (confirm == true) {
-        await _signSelectedByCheckInOut(entry.signId, entry.course.name);
+        await _signSelectedByCheckInOut(entry.signId, entry.course.name, null);
       }
     }
     if (mounted) {
@@ -546,6 +582,12 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
                             ],
                           ),
                         ),
+                      ),
+                    ),
+                    const SliverToBoxAdapter(child: SizedBox(height: 16)),
+                    SliverToBoxAdapter(
+                      child: SignRunConsolePanel(
+                        controller: _consoleController,
                       ),
                     ),
                     const SliverToBoxAdapter(child: SizedBox(height: 16)),

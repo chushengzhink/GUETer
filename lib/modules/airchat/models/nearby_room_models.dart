@@ -137,12 +137,12 @@ class NearbyRoomEndpoint {
     final resolvedName = (map['name'] as String?)?.trim().isNotEmpty == true
         ? (map['name'] as String).trim()
         : 'Nearby User';
-    final roomName = (map['roomName'] as String?)?.trim().isNotEmpty == true
-        ? (map['roomName'] as String).trim()
-        : '$resolvedName 的附近房间';
     final transportMode = NearbyTransportModeX.fromWireName(
       map['transportMode'] as String?,
     );
+    final roomName = (map['roomName'] as String?)?.trim().isNotEmpty == true
+        ? (map['roomName'] as String).trim()
+        : '$resolvedName 的附近房间';
     return NearbyRoomEndpoint(
       userId: userId,
       name: resolvedName,

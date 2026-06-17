@@ -1,5 +1,7 @@
 import 'api_service.dart';
+import 'platform_request_stability.dart';
 import 'platform_request_context.dart';
+import 'ketangpai_response.dart';
 import '../models/course.dart';
 import '../session/account.dart';
 import '../platform.dart';
@@ -39,6 +41,14 @@ void _logApiEndpoint(
   final summary = _apiPayloadSummary(data);
   debugPrint('$prefix $summary');
   ApiService.appendExternalConsoleLog('KTP', '[$stage] $endpoint $summary');
+}
+
+PlatformRequestOptions _ketangpaiReadOptions(String operationId) {
+  return PlatformRequestOptions(
+    operationId: operationId,
+    requestKind: PlatformRequestKind.read,
+    allowControlledParallelism: true,
+  );
 }
 
 class KTPCourseApi {
@@ -99,6 +109,7 @@ class KTPCourseApi {
         endpoint,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiReadOptions('ketangpai.course.list'),
         headers: {
           'Referer': 'https://w.ketangpai.com/',
           'Origin': 'https://w.ketangpai.com',
@@ -220,6 +231,9 @@ class KTPCourseApi {
     int contentType = 0, // 0=全部, 2=资料, 4=作业, 5=话题, 6=测试
     int page = 1,
     int limit = 50,
+    Object dirId = '0',
+    Object desc = '2',
+    String vtrType = '',
   }) async {
     final userId = AccountManager.currentSessionId;
     if (userId == null || userId.isEmpty) {
@@ -242,39 +256,28 @@ class KTPCourseApi {
         'courseid': courseId,
         'courserole': 0,
         'contenttype': contentType,
-        'dirid': '0',
+        'dirid': dirId,
         'lessonlink': [],
-        'desc': '2',
+        'desc': desc,
         'page': page,
         'limit': limit,
         'sort': [],
         'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
       };
+      if (vtrType.isNotEmpty) {
+        body['vtr_type'] = vtrType;
+      }
 
       _logApiEndpoint('request', endpoint, data: body);
       final response = await context.sendRequest(
         endpoint,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiReadOptions('ketangpai.course.content'),
       );
       _logApiEndpoint('response', endpoint, data: response.data);
 
-      if (response.data is Map<String, dynamic>) {
-        final status = response.data['status'];
-        if (status == 1) {
-          final data = response.data['data'];
-          if (data is Map<String, dynamic>) {
-            final list = data['list'];
-            if (list is List) {
-              return list
-                  .whereType<Map>()
-                  .map((e) => Map<String, dynamic>.from(e))
-                  .toList();
-            }
-          }
-        }
-      }
-      return [];
+      return extractKetangpaiList(response.data);
     } catch (e) {
       _logApiEndpoint(
         'error',
@@ -286,6 +289,37 @@ class KTPCourseApi {
     } finally {
       context.dispose();
     }
+  }
+
+  static Future<List<Map<String, dynamic>>> getCourseContentAll(
+    String courseId, {
+    int contentType = 0,
+    int limit = 50,
+    int maxPages = 10,
+    Object dirId = '0',
+    Object desc = '2',
+    String vtrType = '',
+  }) async {
+    final all = <Map<String, dynamic>>[];
+    final safeLimit = limit <= 0 ? 50 : limit;
+    final safeMaxPages = maxPages <= 0 ? 1 : maxPages;
+    for (var page = 1; page <= safeMaxPages; page++) {
+      final items = await getCourseContent(
+        courseId,
+        contentType: contentType,
+        page: page,
+        limit: safeLimit,
+        dirId: dirId,
+        desc: desc,
+        vtrType: vtrType,
+      );
+      all.addAll(items);
+      if (items.length < safeLimit) {
+        break;
+      }
+      await Future.delayed(const Duration(milliseconds: 80));
+    }
+    return all;
   }
 
   /// 获取所有待办项（作业、测试、话题）（使用独立 Dio 实例）
@@ -308,7 +342,7 @@ class KTPCourseApi {
         final courseId = course.courseId;
         if (courseId.isEmpty) continue;
 
-        final contents = await getCourseContent(courseId, contentType: 0);
+        final contents = await getCourseContentAll(courseId, contentType: 0);
 
         for (final item in contents) {
           final contentType = item['contenttype'];
@@ -362,6 +396,7 @@ class KTPCourseApi {
         endpoint,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiReadOptions('ketangpai.course.detail'),
       );
       _logApiEndpoint('response', endpoint, data: response.data);
 
@@ -414,6 +449,7 @@ class KTPCourseApi {
         endpoint,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiReadOptions('ketangpai.test.detail'),
       );
       _logApiEndpoint('response', endpoint, data: response.data);
 
@@ -448,15 +484,14 @@ class KTPCourseApi {
 
     try {
       const endpoint = '/CourseApi/getCourseStateAll';
-      final body = {
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
+      final body = {'reqtimestamp': DateTime.now().millisecondsSinceEpoch};
 
       _logApiEndpoint('request', endpoint, data: body);
       final response = await context.sendRequest(
         endpoint,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiReadOptions('ketangpai.course.online'),
       );
       _logApiEndpoint('response', endpoint, data: response.data);
 
@@ -522,6 +557,7 @@ class KTPCourseApi {
         endpoint,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiReadOptions('ketangpai.sign.pending'),
       );
 
       if (response.data is Map<String, dynamic>) {

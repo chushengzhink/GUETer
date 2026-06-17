@@ -18,7 +18,7 @@
   "laterButton": "稍后",
   "downloadButton": "前往下载",
   "anonymousChatTitle": "💬 匿名聊天",
-  "anonymousChatSubtitle": "基于 Nearby Connections 的附近设备匿名聊天与文件分享",
+  "anonymousChatSubtitle": "自动使用 Google Nearby 或 BLE + 热点的附近房间",
   "localTransferTitle": "局域网快传",
   "localTransferSubtitle": "兼容 LocalSend，局域网内自动发现并传输文件/文本",
   "readingTitle": "阅读",

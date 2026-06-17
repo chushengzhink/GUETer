@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 /// 判断题组件
@@ -24,16 +26,16 @@ class JudgeQuestion extends StatelessWidget {
           padding: const EdgeInsets.all(16.0),
           child: Text(
             question,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
         ),
         InkWell(
           onTap: enabled ? () => onChanged(true) : null,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
             child: Row(
               children: [
                 Radio<bool>(
@@ -50,7 +52,10 @@ class JudgeQuestion extends StatelessWidget {
         InkWell(
           onTap: enabled ? () => onChanged(false) : null,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
             child: Row(
               children: [
                 Radio<bool>(

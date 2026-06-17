@@ -20,6 +20,7 @@ class _RainCoursesPageState extends State<RainCoursesPage> {
     // 不自动加载，仅在用户手动刷新时加载
   }
 
+  // ignore: unused_element
   Future<void> _loadCourses() async {
     if (_isRefreshing) return;
 

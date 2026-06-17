@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:crypto/crypto.dart';
@@ -183,6 +184,36 @@ class EncryptionUtil {
   static String getUuid() {
     var uuid = Uuid();
     return uuid.v4();
+  }
+
+  /// GUET CAS password encryption used by authserver/login.
+  static String casEncryptPassword(String password, String aesKey) {
+    final keyBytes = utf8.encode(aesKey);
+    if (keyBytes.length != 16 && keyBytes.length != 24 && keyBytes.length != 32) {
+      throw ArgumentError('CAS AES key length must be 16, 24, or 32 bytes');
+    }
+
+    final random = Random.secure();
+    final ivBytes = Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+    const chars =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    final prefix = List<String>.generate(
+      64,
+      (_) => chars[random.nextInt(chars.length)],
+    ).join();
+
+    final encrypter = encrypt.Encrypter(
+      encrypt.AES(
+        encrypt.Key(Uint8List.fromList(keyBytes)),
+        mode: encrypt.AESMode.cbc,
+        padding: 'PKCS7',
+      ),
+    );
+    return encrypter
+        .encrypt(prefix + password, iv: encrypt.IV(ivBytes))
+        .base64;
   }
 
   /// 获取文件的CRC（非标准）

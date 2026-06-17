@@ -14,6 +14,7 @@ import '../session/login_context.dart';
 import '../session/tronclass_auth.dart';
 import '../utils/browser_headers.dart';
 import 'api_service.dart';
+import 'ketangpai_response.dart';
 
 /// 每用户独立 Dio 实例管理器（借鉴 tronclass_plus 的 ChangkeClient 设计）
 class PlatformDioManager {
@@ -34,6 +35,16 @@ class PlatformDioManager {
     required String userId,
   }) async {
     final key = '${_getPlatformName(platform)}_$userId';
+
+    if (platform == PlatformType.chaoxing && _dioInstances.containsKey(key)) {
+      _dioInstances[key]?.close();
+      _dioInstances.remove(key);
+      _cookieJars.remove(key);
+      ApiService.appendExternalConsoleLog(
+        'chaoxing',
+        '[PlatformDioManager] discarded cached chaoxing Dio before recreate userId=$userId',
+      );
+    }
 
     // 如果实例已存在，直接返回
     if (_dioInstances.containsKey(key)) {
@@ -150,6 +161,17 @@ class PlatformDioManager {
       return CookieJar();
     }
 
+    if (platformName == 'chaoxing') {
+      ApiService.appendExternalConsoleLog(
+        platformName,
+        '[PlatformDioManager] reuse CookieManager jar for userId=$userId',
+      );
+      return CookieManager.getCookieJarForUser(
+        userId,
+        platformName: platformName,
+      );
+    }
+
     final dir = await (_supportDirectoryFuture ??=
         getApplicationSupportDirectory());
     final cookiePath = path.join(dir.path, 'cookies', platformName, userId);
@@ -215,11 +237,24 @@ class _PlatformCookieInterceptor extends Interceptor {
   ) async {
     if (options.headers['Cookie'] == null) {
       if (platform == PlatformType.chaoxing) {
-        final cookieStr = await AccountManager.getCookieForPlatform(
-          platform,
-          userId,
+        var cookies = await CookieManager.loadChaoxingCookiesForRequest(
+          cookieJar,
+          options.uri,
         );
-        if (cookieStr == null || cookieStr.isEmpty) {
+        if (cookies.isEmpty) {
+          final accountJar = await CookieManager.getCookieJarForUser(
+            userId,
+            platformName: platformName,
+          );
+          if (!identical(accountJar, cookieJar)) {
+            cookies = await CookieManager.loadChaoxingCookiesForRequest(
+              accountJar,
+              options.uri,
+            );
+          }
+        }
+        final cookieStr = CookieManager.stringifyCookies(cookies);
+        if (cookieStr.isEmpty) {
           ApiService.appendExternalConsoleLog(
             '学习通',
             'Cookie为空，请检查登录状态 userId=$userId',
@@ -436,12 +471,7 @@ class _PlatformCookieInterceptor extends Interceptor {
 
         case PlatformType.ketangpai:
           // 课堂派常见错误码：code=-1, message包含token失效
-          if (code == -1 ||
-              code == 401 ||
-              message.toString().contains('token') ||
-              message.toString().contains('未登录') ||
-              message.toString().contains('登录已过期') ||
-              message.toString().contains('请重新登录')) {
+          if (isKetangpaiAuthExpired(data)) {
             await _handleAuthExpired('课堂派: code=$code msg=$message');
           }
           break;

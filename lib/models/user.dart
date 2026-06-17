@@ -7,8 +7,11 @@ class User {
   final String platform;
   final String token;
   final String password;
-  final int? credentialExpiry; // Unix timestamp (seconds) when credential expires
-  final int? lastRefreshTime; // Unix timestamp (seconds) of last successful refresh
+  final String? studentId;
+  final int?
+  credentialExpiry; // Unix timestamp (seconds) when credential expires
+  final int?
+  lastRefreshTime; // Unix timestamp (seconds) of last successful refresh
   final String? refreshToken; // Platform-specific refresh token if available
 
   User({
@@ -20,6 +23,7 @@ class User {
     this.platform = 'chaoxing',
     this.token = '',
     this.password = '',
+    this.studentId,
     this.credentialExpiry,
     this.lastRefreshTime,
     this.refreshToken,
@@ -34,6 +38,7 @@ class User {
     String? platform,
     String? token,
     String? password,
+    String? studentId,
     int? credentialExpiry,
     int? lastRefreshTime,
     String? refreshToken,
@@ -47,6 +52,7 @@ class User {
       platform: platform ?? this.platform,
       token: token ?? this.token,
       password: password ?? this.password,
+      studentId: studentId ?? this.studentId,
       credentialExpiry: credentialExpiry ?? this.credentialExpiry,
       lastRefreshTime: lastRefreshTime ?? this.lastRefreshTime,
       refreshToken: refreshToken ?? this.refreshToken,
@@ -63,6 +69,7 @@ class User {
       platform: json['platform'] ?? 'chaoxing',
       token: json['token'] ?? '',
       password: json['password'] ?? '',
+      studentId: json['studentId']?.toString(),
       credentialExpiry: json['credentialExpiry'],
       lastRefreshTime: json['lastRefreshTime'],
       refreshToken: json['refreshToken'],
@@ -79,6 +86,7 @@ class User {
       'platform': platform,
       'token': token,
       'password': password,
+      if (studentId != null && studentId!.isNotEmpty) 'studentId': studentId,
       if (credentialExpiry != null) 'credentialExpiry': credentialExpiry,
       if (lastRefreshTime != null) 'lastRefreshTime': lastRefreshTime,
       if (refreshToken != null) 'refreshToken': refreshToken,

@@ -1,53 +1,124 @@
+import 'dart:convert';
 import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import 'platform_request_context.dart';
-import '../session/account.dart';
+import 'sign_preflight_cache.dart';
+import 'sign_request_profile.dart';
 import '../platform.dart';
+import '../session/account.dart';
 import '../utils/encrypt.dart';
 
-/// 学习通/雨课堂签到 API（完整实现，参考 yuketang 项目）
-///
-/// 支持 5 种签到类型：
-/// 1. 普通签到（可带照片）
-/// 2. 二维码签到
-/// 3. 手势签到
-/// 4. 位置签到
-/// 5. 签到码签到
+/// Chaoxing sign-in API adapted to this project's multi-account session model.
 class ChaoxingSignApi {
   static const String _signUrl =
       'https://mobilelearn.chaoxing.com/pptSign/stuSignajax';
+  static final SignPreflightCache _preflightCache = SignPreflightCache();
 
-  /// 获取设备指纹
   static String get _deviceCode => EncryptionUtil.getDeviceCode();
 
-  /// 获取课程活动列表
+  static String _currentUserIdOrThrow(String action) {
+    final userId = AccountManager.currentSessionId;
+    if (userId == null || userId.isEmpty) {
+      throw Exception('Not logged in, cannot $action');
+    }
+    return userId;
+  }
+
+  static Future<Response> _sendForCurrentUser(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? params,
+    Map<String, String>? headers,
+    Map<String, String>? legacyHeaders,
+    dynamic body,
+    ResponseType responseType = ResponseType.json,
+    bool allowRedirects = true,
+    String action = 'send Chaoxing request',
+    SignRequestProfile? signProfile,
+  }) async {
+    final context = await PlatformRequestContext.create(
+      platform: PlatformType.chaoxing,
+      userId: _currentUserIdOrThrow(action),
+    );
+    try {
+      return await context.sendRequest(
+        url,
+        method: method,
+        params: params,
+        headers: headers,
+        legacyHeaders: legacyHeaders,
+        body: body,
+        responseType: responseType,
+        allowRedirects: allowRedirects,
+        signProfile: signProfile,
+      );
+    } finally {
+      context.dispose();
+    }
+  }
+
+  static Map<String, dynamic>? _asStringMap(dynamic value) {
+    if (value is! Map) return null;
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  static SignRequestProfile _profileForActive(String activeId) {
+    final userId = AccountManager.currentSessionId ?? '';
+    final cached = userId.isEmpty
+        ? null
+        : _preflightCache.read(
+            platform: 'chaoxing',
+            userId: userId,
+            activityId: activeId,
+          );
+    return SignRequestProfiles.chaoxingMobileLearn(
+      referer: cached?.referer ?? 'https://mobilelearn.chaoxing.com/',
+    );
+  }
+
+  static void _rememberPreflight({
+    required String activeId,
+    required String detailUrl,
+    required Response response,
+    String? referer,
+  }) {
+    final userId = AccountManager.currentSessionId ?? '';
+    if (userId.isEmpty || activeId.isEmpty) return;
+    _preflightCache.write(
+      SignPreflightContext(
+        platform: 'chaoxing',
+        userId: userId,
+        activityId: activeId,
+        createdAt: DateTime.now(),
+        detailUrl: detailUrl,
+        resolvedUrl: response.requestOptions.uri.toString(),
+        referer: referer ?? detailUrl,
+      ),
+    );
+  }
+
+  static String _signDetailUrl(String activeId) {
+    return 'https://mobilelearn.chaoxing.com/newsign/signDetail?activePrimaryId=$activeId&type=1';
+  }
+
   static Future<Response> getActiveList({
     required String courseId,
     required String classId,
-  }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法获取活动列表');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
+  }) {
+    return _sendForCurrentUser(
+      'https://mobilelearn.chaoxing.com/ppt/activeAPI/taskactivelist',
+      params: {
+        'courseId': courseId,
+        'classId': classId,
+        'showNotStartedActive': '0',
+      },
+      action: 'get active list',
     );
-
-    final url = '/ppt/activeAPI/taskactivelist';
-    final params = {
-      'courseId': courseId,
-      'classId': classId,
-      'showNotStartedActive': '0',
-    };
-
-    return await context.sendRequest(url, method: 'GET', params: params);
   }
 
-  /// 普通签到（可带照片）
   static Future<Response> signNormal({
     required String activeId,
     required String courseId,
@@ -56,117 +127,63 @@ class ChaoxingSignApi {
     String? objectId,
     String? validate,
     String? clientip,
-  }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法签到');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
+  }) {
     final params = <String, String>{
       'activeId': activeId,
       'courseId': courseId,
       'uid': uid,
-      'name': name,
       'clientip': clientip ?? '',
       'latitude': '-1',
       'longitude': '-1',
       'appType': '15',
       'fid': '0',
+      'name': name,
       'deviceCode': _deviceCode,
+      if (objectId != null && objectId.isNotEmpty) 'objectId': objectId,
+      if (validate != null && validate.isNotEmpty) 'validate': validate,
     };
 
-    if (objectId != null) {
-      params['objectId'] = objectId;
-    }
-
-    if (validate != null) {
-      params['validate'] = validate;
-    }
-
-    return await context.sendRequest(
+    return _sendForCurrentUser(
       _signUrl,
-      method: 'GET',
       params: params,
       responseType: ResponseType.plain,
+      action: 'normal sign',
+      signProfile: _profileForActive(activeId),
     );
   }
 
-  /// 二维码签到（可带定位）
-  /// 需要验证码时第一次发送会返回 validate_${enc2}
-  /// enc2 用于固定 enc
-  static Future<Response> signQrcode({
-    required String enc,
+  static Future<Response> signCode({
     required String activeId,
     required String courseId,
     required String uid,
     required String name,
-    String? address,
-    double? latitude,
-    double? longitude,
-    String? enc2,
+    required String signCode,
     String? validate,
-    String? currentFaceId,
-  }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法签到');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
+  }) {
     final params = <String, String>{
-      'enc': enc,
-      'name': name,
       'activeId': activeId,
+      'courseId': courseId,
       'uid': uid,
       'clientip': '',
-      'location': '',
       'latitude': '-1',
       'longitude': '-1',
-      'fid': '0',
       'appType': '15',
+      'fid': '0',
+      'name': name,
+      'signCode': signCode,
       'deviceCode': _deviceCode,
-      'vpProbability': '',
-      'vpStrategy': '',
-      'ifCFP': '0',
-      'courseId': courseId,
+      if (validate != null && validate.isNotEmpty) 'validate': validate,
     };
 
-    // 添加位置信息
-    if (address != null && latitude != null && longitude != null) {
-      final locationJson =
-          '{"result":1,"latitude":$latitude,"longitude":$longitude,"mockData":{"strategy":0,"probability":-1},"address":"$address"}';
-      params['location'] = locationJson;
-    }
-
-    // 添加验证码相关参数
-    if (enc2 != null && validate != null) {
-      params['enc2'] = enc2;
-      params['validate'] = validate;
-    }
-
-    // 添加人脸 ID
-    if (currentFaceId != null) {
-      params['currentFaceId'] = currentFaceId;
-    }
-
-    return await context.sendRequest(
+    return _sendForCurrentUser(
       _signUrl,
-      method: 'GET',
       params: params,
       responseType: ResponseType.plain,
+      action: 'code sign',
+      signProfile: _profileForActive(activeId),
     );
   }
 
-  /// 位置签到
   static Future<Response> signLocation({
     required String activeId,
     required String courseId,
@@ -177,19 +194,10 @@ class ChaoxingSignApi {
     required double longitude,
     String? validate,
     String? currentFaceId,
+    String? faceEnc,
     int vpProbability = -1,
     String vpStrategy = '',
-  }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法签到');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
+  }) {
     final params = <String, String>{
       'name': name,
       'address': address,
@@ -205,362 +213,360 @@ class ChaoxingSignApi {
       'deviceCode': _deviceCode,
       'vpProbability': vpProbability.toString(),
       'vpStrategy': vpStrategy,
-      'ifCFP': '0',
+      'ifCFP': currentFaceId == null ? '0' : '1',
+      if (validate != null && validate.isNotEmpty) 'validate': validate,
+      if (currentFaceId != null && currentFaceId.isNotEmpty)
+        'currentFaceId': currentFaceId,
+      if (faceEnc != null && faceEnc.isNotEmpty) 'faceEnc': faceEnc,
     };
 
-    if (validate != null) {
-      params['validate'] = validate;
-    }
-
-    if (currentFaceId != null) {
-      params['currentFaceId'] = currentFaceId;
-    }
-
-    return await context.sendRequest(
+    return _sendForCurrentUser(
       _signUrl,
-      method: 'GET',
       params: params,
       responseType: ResponseType.plain,
+      action: 'location sign',
+      signProfile: _profileForActive(activeId),
     );
   }
 
-  /// 手势签到 / 签到码签到
-  static Future<Response> signCode({
+  static Future<Response> signQrcode({
+    required String enc,
     required String activeId,
     required String courseId,
     required String uid,
     required String name,
-    required String signCode,
+    String? address,
+    double? latitude,
+    double? longitude,
+    String? enc2,
     String? validate,
-  }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法签到');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
+    String? currentFaceId,
+    String? faceEnc,
+  }) {
     final params = <String, String>{
-      'activeId': activeId,
-      'courseId': courseId,
-      'uid': uid,
+      'enc': enc,
       'name': name,
+      'activeId': activeId,
+      'uid': uid,
       'clientip': '',
+      'location': '',
       'latitude': '-1',
       'longitude': '-1',
-      'appType': '15',
       'fid': '0',
-      'signCode': signCode,
+      'appType': '15',
       'deviceCode': _deviceCode,
+      'vpProbability': '',
+      'vpStrategy': '',
+      'ifCFP': currentFaceId == null ? '0' : '1',
+      'courseId': courseId,
+      if (enc2 != null && enc2.isNotEmpty) 'enc2': enc2,
+      if (validate != null && validate.isNotEmpty) 'validate': validate,
+      if (currentFaceId != null && currentFaceId.isNotEmpty)
+        'currentFaceId': currentFaceId,
+      if (faceEnc != null && faceEnc.isNotEmpty) 'faceEnc': faceEnc,
     };
 
-    if (validate != null) {
-      params['validate'] = validate;
+    if (address != null && latitude != null && longitude != null) {
+      params['location'] = jsonEncode({
+        'result': 1,
+        'latitude': latitude,
+        'longitude': longitude,
+        'mockData': {'strategy': 0, 'probability': -1},
+        'address': address,
+      });
     }
 
-    return await context.sendRequest(
+    return _sendForCurrentUser(
       _signUrl,
-      method: 'GET',
       params: params,
       responseType: ResponseType.plain,
+      action: 'qr code sign',
+      signProfile: _profileForActive(activeId),
     );
   }
 
-  /// 检查手势/签到码是否正确
   static Future<bool> checkSignCode({
     required String activeId,
     required String signCode,
   }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法验证签到码');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
-    final url =
-        'https://mobilelearn.chaoxing.com/widget/sign/pcStuSignController/checkSignCode';
-    final params = {'activeId': activeId, 'signCode': signCode};
-
     try {
-      final response = await context.sendRequest(
-        url,
-        method: 'GET',
-        params: params,
+      final response = await _sendForCurrentUser(
+        'https://mobilelearn.chaoxing.com/widget/sign/pcStuSignController/checkSignCode',
+        params: {'activeId': activeId, 'signCode': signCode},
+        action: 'check sign code',
       );
-
-      final data = response.data;
-      return data['result'] == 1;
-      // {"result":1,"msg":"验证成功","data":null,"errorMsg":null}
-      // {"result":0,"msg":null,"data":null,"errorMsg":"手势不正确"}
+      final data = _asStringMap(response.data);
+      return data?['result'] == 1 || data?['result']?.toString() == '1';
     } catch (e) {
       debugPrint('[ChaoxingSignApi] checkSignCode error: $e');
       return false;
     }
   }
 
-  /// 获取首次采集的人脸图片 ID
   static Future<String?> getFaceId(String uid) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法获取人脸 ID');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
     try {
       final enc = EncryptionUtil.md5Hash(uid + Constant.getFaceSalt);
-      final url =
-          'https://passport2-api.chaoxing.com/api/getUserFaceid?enc=$enc';
-
-      final response = await context.sendRequest(url, method: 'GET');
-      final data = response.data;
-
-      // {"result":1,"msg":"获取成功","data":{"http":"http://p.ananas.chaoxing.com/star3/origin/$objectid.jpg","objectid":objectid},"errorMsg":""}
-      // 如果没有采集过人脸则为空字符串
-      if (data['result'] == 1) {
-        return data['data']['objectid'];
-      }
+      final response = await _sendForCurrentUser(
+        'https://passport2-api.chaoxing.com/api/getUserFaceid?enc=$enc',
+        action: 'get face id',
+      );
+      final data = _asStringMap(response.data);
+      final faceData = _asStringMap(data?['data']);
+      final objectId = faceData?['objectid']?.toString();
+      return objectId == null || objectId.isEmpty ? null : objectId;
     } catch (e) {
       debugPrint('[ChaoxingSignApi] getFaceId error: $e');
+      return null;
     }
-
-    return null;
   }
 
-  /// 获取签到详情
-  /// 所有签到类型可用
+  static Future<String?> getFaceEnc({
+    required String activeId,
+    required String faceId,
+    required String uid,
+    required Map<String, dynamic> deviceInfo,
+  }) async {
+    try {
+      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+      final faceResult = <String, dynamic>{
+        'currentFaceId': faceId,
+        'LiveDetectionStatus': '1',
+        'collectStatus': '1',
+        'cxcid': deviceInfo['cid'],
+        'cxtime': timestamp,
+      };
+      final sortedKeys = faceResult.keys.toList()..sort();
+      final buffer = StringBuffer();
+      for (final key in sortedKeys) {
+        buffer.write('$key${faceResult[key] ?? ''}');
+      }
+      buffer.write(deviceInfo['sc'] ?? '');
+      faceResult['signToken'] = EncryptionUtil.md5Hash(buffer.toString());
+
+      final response = await _sendForCurrentUser(
+        'https://mobilelearn.chaoxing.com/pptSign/check-face-result',
+        params: {
+          'DB_STRATEGY': 'PRIMARY_KEY',
+          'STRATEGY_PARA': 'activeId',
+          'activeId': activeId,
+          'faceResult': jsonEncode(faceResult),
+        },
+        action: 'get face enc',
+      );
+      final data = _asStringMap(response.data);
+      if (data == null) return null;
+      final ok = data['status'] == 1 || data['status']?.toString() == '1';
+      return ok ? data['enc']?.toString() : null;
+    } catch (e) {
+      debugPrint('[ChaoxingSignApi] getFaceEnc error: $e');
+      return null;
+    }
+  }
+
   static Future<Map<String, dynamic>?> getSignDetail({
     required String activeId,
     String? code,
   }) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法获取签到详情');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
     try {
-      var url =
-          'https://mobilelearn.chaoxing.com/newsign/signDetail?activePrimaryId=$activeId&type=1';
-      if (code != null) {
-        url += '&msg=$code';
+      var url = _signDetailUrl(activeId);
+      if (code != null && code.isNotEmpty) {
+        url += '&msg=${Uri.encodeQueryComponent(code)}';
       }
-
-      final response = await context.sendRequest(url, method: 'GET');
-      return response.data;
+      final response = await _sendForCurrentUser(
+        url,
+        action: 'get sign detail',
+      );
+      _rememberPreflight(
+        activeId: activeId,
+        detailUrl: url,
+        response: response,
+        referer: url,
+      );
+      return _asStringMap(response.data);
     } catch (e) {
       debugPrint('[ChaoxingSignApi] getSignDetail error: $e');
       return null;
     }
   }
 
-  /// 获取活动详情
   static Future<Map<String, dynamic>?> getActiveInfoWeb(String activeId) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法获取活动详情');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
     try {
       final url =
           'https://mobilelearn.chaoxing.com/v2/apis/active/getPPTActiveInfo?activeId=$activeId';
-
-      final response = await context.sendRequest(url, method: 'GET');
-      final data = response.data;
-
-      if (data['result'] == 1) {
-        return data['data'];
-      }
+      final response = await _sendForCurrentUser(
+        url,
+        action: 'get active info',
+      );
+      _rememberPreflight(
+        activeId: activeId,
+        detailUrl: url,
+        response: response,
+        referer: _signDetailUrl(activeId),
+      );
+      final data = _asStringMap(response.data);
+      return data?['result'] == 1 || data?['result']?.toString() == '1'
+          ? _asStringMap(data?['data'])
+          : null;
     } catch (e) {
       debugPrint('[ChaoxingSignApi] getActiveInfoWeb error: $e');
+      return null;
     }
-
-    return null;
   }
 
-  /// 获取参与详情
   static Future<Map<String, dynamic>?> getAttendInfoWeb(String activeId) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法获取参与详情');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
     try {
       final url =
           'https://mobilelearn.chaoxing.com/v2/apis/sign/getAttendInfo?activeId=$activeId&moreClassAttendEnc=';
-
-      final response = await context.sendRequest(url, method: 'GET');
-      final data = response.data;
-
-      if (data['result'] == 1) {
-        return data['data'];
-      }
+      final response = await _sendForCurrentUser(
+        url,
+        action: 'get attend info',
+      );
+      _rememberPreflight(
+        activeId: activeId,
+        detailUrl: url,
+        response: response,
+        referer: _signDetailUrl(activeId),
+      );
+      final data = _asStringMap(response.data);
+      return data?['result'] == 1 || data?['result']?.toString() == '1'
+          ? _asStringMap(data?['data'])
+          : null;
     } catch (e) {
       debugPrint('[ChaoxingSignApi] getAttendInfoWeb error: $e');
+      return null;
     }
-
-    return null;
   }
 
-  /// 签到回执
-  static Future<Map<String, dynamic>?> getSignReceipt(String activeId) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法获取签到回执');
+  static Future<String?> groupSign(
+    String activeId, {
+    String? objectId,
+    String? address,
+    double? latitude,
+    double? longitude,
+  }) async {
+    final uid = AccountManager.currentSessionId ?? '';
+    final params = <String, String>{
+      'activeId': activeId,
+      'uid': uid,
+      'clientip': '',
+      if (objectId != null && objectId.isNotEmpty) 'objectId': objectId,
+    };
+    if (address != null && latitude != null && longitude != null) {
+      params.addAll({
+        'address': address,
+        'latitude': latitude.toStringAsFixed(6),
+        'longitude': longitude.toStringAsFixed(6),
+        'fid': '',
+        'ifTiJiao': '1',
+      });
     }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
+    final response = await _sendForCurrentUser(
+      'https://mobilelearn.chaoxing.com/sign/stuSignajax',
+      params: params,
+      responseType: ResponseType.plain,
+      action: 'group sign',
+      signProfile: _profileForActive(activeId),
     );
+    return response.data?.toString();
+  }
 
+  static Future<Map<String, dynamic>?> getSignReceipt(String activeId) async {
     try {
-      final url =
-          'https://mobilelearn.chaoxing.com/sign/signReceipt2?activeId=$activeId';
-
-      final response = await context.sendRequest(url, method: 'GET');
-      return response.data;
+      final response = await _sendForCurrentUser(
+        'https://mobilelearn.chaoxing.com/sign/signReceipt2?activeId=$activeId',
+        action: 'get sign receipt',
+      );
+      return _asStringMap(response.data);
     } catch (e) {
       debugPrint('[ChaoxingSignApi] getSignReceipt error: $e');
       return null;
     }
   }
 
-  /// 上传图片到学习通
-  static Future<String?> uploadImage(File imageFile, String uid) async {
-    final userId = AccountManager.currentSessionId;
-    if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法上传图片');
-    }
-
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.chaoxing,
-      userId: userId,
-    );
-
+  static Future<Map<String, dynamic>?> getGroupSignDetail(
+    String activeId,
+  ) async {
     try {
-      // 1. 获取 token
-      final tokenUrl = 'https://pan-yz.chaoxing.com/api/token/uservalid';
-      final tokenResponse = await context.sendRequest(tokenUrl, method: 'GET');
+      final response = await _sendForCurrentUser(
+        'https://mobilelearn.chaoxing.com/sign/getSignDetail?id=$activeId',
+        action: 'get group sign detail',
+      );
+      return _asStringMap(response.data);
+    } catch (e) {
+      debugPrint('[ChaoxingSignApi] getGroupSignDetail error: $e');
+      return null;
+    }
+  }
 
-      if (tokenResponse.data == null) {
-        debugPrint('[ChaoxingSignApi] Failed to get token');
+  static Future<String?> uploadImage(File imageFile, String uid) async {
+    try {
+      final tokenResponse = await _sendForCurrentUser(
+        'https://pan-yz.chaoxing.com/api/token/uservalid',
+        action: 'get upload token',
+      );
+      final token = _asStringMap(tokenResponse.data)?['_token']?.toString();
+      if (token == null || token.isEmpty) {
         return null;
       }
 
-      final token = tokenResponse.data['_token'];
-
-      // 2. 上传 CRC 状态
-      final crcUrl = 'https://pan-yz.chaoxing.com/api/crcStorageStatus';
       final crc = await EncryptionUtil.getCRC(imageFile);
-      final crcParams = <String, String>{
-        'puid': uid,
-        'crc': crc,
-        '_token': token.toString(),
-      };
+      await _sendForCurrentUser(
+        'https://pan-yz.chaoxing.com/api/crcStorageStatus',
+        params: {'puid': uid, 'crc': crc, '_token': token},
+        action: 'check image crc',
+      );
 
-      await context.sendRequest(crcUrl, method: 'GET', params: crcParams);
-
-      // 3. 生成文件名
       final now = DateTime.now();
       final timestamp =
-          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
-      final milliseconds = now.millisecond.toString().padLeft(3, '0');
-      final fileName = '$timestamp$milliseconds.jpg';
-
-      // 4. 上传文件
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}${now.millisecond.toString().padLeft(3, '0')}';
       final formData = FormData.fromMap({
-        'file': await MultipartFile.fromFile(imageFile.path, filename: fileName),
+        'file': await MultipartFile.fromFile(
+          imageFile.path,
+          filename: '$timestamp.jpg',
+        ),
         'puid': uid,
       });
 
-      final uploadUrl =
-          'https://pan-yz.chaoxing.com/upload?_from=mobilelearn&_token=$token';
-
-      final uploadResponse = await context.sendRequest(
-        uploadUrl,
+      final uploadResponse = await _sendForCurrentUser(
+        'https://pan-yz.chaoxing.com/upload?_from=mobilelearn&_token=$token',
         method: 'POST',
         body: formData,
+        action: 'upload image',
       );
-
-      final responseData = uploadResponse.data;
-      final objectId = responseData['data']?['objectId'];
-
-      return objectId;
+      return _asStringMap(
+        _asStringMap(uploadResponse.data)?['data'],
+      )?['objectId']?.toString();
     } catch (e) {
       debugPrint('[ChaoxingSignApi] uploadImage error: $e');
       return null;
     }
   }
 
-  /// 检查签到状态是否成功
   static bool isSignSuccess(String? responseText) {
     if (responseText == null) return false;
-
-    // 成功响应: "success" 或 "success2"（已过截止时间）
     return responseText.contains('success');
   }
 
-  /// 检查是否需要验证码
   static bool needsValidate(String? responseText) {
     if (responseText == null) return false;
-
-    // 需要验证码响应: "validate_${enc2}"
     return responseText.startsWith('validate_');
   }
 
-  /// 从响应中提取 enc2（用于验证码场景）
   static String? extractEnc2(String? responseText) {
-    if (responseText == null || !responseText.startsWith('validate_')) {
-      return null;
-    }
-
-    return responseText.substring('validate_'.length);
+    if (!needsValidate(responseText)) return null;
+    return responseText!.substring('validate_'.length);
   }
 
-  /// 获取签到结果消息
   static String getSignMessage(String? responseText, {bool success = false}) {
-    if (success) {
+    if (success || responseText?.contains('success') == true) {
       return '签到成功';
     }
-
-    if (responseText == null) {
+    if (responseText == null || responseText.isEmpty) {
       return '签到失败，请稍后再试';
     }
-
-    if (responseText.contains('success')) {
-      return '签到成功';
-    }
-
     if (responseText.startsWith('validate_')) {
       return '需要验证码';
     }
-
-    // 返回原始错误信息
     return responseText;
   }
 }

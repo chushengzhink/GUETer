@@ -6,6 +6,7 @@ import '../api/course.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import '../session/account.dart';
+import '../widgets/platform_sign_log_card.dart';
 import 'tronclass_sign_in_list_page.dart';
 import 'tronclass_todo_detail_page.dart';
 import 'tronclass_web_login.dart';
@@ -238,6 +239,13 @@ class _TronclassDashboardPageState extends State<TronclassDashboardPage> {
                 ),
                 const SizedBox(height: 18),
                 _buildActionCluster(context),
+                const SizedBox(height: 12),
+                const PlatformSignLogCard(
+                  platform: '畅课',
+                  platformType: PlatformType.tronclass,
+                  title: '畅课签到日志',
+                  subtitle: '查看所有畅课账号的签到结果和失败原因',
+                ),
                 const SizedBox(height: 24),
                 _buildInteractionsCard(),
                 const SizedBox(height: 24),

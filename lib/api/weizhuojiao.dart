@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:html/parser.dart' as html_parser;
 
 import '../api/api_service.dart';
+import '../api/sign_request_profile.dart';
 
 class WZJSignData {
   final String openid;
@@ -66,6 +67,10 @@ class WZJApi {
         '$_baseUrl$_signPagePath?openid=${Uri.encodeComponent(openid)}',
         method: 'GET',
         headers: _headers,
+        legacyHeaders: _headers,
+        signProfile: SignRequestProfiles.weizhuojiaoWechat(
+          referer: '$_baseUrl$_signPagePath',
+        ),
         responseType: ResponseType.plain,
       );
 
@@ -139,7 +144,11 @@ class WZJApi {
         '$_baseUrl$_signSubmitPath',
         method: 'POST',
         headers: _headers,
+        legacyHeaders: _headers,
         body: FormData.fromMap(body),
+        signProfile: SignRequestProfiles.weizhuojiaoWechat(
+          referer: signData.sourceUrl,
+        ),
         responseType: ResponseType.plain,
       );
 

@@ -72,7 +72,13 @@ class CredentialManager {
         expiryTimestamp ??
         (extendDefault ? getDefaultExpiry() : user.credentialExpiry);
 
-    final updated = user.copyWith(
+    final latest = AccountManager.getAccountsForPlatformName(user.platform)
+        .where((account) => account.uid == user.uid)
+        .cast<User?>()
+        .firstWhere((account) => account != null, orElse: () => user);
+
+    final base = latest ?? user;
+    final updated = base.copyWith(
       credentialExpiry: newExpiry,
       lastRefreshTime: now,
     );

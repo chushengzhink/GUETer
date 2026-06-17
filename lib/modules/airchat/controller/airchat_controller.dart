@@ -90,7 +90,7 @@ class AirChatController extends ChangeNotifier {
 
     final environment = _environmentStatus;
     if (environment == null) {
-      issues.add('尚未读取系统状态');
+      issues.add('尚未读取系统环境');
       return issues;
     }
     switch (environment.transportMode) {
@@ -104,7 +104,7 @@ class AirChatController extends ChangeNotifier {
           issues.add('设备不支持 BLE 发现');
         }
         if (!environment.hotspotCapable) {
-          issues.add('当前设备无法进入热点承载模式');
+          issues.add('当前设备无法使用热点接力模式');
         }
         break;
       case NearbyTransportMode.unsupported:
@@ -130,9 +130,9 @@ class AirChatController extends ChangeNotifier {
       messages.add('Wi-Fi 关闭不会阻止使用，但开启后通常能提高发现成功率。');
     }
     if (environment.transportMode == NearbyTransportMode.bleHotspot) {
-      messages.add('无 GMS 设备将使用 BLE 发现和手动热点接力，进房后请按提示加入房主热点。');
+      messages.add('当前设备无需 Google Play 服务，将使用 BLE 发现和手动热点接力；进房后请按提示加入房主热点。');
       if (hotspotSsid.trim().isEmpty || hotspotPassword.trim().isEmpty) {
-        messages.add('你还没有填写热点名称和密码；此模式下仍可扫描他人房间，但无法把自己的房间完整广播给对方。');
+        messages.add('你还没有填写热点名称和密码；仍可扫描别人房间，但广播自己的房间时对方可能拿不到热点资料。');
       }
     }
     return messages;
@@ -435,7 +435,7 @@ class AirChatController extends ChangeNotifier {
         if (!discoveryResult.ok) '发现失败：${discoveryResult.message}',
         if (!advertisingResult.ok) '广播失败：${advertisingResult.message}',
       ];
-      _setError(failures.join('；'));
+      _setError(failures.join('?'));
     }
     await refreshEnvironmentStatus(notify: false);
     await refreshConnectionState(notify: false);

@@ -1,19 +1,25 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:dio/dio.dart';
-import 'package:uuid/uuid.dart';
 
+import '../core/async/app_async_view.dart';
+import '../features/courses/chaoxing/chaoxing_course_detail_controller.dart';
 import '../platform.dart';
 import '../api/course.dart';
 import '../api/api_service.dart';
 import '../api/kt_sign.dart';
-import '../api/tronclass_sign_api.dart';
 import '../session/account.dart';
 import '../session/account_events.dart';
 import '../session/app_settings.dart';
 import '../session/sign_record_store.dart';
 import '../models/course.dart';
 import '../models/active.dart';
+import '../services/platform_network_warmup_service.dart';
+import '../services/platform_page_snapshot_store.dart';
+import '../services/sign_network_gate.dart';
+import '../services/sign_platform_context.dart';
+import '../services/sign_run_console.dart';
+import '../materials/material_search_context.dart';
 import '../utils/global_palette.dart';
 import '../utils/rainclassroom_scan_parser.dart';
 import '../utils/tronclass_qr_parser.dart';
@@ -21,6 +27,12 @@ import '../theme/design_tokens.dart';
 import '../theme/animations.dart';
 import '../theme/components/app_badge.dart';
 import '../theme/components/dashboard_components.dart';
+import '../smart/smart_models.dart';
+import '../widgets/context_help.dart';
+import '../widgets/material_context_search.dart';
+import '../widgets/platform_sign_log_card.dart';
+import '../widgets/sign_run_console_panel.dart';
+import '../widgets/smart_inline_panel.dart';
 import 'widget/scan.dart';
 import 'widget/avatar.dart';
 import 'widget/ketangpai_course_showcase.dart';
@@ -34,6 +46,7 @@ import 'actives/questionnaire.dart';
 import 'chaoxing_course_detail_page.dart';
 import 'rainclassroom_course_detail.dart';
 import 'tronclass_dashboard_page.dart';
+import 'tronclass_qr_sign_page.dart';
 import 'ketangpai_course_struct.dart';
 import 'ketangpai_profile_page.dart';
 import 'ketangpai_shared_room_page.dart';
@@ -60,55 +73,142 @@ class CourseContentPage extends StatefulWidget {
 }
 
 class _CourseContentPageState extends State<CourseContentPage> {
-  List<Active> _activeList = [];
-  bool _isContentLoading = false;
+  late final ChaoxingCourseActivitiesController _controller;
 
   @override
   void initState() {
     super.initState();
-    _loadCourseContent();
+    _controller = ChaoxingCourseActivitiesController(
+      courseId: widget.courseId,
+      classId: widget.classId,
+      cpi: widget.cpi,
+    );
+    _controller.load();
   }
 
-  Future<void> _loadCourseContent() async {
-    setState(() {
-      _isContentLoading = true;
-    });
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
-    try {
-      final List<Active>? contentList = await CXCourseApi.getActiveList(
-        widget.courseId,
-        widget.classId,
-        widget.cpi,
-      );
+  void _openActive(Active active) {
+    if (!active.status) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('该活动已结束')));
+      return;
+    }
 
-      if (contentList != null) {
-        setState(() {
-          _activeList = contentList;
-          _isContentLoading = false;
-        });
-      } else {
-        setState(() {
-          _activeList = [];
-          _isContentLoading = false;
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('获取内容列表失败')));
-        }
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _activeList = [];
-        _isContentLoading = false;
-      });
-      if (mounted) {
+    switch (active.activeType) {
+      case ActiveType.signIn:
+      case ActiveType.signOut:
+      case ActiveType.scheduledSignIn:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => SignInPage(
+              active: active,
+              courseId: widget.courseId,
+              classId: widget.classId,
+              cpi: widget.cpi,
+            ),
+          ),
+        );
+        return;
+      case ActiveType.topicDiscuss:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TopicDiscussPage(active: active),
+          ),
+        );
+        return;
+      case ActiveType.quiz:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => QuizPage(
+              active: active,
+              courseId: widget.courseId,
+              classId: widget.classId,
+            ),
+          ),
+        );
+        return;
+      case ActiveType.evaluation:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => EvaluatePage(
+              active: active,
+              courseId: widget.courseId,
+              classId: widget.classId,
+            ),
+          ),
+        );
+        return;
+      case ActiveType.vote:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VotePage(
+              active: active,
+              courseId: widget.courseId,
+              classId: widget.classId,
+            ),
+          ),
+        );
+        return;
+      case ActiveType.questionnaire:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => QuestionnairePage(
+              active: active,
+              courseId: widget.courseId,
+              classId: widget.classId,
+            ),
+          ),
+        );
+        return;
+      default:
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('获取内容列表时发生错误：$e')));
-      }
+        ).showSnackBar(const SnackBar(content: Text('该活动类型暂不支持')));
     }
+  }
+
+  Widget _buildActiveCard(Active active) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: ListTile(
+        leading: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(
+            active.getIcon(),
+            color: active.status
+                ? Theme.of(context).colorScheme.primary
+                : Colors.grey,
+            size: 35,
+          ),
+        ),
+        title: Text(
+          active.name,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          active.description,
+          style: const TextStyle(fontSize: 14, color: Colors.grey),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => _openActive(active),
+      ),
+    );
   }
 
   @override
@@ -119,156 +219,36 @@ class _CourseContentPageState extends State<CourseContentPage> {
         backgroundColor: Theme.of(context).colorScheme.primary,
         foregroundColor: Colors.white,
       ),
-      body: _isContentLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _activeList.isEmpty
-          ? const Center(
-              child: Text(
-                '暂无内容',
-                style: TextStyle(fontSize: 18, color: Colors.grey),
-              ),
-            )
-          : RefreshIndicator(
-              onRefresh: _loadCourseContent,
-              child: ListView.builder(
-                itemCount: _activeList.length,
-                itemBuilder: (context, index) {
-                  var active = _activeList[index];
-                  return Card(
-                    margin: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
+      body: ListenableBuilder(
+        listenable: _controller,
+        builder: (context, _) {
+          return AppAsyncView<List<Active>>(
+            state: _controller.state,
+            emptyTitle: '暂无内容',
+            errorTitle: '获取内容列表失败',
+            onRetry: _controller.load,
+            onRefresh: _controller.refresh,
+            dataBuilder: (context, activities, isRefreshing) {
+              return Stack(
+                children: [
+                  ListView.builder(
+                    itemCount: activities.length,
+                    itemBuilder: (context, index) =>
+                        _buildActiveCard(activities[index]),
+                  ),
+                  if (isRefreshing)
+                    const Positioned(
+                      left: 0,
+                      right: 0,
+                      top: 0,
+                      child: LinearProgressIndicator(),
                     ),
-                    child: ListTile(
-                      leading: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).cardColor,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          active.getIcon(),
-                          color: active.status
-                              ? Theme.of(context).colorScheme.primary
-                              : Colors.grey,
-                          size: 35,
-                        ),
-                      ),
-                      title: Text(
-                        active.name,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      subtitle: Text(
-                        active.description,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey,
-                        ),
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        if (active.status) {
-                          switch (active.activeType) {
-                            case ActiveType.signIn:
-                            case ActiveType.signOut:
-                            case ActiveType.scheduledSignIn:
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => SignInPage(
-                                    active: active,
-                                    courseId: widget.courseId,
-                                    classId: widget.classId,
-                                    cpi: widget.cpi,
-                                  ),
-                                ),
-                              );
-                              break;
-
-                            case ActiveType.topicDiscuss:
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      TopicDiscussPage(active: active),
-                                ),
-                              );
-                              break;
-
-                            case ActiveType.quiz:
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => QuizPage(
-                                    active: active,
-                                    courseId: widget.courseId,
-                                    classId: widget.classId,
-                                  ),
-                                ),
-                              );
-                              break;
-
-                            case ActiveType.evaluation:
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => EvaluatePage(
-                                    active: active,
-                                    courseId: widget.courseId,
-                                    classId: widget.classId,
-                                  ),
-                                ),
-                              );
-                              break;
-
-                            case ActiveType.vote:
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => VotePage(
-                                    active: active,
-                                    courseId: widget.courseId,
-                                    classId: widget.classId,
-                                  ),
-                                ),
-                              );
-                              break;
-
-                            case ActiveType.questionnaire:
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => QuestionnairePage(
-                                    active: active,
-                                    courseId: widget.courseId,
-                                    classId: widget.classId,
-                                  ),
-                                ),
-                              );
-                              break;
-
-                            default:
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('该活动类型暂不支持')),
-                              );
-                          }
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('该活动已结束')),
-                          );
-                        }
-                      },
-                    ),
-                  );
-                },
-              ),
-            ),
+                ],
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
@@ -307,17 +287,25 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   StreamSubscription? _accountChangeSubscription;
   StreamSubscription? _platformChangeSubscription;
   Timer? _refreshTimer;
-  Map<String, dynamic>? _lastOnLessonCourses;
   bool _isLoadingCourses = false;
+  bool _isShowingCachedCourses = false;
+  bool _isRefreshingCoursesInBackground = false;
   Color _globalPrimary = const Color(0xFF1F9EA8);
   Color _globalSecondary = const Color(0xFF157B88);
   DateTime? _lastRefreshAt;
   String? _lastRefreshMessage;
+  DateTime? _snapshotUpdatedAt;
+  bool _snapshotRefreshFailed = false;
+  String? _pendingAccountReloadUserId;
+  bool _runningPendingAccountReload = false;
 
   final Map<PlatformType, List<Course>> _coursesCache = {};
   final Map<PlatformType, List<Course>> _onlineCoursesCache = {};
   final Map<PlatformType, List<Course>> _offlineCoursesCache = {};
   final Map<PlatformType, DateTime> _cacheTimestamps = {};
+  final PlatformPageSnapshotStore _snapshotStore = PlatformPageSnapshotStore();
+  final SignRunConsoleController _scanConsoleController =
+      SignRunConsoleController();
   _RainClassroomScanExecution? _pendingRainScanExecution;
 
   Future<void> refreshCourses() {
@@ -333,7 +321,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       return;
     }
 
-    // 用户主动点击切换按钮
+    // 用户主动切换平台，保持平台状态和课程数据同步。
     await PlatformManager().setPlatform(platform, userInitiated: true);
     if (!mounted) return;
 
@@ -358,12 +346,12 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshCourses({bool showFeedback = false}) async {
-    await _loadCourses();
+    await _loadCourses(forceNetwork: true);
     if (mounted) {
       _lastRefreshAt = DateTime.now();
       _lastRefreshMessage = _courses.isEmpty
           ? '未获取到课程数据'
-          : '已更新 ${_courses.length} 门课程';
+          : '已加载 ${_courses.length} 门课程';
       setState(() {});
     }
     if (!mounted || !showFeedback) {
@@ -374,7 +362,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
-          content: Text('课程已刷新 · ${_formatClock(DateTime.now())}'),
+          content: Text('课程已刷新：${_formatClock(DateTime.now())}'),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -385,7 +373,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     final lastRefreshText = _lastRefreshAt == null
         ? '尚未手动刷新'
         : '最近刷新：${_formatClock(_lastRefreshAt!)}';
-    final statusText = _lastRefreshMessage ?? '下拉或点击右下角按钮刷新课程';
+    final statusText = _lastRefreshMessage ?? '等待刷新课程数据，可下拉或点击刷新按钮。';
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -493,9 +481,57 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         children: [
           _buildPlatformDashboardHeader(),
           const SizedBox(height: AppSpacing.md),
+          const SmartInlinePanel(
+            title: '课程智能建议',
+            types: {
+              SmartInsightType.accountNetwork,
+              SmartInsightType.today,
+              SmartInsightType.todoRisk,
+            },
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          const ContextHelpHint(
+            title: '课程页帮助',
+            tips: [
+              '课程为空时先确认当前平台和账号，再刷新课程。',
+              '扫码、签到和课程活动会继续走原平台链路，不会被智能建议自动提交。',
+              '看到缓存提示时可以先查看旧课程，后台刷新成功后会更新。',
+              '平台请求失败时到设置里的诊断区查看健康检查和请求日志。',
+            ],
+          ),
+          if (_courses.isNotEmpty)
+            MaterialRelatedPanel(
+              title: '课程相关资料',
+              contextData: MaterialSearchContext.course(
+                courseName: _courses.first.name,
+                teacher: _courses.first.teacher,
+                limit: 3,
+              ),
+              maxItems: 3,
+            ),
+          if (_isShowingCachedCourses || _isRefreshingCoursesInBackground)
+            _buildCourseRefreshStatusBanner(),
+          const SizedBox(height: AppSpacing.md),
           _buildCourseStatsGrid(),
           const SizedBox(height: AppSpacing.md),
           _buildCourseQuickActions(),
+          if (!PlatformManager().isTronclass &&
+              !PlatformManager().isWeizhuojiao)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: PlatformSignLogCard(
+                platform: _currentSignLogPlatformLabel(),
+                platformType: PlatformManager().currentPlatform,
+                title: '${_currentSignLogPlatformLabel()}签到日志',
+                subtitle: '查看本平台账号签到结果和失败原因',
+              ),
+            ),
+          if (PlatformManager().isRainClassroom ||
+              PlatformManager().isKetangpai)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: SignRunConsolePanel(controller: _scanConsoleController),
+            ),
           if (PlatformManager().isRainClassroom) _buildRainClassroomToggle(),
           if (PlatformManager().isRainClassroom) _buildRainCourseDebugPanel(),
           if (PlatformManager().isKetangpai) _buildKetangpaiFunctionCards(),
@@ -515,20 +551,80 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildCourseRefreshStatusBanner() {
+    final isStale =
+        _snapshotUpdatedAt != null &&
+        DateTime.now().difference(_snapshotUpdatedAt!) >
+            const Duration(minutes: 30);
+    final message = _snapshotRefreshFailed
+        ? '显示缓存课程，后台刷新失败'
+        : _isRefreshingCoursesInBackground
+        ? (isStale ? '显示较旧缓存课程，后台刷新中' : '显示缓存课程，后台刷新中')
+        : (isStale ? '当前显示较旧缓存课程' : '当前显示缓存课程');
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.sm),
+      child: Semantics(
+        label: message,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(AppRadius.medium),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                _isRefreshingCoursesInBackground
+                    ? Icons.sync_rounded
+                    : Icons.offline_pin_outlined,
+                size: 18,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _currentSignLogPlatformLabel() {
+    if (PlatformManager().isChaoxing) return '学习通';
+    if (PlatformManager().isRainClassroom) return '雨课堂';
+    if (PlatformManager().isKetangpai) return '课堂派';
+    if (PlatformManager().isTronclass) return '畅课';
+    if (PlatformManager().isWeizhuojiao) return '微助教';
+    return '全部';
+  }
+
   Widget _buildPlatformDashboardHeader() {
     final currentPlatform = PlatformManager().currentPlatform;
     final title = switch (currentPlatform) {
-      PlatformType.chaoxing => '学习通课程',
-      PlatformType.rainClassroom => '雨课堂课程',
+      PlatformType.chaoxing => '学习通课程工作台',
+      PlatformType.rainClassroom => '雨课堂课程工作台',
       PlatformType.tronclass => 'TronClass',
-      PlatformType.ketangpai => '课堂派课程',
-      PlatformType.weizhuojiao => '微助教',
+      PlatformType.ketangpai => '课堂派课程工作台',
+      PlatformType.weizhuojiao => '微助教课程工作台',
     };
     final subtitle = switch (currentPlatform) {
-      PlatformType.chaoxing => '同步课程、查看活动，并从扫码入口快速进入签到流程。',
+      PlatformType.chaoxing => '同步课程、查看活动，并从扫码入口处理签到流程。',
       PlatformType.rainClassroom => '管理在线课堂和离线课程，按需同步课程列表。',
       PlatformType.tronclass => '课程、待办和签到入口集中管理。',
-      PlatformType.ketangpai => '课程、共享房间和签到工具保持在同一工作台。',
+      PlatformType.ketangpai => '课程资料、共享房间和签到工具集中在工作台。',
       PlatformType.weizhuojiao => '入口正在完善中。',
     };
     final icon = switch (currentPlatform) {
@@ -540,7 +636,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     };
     final refreshText = _lastRefreshAt == null
         ? '尚未手动刷新'
-        : '最近刷新 ${_formatClock(_lastRefreshAt!)}';
+        : '最近刷新：${_formatClock(_lastRefreshAt!)}';
 
     return DashboardHeader(
       eyebrow: 'COURSE WORKSPACE',
@@ -563,7 +659,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           ),
           const SizedBox(width: AppSpacing.xs),
           IconButton.filledTonal(
-            tooltip: '刷新',
+            tooltip: '刷新课程',
             onPressed: _isLoading
                 ? null
                 : () => _refreshCourses(showFeedback: true),
@@ -583,7 +679,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             _buildHeaderPill(Icons.schedule_rounded, refreshText),
             _buildHeaderPill(
               Icons.layers_outlined,
-              _courses.isEmpty ? '等待课程数据' : '已载入 ${_courses.length} 门',
+              _courses.isEmpty ? '等待课程数据' : '已加载 ${_courses.length} 门课',
             ),
           ],
         ),
@@ -626,13 +722,13 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         final isWide = constraints.maxWidth >= 560;
         final tiles = [
           DashboardStatTile(
-            label: '当前课程',
+            label: '全部课程',
             value: '${_courses.length}',
             icon: Icons.menu_book_outlined,
             color: _globalPrimary,
           ),
           DashboardStatTile(
-            label: '在线课堂',
+            label: '在线课程',
             value: '${_onlineCourses.length}',
             icon: Icons.online_prediction_rounded,
             color: const Color(0xFF0EA5E9),
@@ -679,7 +775,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         final actions = [
           DashboardActionCard(
             title: '同步课程',
-            subtitle: _lastRefreshMessage ?? '更新当前平台课程列表',
+            subtitle: _lastRefreshMessage ?? '刷新课程列表并更新当前平台数据。',
             icon: Icons.cloud_sync_outlined,
             color: _globalPrimary,
             onTap: _isLoading
@@ -687,15 +783,15 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                 : () => _refreshCourses(showFeedback: true),
           ),
           DashboardActionCard(
-            title: '扫码入口',
-            subtitle: '识别签到码或课堂链接',
+            title: '扫码签到',
+            subtitle: '扫描二维码并进入当前平台的签到流程。',
             icon: Icons.qr_code_scanner_rounded,
             color: const Color(0xFFF97316),
             onTap: _openScanPage,
           ),
           DashboardActionCard(
             title: '账号管理',
-            subtitle: '切换账号或检查登录状态',
+            subtitle: '查看和切换账号，保持登录状态可用。',
             icon: Icons.manage_accounts_outlined,
             color: const Color(0xFF6366F1),
             onTap: _openAccountsPage,
@@ -821,13 +917,13 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   Widget _buildKetangpaiWorkspaceHero() {
     final refreshText = _lastRefreshAt == null
         ? '尚未手动刷新'
-        : '最近刷新 ${_formatClock(_lastRefreshAt!)}';
-    final statusText = _courses.isEmpty ? '待同步' : '已连接';
+        : '最近刷新：${_formatClock(_lastRefreshAt!)}';
+    final statusText = _courses.isEmpty ? '暂无课程' : '已加载';
 
     return KetangpaiHeroPanel(
       eyebrow: 'KETANGPAI COURSE WORKSPACE',
-      title: '课堂派\n课程工作台',
-      subtitle: '保留原有课程同步、扫码和跳转链路，用更强的版式展示课程入口、共享房间和签到工具。',
+      title: '课堂派课程工作台',
+      subtitle: '保留原有同步、扫码和跳转流程，集中展示课程、共享房间和签到工具。',
       trailing: Wrap(
         spacing: 8,
         children: [
@@ -839,7 +935,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           KetangpaiGhostIconButton(
             icon: Icons.refresh_rounded,
             onTap: () => _refreshCourses(showFeedback: true),
-            tooltip: '刷新',
+            tooltip: '刷新课程',
           ),
         ],
       ),
@@ -906,7 +1002,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '课程面板',
+          '课程数据为空',
           style: TextStyle(
             color: palette.textPrimary,
             fontSize: 24,
@@ -916,7 +1012,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 6),
         Text(
-          '点击任意课程进入详情页，课程结构和七个子页面的行为保持不变。',
+          '保留课堂派课程同步逻辑，可通过刷新重新拉取课程、共享房间和签到入口。',
           style: TextStyle(
             color: palette.textMuted,
             fontSize: 13,
@@ -931,14 +1027,14 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   Widget _buildKetangpaiSummaryStrip() {
     final palette = KetangpaiCoursePalette.of(context);
     final summaryItems = <({String label, String value, IconData icon})>[
-      (label: '课程数', value: '${_courses.length}', icon: Icons.layers_outlined),
+      (label: '课程数据', value: '${_courses.length}', icon: Icons.layers_outlined),
       (
         label: '刷新状态',
-        value: _lastRefreshAt == null ? '待刷新' : '已同步',
+        value: _lastRefreshAt == null ? '尚未刷新' : '已刷新',
         icon: Icons.sync_outlined,
       ),
       (
-        label: '最近时间',
+        label: '最近刷新时间',
         value: _lastRefreshAt == null
             ? '--:--:--'
             : _formatClock(_lastRefreshAt!),
@@ -1020,20 +1116,20 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     return KetangpaiCoursePanel(
       title: course.name,
       teacher: course.teacher,
-      subtitle: meta.isEmpty ? '进入课程详情与课堂结构页' : meta.first,
+      subtitle: meta.isEmpty ? '暂无课程信息' : meta.first,
       meta: meta.length > 1 ? meta.sublist(1) : const <String>[],
       imageUrl: course.image,
-      badge: '课堂派',
-      stateLabel: course.state ? '进行中' : '停用',
+      badge: '课堂派课程',
+      stateLabel: course.state ? '正在上课' : '未开始',
       onTap: () => _openCourseForCurrentPlatform(course),
     );
   }
 
   Widget _buildKetangpaiEmptyState() {
     return KetangpaiEmptyStage(
-      title: '课程区暂时为空',
-      description: _emptyHint ?? '下拉或点击按钮重新拉取课堂派课程，原有同步逻辑保持不变。',
-      actionLabel: '重新加载课程',
+      title: '课程详情和签到入口',
+      description: _emptyHint ?? '保留原有课堂派接口和跳转逻辑，可进入课程资料、共享房间和签到工具。',
+      actionLabel: '进入课程',
       onAction: _loadCourses,
       icon: Icons.auto_stories_outlined,
     );
@@ -1046,12 +1142,12 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
     if (PlatformManager().isChaoxing) {
       icon = Icons.local_fire_department_outlined;
-      title = '学习通课程区暂时为空';
-      desc = _emptyHint ?? '可稍后刷新，或检查账号登录状态';
+      title = '学习通课程暂不可用';
+      desc = _emptyHint ?? '请确认学习通账号已登录，并检查网络后重新刷新课程。';
     } else if (PlatformManager().isRainClassroom) {
       icon = Icons.water_drop_outlined;
-      title = '雨课堂课程区暂时为空';
-      desc = _emptyHint ?? '可先检查登录态和服务器配置，再刷新';
+      title = '雨课堂课程暂不可用';
+      desc = _emptyHint ?? '请确认雨课堂账号已登录，并检查服务器和课程列表后重试。';
     }
 
     return Padding(
@@ -1064,7 +1160,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         action: FilledButton.icon(
           onPressed: _loadCourses,
           icon: const Icon(Icons.refresh_rounded, size: 18),
-          label: const Text('重新加载课程'),
+          label: const Text('进入课程'),
           style: FilledButton.styleFrom(
             backgroundColor: _globalPrimary,
             foregroundColor: Colors.white,
@@ -1076,13 +1172,13 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
   String _currentPageTitle({required bool isTronclass}) {
     if (PlatformManager().isChaoxing) {
-      return '学习通课程区';
+      return '学习通课程';
     }
     if (PlatformManager().isRainClassroom) {
-      return '雨课堂课程区';
+      return '雨课堂课程';
     }
     if (PlatformManager().isKetangpai) {
-      return '课堂派课程区';
+      return '课堂派课程';
     }
     return '课程';
   }
@@ -1319,7 +1415,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                           course.endDate != null) ...[
                         SizedBox(height: AppSpacing.xs),
                         Text(
-                          '开课时间：${course.beginDate} 至 ${course.endDate}',
+                          '上课时间：${course.beginDate} - ${course.endDate}',
                           style: TextStyle(
                             fontSize: 12,
                             color: Theme.of(
@@ -1418,21 +1514,21 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
   // ignore: unused_element
   Widget _buildPlatformWorkspaceHeader() {
-    String title = '平台课程区';
-    String subtitle = '按当前平台展示课程与操作入口';
+    String title = '平台课程工作台';
+    String subtitle = '在这里查看课程、同步数据并进入签到工具。';
     IconData icon = Icons.grid_view_outlined;
 
     if (PlatformManager().isChaoxing) {
-      title = '学习通课程区';
-      subtitle = '红色主题：课程活动、签到任务与课堂入口';
+      title = '学习通课程工作台';
+      subtitle = '管理学习通课程、章节、作业和课堂活动入口。';
       icon = Icons.local_fire_department_outlined;
     } else if (PlatformManager().isRainClassroom) {
-      title = '雨课堂课程区';
-      subtitle = '蓝色主题：在线课堂、课程同步与调试摘要';
+      title = '雨课堂课程工作台';
+      subtitle = '同步雨课堂在线与离线课程，并保留扫码签到流程。';
       icon = Icons.water_drop_outlined;
     } else if (PlatformManager().isKetangpai) {
-      title = '课堂派课程区';
-      subtitle = '保留当前风格';
+      title = '课堂派课程工作台';
+      subtitle = '集中管理课堂派课程、共享房间和签到入口。';
       icon = Icons.dashboard_outlined;
     }
 
@@ -1542,7 +1638,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        '在线课堂 (${_onlineCourses.length})',
+                        '在线课程 (${_onlineCourses.length})',
                         style: TextStyle(
                           color: _showOnlineOnly
                               ? Colors.white
@@ -1588,7 +1684,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        '离线课堂 (${_offlineCourses.length})',
+                        '离线课程 (${_offlineCourses.length})',
                         style: TextStyle(
                           color: !_showOnlineOnly
                               ? Colors.white
@@ -1667,7 +1763,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    '雨课堂抓取摘要',
+                    '雨课堂课程匹配结果',
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       color: ok
@@ -1682,32 +1778,32 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _debugChip('主课程', courseItems),
-                  _debugChip('在线课堂', onLessonItems),
-                  _debugChip('合并后', mergedResult),
+                  _debugChip('娑撴槒顕崇粙?', courseItems),
+                  _debugChip('在线课程', onLessonItems),
+                  _debugChip('合并结果', mergedResult),
                 ],
               ),
               const SizedBox(height: 8),
               Text(
-                'lesson映射: 按课程 $lessonByCourseId · 按课程+课堂 $lessonByCourseAndClassId',
+                'lesson 匹配：byCourseId=$lessonByCourseId, byCourseAndClassId=$lessonByCourseAndClassId',
                 style: const TextStyle(fontSize: 12, color: Colors.black54),
               ),
               const SizedBox(height: 4),
               Text(
-                '业务码: course=$courseCode · onLesson=$onLessonCode',
+                '课程匹配：course=$courseCode, onLesson=$onLessonCode',
                 style: const TextStyle(fontSize: 12, color: Colors.black54),
               ),
               if (authExpired) ...[
                 const SizedBox(height: 4),
                 const Text(
-                  '检测到登录态失效，请到“账号”页重新登录雨课堂账号后再刷新。',
+                  '未找到匹配的雨课堂课程，请检查课程编号、班级编号和 lesson 信息。',
                   style: TextStyle(fontSize: 12, color: Colors.redAccent),
                 ),
               ],
               if (!ok && reason.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
-                  '异常: $reason',
+                  '跳过课程：$reason',
                   style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
                 ),
               ],
@@ -1751,7 +1847,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '快捷入口',
+                '雨课堂课程入口',
                 style: TextStyle(
                   color: palette.textPrimary,
                   fontSize: 24,
@@ -1761,7 +1857,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 6),
               Text(
-                '保留共享房间和本地签到两个高频入口，减少首页干扰项。',
+                '保留原有课程同步和扫码逻辑，可查看在线课程、离线课程和签到入口。',
                 style: TextStyle(
                   color: palette.textMuted,
                   fontSize: 13,
@@ -1778,8 +1874,8 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                     width: tileWidth,
                     height: 148,
                     child: KetangpaiToolTile(
-                      title: '共享房间',
-                      subtitle: '进入共享房间页，继续使用原有房间列表能力。',
+                      title: '在线课程',
+                      subtitle: '正在上课或即将开始的课程会显示在这里。',
                       icon: Icons.meeting_room_outlined,
                       kicker: 'ROOM',
                       onTap: () {
@@ -1798,7 +1894,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                     height: 148,
                     child: KetangpaiToolTile(
                       title: '本地签到',
-                      subtitle: '快速进入本地签到页，保留原行为和处理链路。',
+                      subtitle: '使用当前课程信息进入签到工具，保留原有提交流程。',
                       icon: Icons.location_on_outlined,
                       kicker: 'SIGN',
                       onTap: () {
@@ -1848,7 +1944,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                   ),
                   const SizedBox(width: 10),
                   Text(
-                    '课堂派功能',
+                    '课堂派课程同步结果',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
@@ -1864,7 +1960,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                 children: [
                   _buildFunctionButton(
                     icon: Icons.person_outlined,
-                    label: '个人信息',
+                    label: '课堂派个人信息',
                     onTap: () {
                       Navigator.push(
                         context,
@@ -1876,7 +1972,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                   ),
                   _buildFunctionButton(
                     icon: Icons.meeting_room_outlined,
-                    label: '共享房间',
+                    label: '在线课程',
                     onTap: () {
                       Navigator.push(
                         context,
@@ -1901,7 +1997,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                   ),
                   _buildFunctionButton(
                     icon: Icons.class_outlined,
-                    label: '课程列表',
+                    label: '课程资料',
                     onTap: () {
                       Navigator.push(
                         context,
@@ -1913,7 +2009,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                   ),
                   _buildFunctionButton(
                     icon: Icons.feedback_outlined,
-                    label: '意见反馈',
+                    label: '刷新列表',
                     onTap: () {
                       Navigator.push(
                         context,
@@ -1969,13 +2065,13 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
   void onVisibilityChanged(bool visible) {
     debugPrint('[YKT] onVisibilityChanged: visible=$visible');
-    // 完全禁用可见性变化触发的刷新
+    // 课堂派保留原有课程接口和跳转逻辑。
     _refreshTimer?.cancel();
   }
 
-  /// 使用在线课堂数据更新课程列表
+  /// 同步课堂派课程列表并更新缓存。
   void updateWithOnLessonCourses(Map<String, dynamic> onLessonCourses) {
-    _loadCourses(onLessonCourses);
+    _loadCourses(onLessonCourses: onLessonCourses);
   }
 
   @override
@@ -1993,34 +2089,66 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       _onlineCourses = _onlineCoursesCache[currentPlatform] ?? [];
       _offlineCourses = _offlineCoursesCache[currentPlatform] ?? [];
       _isLoading = false;
-    } else if (!PlatformManager().isRainClassroom) {
-      _loadCourses();
     } else {
-      _isLoading = false;
+      _loadCourseSnapshotThenRefresh(currentPlatform);
+      if (PlatformManager().isRainClassroom) {
+        _isLoading = false;
+      }
     }
 
-    // 监听账户变更事件
-    _accountChangeSubscription = AccountChangeNotifier().accountChanges.listen((
-      accountId,
+    final currentUserId = AccountManager.currentSessionId;
+    if (currentUserId != null && currentUserId.isNotEmpty) {
+      unawaited(
+        PlatformNetworkWarmupService().warmupDio(
+          platform: currentPlatform,
+          userId: currentUserId,
+        ),
+      );
+    }
+
+    // 刷新课程前先设置加载状态。
+    _accountChangeSubscription = AccountChangeNotifier().accountStateChanges.listen((
+      snapshot,
     ) {
-      // Prevent reload loop: only reload if not currently loading courses
-      // 雨课堂不自动加载
+      if (snapshot.platform != PlatformManager().currentPlatform) {
+        return;
+      }
+      final changedAccountId = snapshot.currentAccountId ?? '';
       if (mounted &&
+          changedAccountId.isNotEmpty &&
+          PlatformManager().isTronclass) {
+        _coursesCache.remove(PlatformType.tronclass);
+        _onlineCoursesCache.remove(PlatformType.tronclass);
+        _offlineCoursesCache.remove(PlatformType.tronclass);
+        setState(() {
+          _emptyHint = null;
+          _snapshotRefreshFailed = false;
+        });
+      }
+      // Prevent reload loop: only reload if not currently loading courses
+      // 雨课堂不自动加载，由用户或扫码流程触发。
+      if (mounted &&
+          changedAccountId.isNotEmpty &&
           !_isLoading &&
           !_isLoadingCourses &&
           !PlatformManager().isRainClassroom) {
         debugPrint(
-          '[Courses] Account changed to $accountId, reloading courses',
+          '[Courses] Account changed to $changedAccountId, reloading courses',
         );
-        _loadCourses();
+        _loadCourses(forceNetwork: true);
       } else {
+        if (mounted &&
+            changedAccountId.isNotEmpty &&
+            !PlatformManager().isRainClassroom) {
+          _queuePendingAccountReload(changedAccountId);
+        }
         debugPrint(
-          '[Courses] Account changed but skipping reload: mounted=$mounted isLoading=$_isLoading isLoadingCourses=$_isLoadingCourses',
+          '[Courses] Account changed queued reload: mounted=$mounted isLoading=$_isLoading isLoadingCourses=$_isLoadingCourses pendingUser=$_pendingAccountReloadUserId',
         );
       }
     });
 
-    // 监听平台变化
+    // 切换平台后清理旧平台课程状态。
     _platformChangeSubscription = PlatformManager().platformChanges.listen((
       newPlatform,
     ) async {
@@ -2029,15 +2157,23 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           '[Courses] Platform changed to $newPlatform, loading from cache',
         );
 
-        while (_isLoadingCourses) {
+        var waitCount = 0;
+        while (_isLoadingCourses && waitCount < 160) {
           await Future.delayed(const Duration(milliseconds: 50));
+          waitCount++;
         }
 
         if (!mounted) return;
 
-        _loadGlobalPalette();
-        _lastOnLessonCourses = null;
+        if (_isLoadingCourses) {
+          debugPrint('[Courses] Timed out waiting for previous load');
+          _isLoadingCourses = false;
+          setState(() {
+            _isLoading = false;
+          });
+        }
 
+        _loadGlobalPalette();
         final cachedCourses = _coursesCache[newPlatform];
         final cachedOnline = _onlineCoursesCache[newPlatform];
         final cachedOffline = _offlineCoursesCache[newPlatform];
@@ -2058,21 +2194,18 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             _isLoading = PlatformManager().isRainClassroom ? false : true;
           });
 
-          if (!PlatformManager().isRainClassroom) {
-            _loadCourses();
-          }
+          _loadCourseSnapshotThenRefresh(newPlatform);
         }
       }
     });
 
-    // initState 时不启动自动刷新
+    // initState 时不启动自动刷新，避免误触发平台请求。
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     debugPrint('[YKT] didChangeAppLifecycleState: state=$state');
-    // 完全禁用生命周期触发的刷新
-    _refreshTimer?.cancel();
+    // 关闭定时刷新，保持用户主动刷新模式。
   }
 
   void _loadGlobalPalette() {
@@ -2094,7 +2227,86 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     _loadGlobalPalette();
   }
 
-  Future<void> _loadCourses([Map<String, dynamic>? onLessonCourses]) async {
+  Future<void> _loadCourseSnapshotThenRefresh(PlatformType platform) async {
+    final userId = AccountManager.currentSessionId ?? '';
+    if (userId.isNotEmpty) {
+      unawaited(
+        PlatformNetworkWarmupService().warmupDio(
+          platform: platform,
+          userId: userId,
+        ),
+      );
+      final snapshot = await _snapshotStore.readList(
+        platform: platform,
+        userId: userId,
+        page: 'courses',
+      );
+      if (mounted &&
+          PlatformManager().currentPlatform == platform &&
+          snapshot != null &&
+          snapshot.data.isNotEmpty) {
+        final courses = snapshot.data.map(Course.fromJson).toList();
+        setState(() {
+          _courses = courses;
+          _coursesCache[platform] = courses;
+          _cacheTimestamps[platform] = snapshot.updatedAt;
+          _snapshotUpdatedAt = snapshot.updatedAt;
+          _isLoading = false;
+          _isShowingCachedCourses = true;
+          _isRefreshingCoursesInBackground = true;
+          _snapshotRefreshFailed = false;
+          _emptyHint = null;
+        });
+      }
+    }
+
+    if (!mounted || PlatformManager().currentPlatform != platform) return;
+    if (!PlatformManager().isRainClassroom) {
+      unawaited(_loadCourses());
+    }
+  }
+
+  void _queuePendingAccountReload(String accountId) {
+    if (!mounted || PlatformManager().isRainClassroom) {
+      return;
+    }
+    _pendingAccountReloadUserId = accountId;
+    debugPrint('[Courses] queued pending account reload userId=$accountId');
+  }
+
+  void _runPendingAccountReloadIfNeeded(PlatformType completedPlatform) {
+    if (_runningPendingAccountReload || !mounted) {
+      return;
+    }
+    final pendingUserId = _pendingAccountReloadUserId;
+    if (pendingUserId == null || pendingUserId.isEmpty) {
+      return;
+    }
+    if (PlatformManager().currentPlatform != completedPlatform ||
+        PlatformManager().isRainClassroom ||
+        AccountManager.currentSessionId != pendingUserId) {
+      debugPrint(
+        '[Courses] drop pending account reload userId=$pendingUserId current=${AccountManager.currentSessionId ?? ''} platform=${PlatformManager().currentPlatform}',
+      );
+      _pendingAccountReloadUserId = null;
+      return;
+    }
+    _pendingAccountReloadUserId = null;
+    _runningPendingAccountReload = true;
+    debugPrint(
+      '[Courses] running pending account reload userId=$pendingUserId',
+    );
+    unawaited(
+      _loadCourses(forceNetwork: true).whenComplete(() {
+        _runningPendingAccountReload = false;
+      }),
+    );
+  }
+
+  Future<void> _loadCourses({
+    Map<String, dynamic>? onLessonCourses,
+    bool forceNetwork = false,
+  }) async {
     // Prevent concurrent loads that cause infinite refresh loop
     if (_isLoadingCourses) {
       debugPrint('[Courses] Already loading courses, skipping duplicate call');
@@ -2103,24 +2315,43 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
     _isLoadingCourses = true;
     final requestPlatform = PlatformManager().currentPlatform;
-    final requestPlatformName = PlatformManager().currentPlatformName;
+    final requestUserId = AccountManager.currentSessionId ?? '';
+    final cachedCourses = _coursesCache[requestPlatform];
+    final hasCachedCourses = cachedCourses != null && cachedCourses.isNotEmpty;
 
     setState(() {
-      _isLoading = true;
-      _courses = [];
-      _onlineCourses = [];
-      _offlineCourses = [];
+      _isLoading = !hasCachedCourses;
+      _isShowingCachedCourses = hasCachedCourses;
+      _isRefreshingCoursesInBackground = hasCachedCourses;
+      _snapshotRefreshFailed = false;
+      if (hasCachedCourses) {
+        _courses = cachedCourses;
+        _onlineCourses = _onlineCoursesCache[requestPlatform] ?? [];
+        _offlineCourses = _offlineCoursesCache[requestPlatform] ?? [];
+      } else {
+        _courses = [];
+        _onlineCourses = [];
+        _offlineCourses = [];
+      }
       _emptyHint = null;
       _rainCourseDebugSummary = null;
     });
 
     if (!AccountManager.hasActiveSession()) {
       if (!mounted) return;
+      if (AccountManager.currentSessionId != requestUserId) {
+        _isLoadingCourses = false;
+        _runPendingAccountReloadIfNeeded(requestPlatform);
+        return;
+      }
       setState(() {
         _isLoading = false;
-        _emptyHint = '当前未登录，请先到账号页登录';
+        _isShowingCachedCourses = false;
+        _isRefreshingCoursesInBackground = false;
+        _emptyHint = '当前未登录，请先到账号页登录。';
       });
       _isLoadingCourses = false;
+      _runPendingAccountReloadIfNeeded(requestPlatform);
       return;
     }
 
@@ -2130,9 +2361,15 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       List<Course>? offlineData;
 
       if (PlatformManager().isChaoxing) {
-        coursesData = await CXCourseApi.getCoursesList();
+        coursesData = await CXCourseApi.getCoursesList().timeout(
+          const Duration(seconds: 20),
+          onTimeout: () {
+            ApiService.appendExternalConsoleLog('学习通', '课程列表加载超时，结束加载状态');
+            return null;
+          },
+        );
       } else if (PlatformManager().isRainClassroom) {
-        // 雨课堂同时获取在线和离线课程
+        // 雨课堂课程分在线和离线两路拉取。
         final results = await Future.wait([
           RCCourseApi.getOnlineCoursesList(),
           RCCourseApi.getOfflineCoursesList(),
@@ -2146,19 +2383,36 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         coursesData = await KTCourseApi.getCoursesList();
       }
 
-      if (!mounted || PlatformManager().currentPlatform != requestPlatform) {
+      if (!mounted ||
+          PlatformManager().currentPlatform != requestPlatform ||
+          AccountManager.currentSessionId != requestUserId) {
         debugPrint(
-          '[Courses] Platform changed during load, discarding stale data',
+          '[Courses] Platform/account changed during load, discarding stale data',
         );
-        _isLoadingCourses = false;
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
         return;
       }
 
       if (coursesData != null && coursesData.isNotEmpty) {
-        debugPrint('[Courses] 准备更新缓存和状态');
+        debugPrint('[Courses] 雨课堂课程请求完成');
 
         _coursesCache[requestPlatform] = coursesData;
         _cacheTimestamps[requestPlatform] = DateTime.now();
+        _snapshotUpdatedAt = _cacheTimestamps[requestPlatform];
+        final userId = AccountManager.currentSessionId ?? '';
+        if (userId.isNotEmpty) {
+          await _snapshotStore.writeList(
+            platform: requestPlatform,
+            userId: userId,
+            page: 'courses',
+            data: coursesData.map((course) => course.toJson()).toList(),
+            updatedAt: _snapshotUpdatedAt,
+          );
+        }
         if (PlatformManager().isRainClassroom) {
           _onlineCoursesCache[requestPlatform] = onlineData ?? [];
           _offlineCoursesCache[requestPlatform] = offlineData ?? [];
@@ -2171,37 +2425,37 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             _offlineCourses = offlineData ?? [];
           }
           _isLoading = false;
+          _isShowingCachedCourses = false;
+          _isRefreshingCoursesInBackground = false;
+          _snapshotRefreshFailed = false;
           _emptyHint = null;
           _rainCourseDebugSummary = PlatformManager().isRainClassroom
               ? RCCourseApi.getLastCourseDebugSummary()
               : null;
         });
-        debugPrint('[Courses] 缓存和状态更新完成，_courses.length=${_courses.length}');
+        debugPrint('[Courses] 课程列表更新完成，_courses.length=${_courses.length}');
       } else {
         final rainDebug = PlatformManager().isRainClassroom
             ? RCCourseApi.getLastCourseDebugSummary()
             : null;
-        final rcAuthExpired =
-            rainDebug != null && rainDebug['authExpired'] == true;
-        final rainServerInfo = PlatformManager().isRainClassroom
-            ? '服务器：${PlatformManager().serverName}\n'
-                  '账号状态：${AccountManager.hasActiveSession() ? '已登录' : '未登录'}\n'
-                  '在线课堂：${_lastOnLessonCourses == null ? '未拉取' : '已拉取'}\n'
-                  '最近在线课堂 keys：${_lastOnLessonCourses == null ? '无' : _lastOnLessonCourses!.keys.take(6).join(', ')}\n'
-                  '请对照控制台里的 [ApiService] / [RC] 日志查看具体请求结果'
-            : '';
         setState(() {
-          _courses = [];
-          if (PlatformManager().isRainClassroom) {
+          if (!hasCachedCourses) {
+            _courses = [];
+          }
+          if (PlatformManager().isRainClassroom && !hasCachedCourses) {
             _onlineCourses = onlineData ?? [];
             _offlineCourses = offlineData ?? [];
           }
           _isLoading = false;
-          _emptyHint = PlatformManager().isRainClassroom
-              ? (rcAuthExpired
-                    ? '雨课堂登录态已失效\n平台：$requestPlatformName\n服务器：${PlatformManager().serverName}\n请前往”账号”页重新登录雨课堂账号后再刷新。'
-                    : '未获取到雨课堂课程数据\n平台：$requestPlatformName\n$rainServerInfo')
-              : '暂无课程数据';
+          _isRefreshingCoursesInBackground = false;
+          _snapshotRefreshFailed = hasCachedCourses;
+          _emptyHint = hasCachedCourses
+              ? '正在显示缓存课程，后台刷新未获得新数据'
+              : PlatformManager().isRainClassroom
+              ? '课程加载失败，请检查账号和服务器后重试'
+              : PlatformManager().isChaoxing
+              ? '未获取到学习通课程数据'
+              : '课程加载失败，请稍后重试';
           _rainCourseDebugSummary = PlatformManager().isRainClassroom
               ? rainDebug
               : null;
@@ -2211,19 +2465,33 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       debugPrint('[Courses] load failed: $e');
       if (!mounted) return;
       setState(() {
-        _courses = [];
-        _onlineCourses = [];
-        _offlineCourses = [];
+        if (!hasCachedCourses) {
+          _courses = [];
+          _onlineCourses = [];
+          _offlineCourses = [];
+        }
         _isLoading = false;
-        _emptyHint = PlatformManager().isRainClassroom
-            ? '课程加载失败\n平台：$requestPlatformName\n服务器：${PlatformManager().serverName}\n登录状态：${AccountManager.hasActiveSession() ? '已登录' : '未登录'}\n请先检查账号和服务器，再看控制台日志'
-            : '课程加载失败，请下拉刷新重试';
+        _isRefreshingCoursesInBackground = false;
+        _snapshotRefreshFailed = hasCachedCourses;
+        _emptyHint = hasCachedCourses
+            ? '正在显示缓存课程，后台刷新失败'
+            : PlatformManager().isRainClassroom
+            ? '课程加载失败，请检查账号和服务器后重试'
+            : PlatformManager().isChaoxing
+            ? '未获取到学习通课程数据'
+            : '课程加载失败，请稍后重试';
         _rainCourseDebugSummary = PlatformManager().isRainClassroom
             ? RCCourseApi.getLastCourseDebugSummary()
             : null;
       });
     } finally {
       _isLoadingCourses = false;
+      if (mounted) {
+        setState(() {
+          _isRefreshingCoursesInBackground = false;
+        });
+      }
+      _runPendingAccountReloadIfNeeded(requestPlatform);
     }
   }
 
@@ -2242,35 +2510,35 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       {
         'platform': PlatformType.chaoxing,
         'label': '学习通',
-        'subtitle': '课程与签到',
+        'subtitle': '课程与活动入口',
         'icon': Icons.school_outlined,
         'color': const Color(0xFF1F9EA8),
       },
       {
         'platform': PlatformType.rainClassroom,
         'label': '雨课堂',
-        'subtitle': '在线课堂',
+        'subtitle': '在线课程和离线课程',
         'icon': Icons.cloud_outlined,
         'color': const Color(0xFF5B90EF),
       },
       {
         'platform': PlatformType.tronclass,
         'label': '畅课',
-        'subtitle': '签到工作台',
+        'subtitle': '仪表盘与签到入口',
         'icon': Icons.dashboard_customize_outlined,
         'color': const Color(0xFF1DB6C2),
       },
       {
         'platform': PlatformType.ketangpai,
         'label': '课堂派',
-        'subtitle': '答题与考试',
+        'subtitle': '课程、共享房间和签到',
         'icon': Icons.quiz_outlined,
         'color': const Color(0xFFF6A23A),
       },
       {
         'platform': PlatformType.weizhuojiao,
         'label': '微助教',
-        'subtitle': '功能待完善',
+        'subtitle': '功能入口正在完善',
         'icon': Icons.construction_outlined,
         'color': const Color(0xFF8A8F98),
       },
@@ -2304,7 +2572,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '平台快捷切换',
+                          '选择平台后会切换当前课程工作台。',
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -2312,7 +2580,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                         ),
                         SizedBox(height: 2),
                         Text(
-                          '先切平台，再进入对应工作区。',
+                          '请确认账号已登录，切换后可刷新对应平台课程。',
                           style: TextStyle(fontSize: 12, color: Colors.black54),
                         ),
                       ],
@@ -2433,12 +2701,12 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           context: context,
           builder: (BuildContext context) {
             return AlertDialog(
-              title: const Text('二维码内容'),
+              title: const Text('需要切换平台'),
               content: SelectableText(result),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('关闭'),
+                  child: const Text('取消'),
                 ),
               ],
             );
@@ -2476,7 +2744,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         if (!mounted) return;
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('扫描结果：$result')));
+        ).showSnackBar(SnackBar(content: Text('扫码结果无法识别：$result')));
         return;
       }
 
@@ -2486,12 +2754,12 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           context: context,
           builder: (BuildContext context) {
             return AlertDialog(
-              title: const Text('扫描到链接'),
+              title: const Text('打开链接？'),
               content: SelectableText(result),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('关闭'),
+                  child: const Text('取消'),
                 ),
               ],
             );
@@ -2598,8 +2866,11 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _handleTronclassScan(String raw, Uri? uri) async {
+    ApiService.appendExternalConsoleLog(
+      'tronclass',
+      '[CoursesScan] Tronclass scan received rawLength=${raw.length}',
+    );
     if (!PlatformManager().isTronclass) {
-      // 用户扫描畅课二维码，自动切换到畅课平台
       await PlatformManager().setPlatform(
         PlatformType.tronclass,
         userInitiated: true,
@@ -2607,7 +2878,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('自动切换平台为畅课')));
+      ).showSnackBar(const SnackBar(content: Text('已自动切换到畅课')));
     }
 
     if (!AccountManager.hasActiveSession()) {
@@ -2616,8 +2887,8 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         context: context,
         builder: (BuildContext context) {
           return AlertDialog(
-            title: const Text('提示'),
-            content: const Text('没有可用账号'),
+            title: const Text('需要登录'),
+            content: const Text('请先登录账号后再使用扫码签到。'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
@@ -2632,11 +2903,15 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
     final parsed = TronclassQrParser.parse(raw);
     if (parsed == null) {
+      ApiService.appendExternalConsoleLog(
+        'tronclass',
+        '[CoursesScan] Tronclass QR parse failed raw=${uri ?? raw}',
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('无法解析畅课二维码：${uri ?? raw}')));
-      return;
+      ).showSnackBar(SnackBar(content: Text('无法识别扫码内容：${uri ?? raw}')));
+      throw StateError('不属于畅课签到二维码或二维码格式无法识别');
     }
 
     final rollcallId = (parsed['rollcallId'] ?? parsed['rollcall_id'] ?? '')
@@ -2648,57 +2923,33 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         : qrPayloadRaw;
 
     if (rollcallId.isEmpty || qrPayload == null) {
+      ApiService.appendExternalConsoleLog(
+        'tronclass',
+        '[CoursesScan] Tronclass QR invalid parsedKeys=${parsed.keys.join(",")}',
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('二维码缺少签到参数，请在畅课签到页选择会话后扫码')));
-      return;
+      ).showSnackBar(const SnackBar(content: Text('畅课二维码缺少签到参数，请确认二维码是否有效')));
+      throw StateError('畅课二维码缺少 rollcallId 或 data');
     }
 
-    final account = AccountManager.getAccountById(
-      AccountManager.currentSessionId ?? '',
+    if (!mounted) return;
+    ApiService.appendExternalConsoleLog(
+      'tronclass',
+      '[CoursesScan] entering Tronclass QR confirm rollcallId=$rollcallId',
     );
-    final accountName =
-        account?.name ?? (AccountManager.currentSessionId ?? '未知账号');
-
-    try {
-      final deviceId = const Uuid().v4();
-      final response = await TronclassSignApi.signQr(
-        rollcallId: rollcallId,
-        data: qrPayload,
-        deviceId: deviceId,
-      );
-
-      final responseData = response.data;
-      final ok = TronclassSignApi.isSignSuccess(response);
-      final message = TronclassSignApi.getSignMessage(responseData);
-
-      await SignRecordStore().append(
-        platform: '畅课',
-        courseName: '扫码签到任务',
-        account: accountName,
-        status: ok ? '成功' : '失败',
-        detail: 'rollcallId=$rollcallId, result=$message',
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ok ? '畅课签到成功：$message' : '畅课签到失败：$message')),
-      );
-    } catch (e) {
-      await SignRecordStore().append(
-        platform: '畅课',
-        courseName: '扫码签到任务',
-        account: accountName,
-        status: '失败',
-        detail: 'rollcallId=$rollcallId, error=$e',
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('畅课签到失败：$e')));
-    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            TronclassQrSignConfirmPage(rollcallId: rollcallId, data: qrPayload),
+      ),
+    );
+    ApiService.appendExternalConsoleLog(
+      'tronclass',
+      '[CoursesScan] Tronclass QR confirm closed rollcallId=$rollcallId',
+    );
   }
 
   Future<void> _handleChaoxingScan(String raw, Uri? uri) async {
@@ -2707,7 +2958,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('自动切换平台为学习通')));
+      ).showSnackBar(const SnackBar(content: Text('请先登录雨课堂账号')));
     }
 
     if (!AccountManager.hasActiveSession()) {
@@ -2716,8 +2967,8 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         context: context,
         builder: (BuildContext context) {
           return AlertDialog(
-            title: const Text('提示'),
-            content: const Text('没有可用账号'),
+            title: const Text('需要登录'),
+            content: const Text('请先登录账号后再使用扫码签到。'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
@@ -2735,7 +2986,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('无法解析学习通二维码：$raw')));
+      ).showSnackBar(SnackBar(content: Text('无法识别学习通扫码内容：$raw')));
       return;
     }
 
@@ -2757,7 +3008,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('未找到学习通活动ID')));
+      ).showSnackBar(const SnackBar(content: Text('无法解析课程签到参数，请重新扫码')));
       return;
     }
 
@@ -2775,7 +3026,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('未找到 enc 参数')));
+      ).showSnackBar(const SnackBar(content: Text('无法解析 enc 参数')));
       return;
     }
 
@@ -2786,7 +3037,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           active: Active(
             type: 2,
             id: activeId,
-            name: '二维码签到',
+            name: '扫码签到课程',
             description: '',
             startTime: 0,
             url: '',
@@ -2809,7 +3060,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('自动切换平台为雨课堂')));
+      ).showSnackBar(const SnackBar(content: Text('已自动切换到雨课堂')));
     }
 
     if (!AccountManager.hasActiveSession()) {
@@ -2818,7 +3069,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         context: context,
         builder: (BuildContext context) {
           return AlertDialog(
-            content: const Text('没有可用账号'),
+            content: const Text('请先登录账号后再使用扫码签到。'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
@@ -2858,8 +3109,8 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         SnackBar(
           content: Text(
             unresolvedWeixinShortLink
-                ? '微信短链当前无法在应用内直接还原课堂链接。请在微信里完成“扫码 -> 公众号消息/小程序”，再把最终雨课堂链接重新发回应用签到'
-                : '无法解析雨课堂签到二维码：${uri ?? raw}',
+                ? '微信短链接暂时无法解析，请复制完整雨课堂链接后重试'
+                : '无法识别雨课堂扫码内容：${uri ?? raw}',
           ),
         ),
       );
@@ -2885,7 +3136,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('自动切换平台为课堂派')));
+      ).showSnackBar(const SnackBar(content: Text('已自动切换到课堂派')));
     }
 
     final target = uri?.toString() ?? raw;
@@ -2898,8 +3149,8 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     required RainClassroomScanTarget target,
   }) async {
     final autoLabel = target.kind == RainClassroomScanKind.lessonPage
-        ? '自动识别（当前是课程页签到）'
-        : '自动识别（当前是动态二维码签到）';
+        ? '检测到课程页链接，可按课程页流程处理。'
+        : '检测到动态二维码链接，可直接按扫码流程处理。';
     final lessonId = target.lessonId;
     final dynamicUrl = raw.startsWith('http')
         ? raw
@@ -2912,19 +3163,19 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('选择雨课堂签到链路'),
+          title: const Text('选择雨课堂扫码方式'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(autoLabel),
               const SizedBox(height: 12),
-              const Text('你也可以手动指定本次扫码走哪条签到链路。'),
+              const Text('请确认扫码来源，系统会按所选方式继续处理。'),
               const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.auto_mode),
-                title: const Text('自动识别'),
+                title: const Text('自动选择'),
                 subtitle: Text(autoLabel),
                 onTap: () => Navigator.pop(
                   dialogContext,
@@ -2935,11 +3186,11 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                 contentPadding: EdgeInsets.zero,
                 enabled: lessonId != null && lessonId.isNotEmpty,
                 leading: const Icon(Icons.school_outlined),
-                title: const Text('课程页签到'),
+                title: const Text('课程页方式'),
                 subtitle: Text(
                   lessonId == null || lessonId.isEmpty
-                      ? '当前二维码无法直接提取 lessonId'
-                      : '直接按 lessonId 提交 source=12',
+                      ? '当前链接缺少 lessonId，无法使用课程页方式'
+                      : '使用 lessonId 和 source=12 进入课程页流程',
                 ),
                 onTap: lessonId == null || lessonId.isEmpty
                     ? null
@@ -2952,11 +3203,11 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                 contentPadding: EdgeInsets.zero,
                 enabled: lessonId != null && lessonId.isNotEmpty,
                 leading: const Icon(Icons.open_in_full),
-                title: const Text('微信小程序签到'),
+                title: const Text('小程序方式'),
                 subtitle: Text(
                   lessonId == null || lessonId.isEmpty
-                      ? '当前二维码无法直接提取 lessonId'
-                      : '直接按 lessonId 提交 source=11（微信小程序）',
+                      ? '当前链接缺少 lessonId，无法使用小程序方式'
+                      : '使用 lessonId 和 source=11 进入小程序流程',
                 ),
                 onTap: lessonId == null || lessonId.isEmpty
                     ? null
@@ -2968,8 +3219,8 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.qr_code_2),
-                title: const Text('动态二维码签到'),
-                subtitle: const Text('把当前二维码链接交给 /api/v3/app/scan'),
+                title: const Text('动态二维码方式'),
+                subtitle: const Text('使用原始链接调用 /api/v3/app/scan 接口'),
                 onTap: () => Navigator.pop(
                   dialogContext,
                   _RainClassroomScanRouteChoice.dynamicQr,
@@ -2984,7 +3235,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, initialChoice),
-              child: const Text('按当前识别结果继续'),
+              child: const Text('使用推荐方式'),
             ),
           ],
         );
@@ -3005,9 +3256,9 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       case _RainClassroomScanRouteChoice.lessonPage:
         if (lessonId == null || lessonId.isEmpty) {
           if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('当前二维码无法走课程页签到链路')));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('缺少 lessonId，无法使用课程页方式')),
+            );
           }
           return null;
         }
@@ -3019,9 +3270,9 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       case _RainClassroomScanRouteChoice.miniProgram:
         if (lessonId == null || lessonId.isEmpty) {
           if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('当前二维码无法走微信小程序签到链路')));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('缺少 lessonId，无法使用小程序方式')),
+            );
           }
           return null;
         }
@@ -3194,24 +3445,34 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     return RainClassroomScanParser.isDynamicQrUri(uri);
   }
 
-  /// 为所有用户扫描
+  /// 使用选中账号批量执行扫码签到。
   Future<void> _multiScan(String qrCodeUrl) async {
     final isRainClassroom = PlatformManager().isRainClassroom;
     final isKetangpai = PlatformManager().isKetangpai;
     final signLogStore = SignRecordStore();
+    final signContext = isRainClassroom
+        ? SignPlatformContext.rainClassroom
+        : isKetangpai
+        ? SignPlatformContext.ketangpai
+        : null;
 
-    final allAccounts = AccountManager.getAllAccounts();
-    final targetAccounts = allAccounts.where((user) {
-      if (isRainClassroom) return user.isRainClassroom;
-      if (isKetangpai) return user.isKetangpai;
-      return true;
-    }).toList();
+    if (signContext == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前平台不支持批量扫码签到')));
+      return;
+    }
+
+    _scanConsoleController.resetForPlatform(signContext);
+    final targetAccounts = AccountManager.getAccountsForPlatform(
+      signContext.platformType,
+    );
 
     if (targetAccounts.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('当前平台没有可用账号进行签到')));
+      ).showSnackBar(const SnackBar(content: Text('当前没有可用账号，请先登录或选择账号')));
       return;
     }
 
@@ -3227,86 +3488,195 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       try {
         if (isRainClassroom) {
           AccountManager.setCurrentSessionTemp(user.uid);
-          final rainExecution = _pendingRainScanExecution;
-          final status = await _signRainClassroomTarget(
-            qrCodeUrl,
-            rainExecution,
+          _scanConsoleController.add(
+            platform: '雨课堂',
+            accountName: user.name,
+            accountId: user.uid,
+            stage: SignRunStage.sessionCheck,
+            message: '检查雨课堂会话',
           );
+          final rainExecution = _pendingRainScanExecution;
+          final gateResult = await SignNetworkGate().run<int?>(
+            context: context,
+            platformLabel: '雨课堂',
+            user: user,
+            console: _scanConsoleController,
+            action: () => _signRainClassroomTarget(qrCodeUrl, rainExecution),
+          );
+          if (gateResult.skipped) {
+            final reason = gateResult.reason ?? '用户跳过';
+            failedAccounts.add('${user.name} ($reason)');
+            await signLogStore.append(
+              platform: '雨课堂',
+              platformType: PlatformType.rainClassroom,
+              courseName: '扫码签到课程',
+              account: user.name,
+              status: '失败',
+              detail: reason,
+            );
+            continue;
+          }
+          final status = gateResult.value;
           ApiService.appendExternalConsoleLog(
             'rainclassroom',
             'rain scan mode=${rainExecution?.kind.name ?? 'dynamicQr'}',
           );
           if (status == 0) {
             successCount++;
+            _scanConsoleController.add(
+              platform: '雨课堂',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signSuccess,
+              message: '扫码签到成功',
+            );
             await signLogStore.append(
               platform: '雨课堂',
-              courseName: '扫码签到任务',
+              platformType: PlatformType.rainClassroom,
+              courseName: '扫码签到课程',
               account: user.name,
               status: '成功',
             );
           } else if (status == 51203) {
-            failedAccounts.add('${user.name} (动态二维码过期)');
+            failedAccounts.add('${user.name} (缺少有效的雨课堂会话)');
+            _scanConsoleController.add(
+              platform: '雨课堂',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signFailure,
+              message: '缺少有效的雨课堂会话',
+            );
             await signLogStore.append(
               platform: '雨课堂',
-              courseName: '扫码签到任务',
+              platformType: PlatformType.rainClassroom,
+              courseName: '扫码签到课程',
               account: user.name,
               status: '失败',
-              detail: '动态二维码过期',
+              detail: '缺少有效的雨课堂会话',
             );
           } else {
-            failedAccounts.add('${user.name} (错误码：$status)');
+            failedAccounts.add('${user.name} (签到失败)');
+            _scanConsoleController.add(
+              platform: '雨课堂',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signFailure,
+              message: '签到失败',
+              detail: 'status=$status',
+            );
             await signLogStore.append(
               platform: '雨课堂',
-              courseName: '扫码签到任务',
+              platformType: PlatformType.rainClassroom,
+              courseName: '扫码签到课程',
               account: user.name,
               status: '失败',
-              detail: '错误码:$status',
+              detail: '签到失败',
             );
           }
         } else if (isKetangpai) {
+          _scanConsoleController.add(
+            platform: '课堂派',
+            accountName: user.name,
+            accountId: user.uid,
+            stage: SignRunStage.sessionCheck,
+            message: '检查课堂派 token',
+          );
           if (user.token.isEmpty) {
-            failedAccounts.add('${user.name} (token为空，请先登录)');
+            failedAccounts.add('${user.name} (token 无效或已过期)');
+            _scanConsoleController.add(
+              platform: '课堂派',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signFailure,
+              message: 'token 无效或已过期',
+            );
             await signLogStore.append(
               platform: '课堂派',
-              courseName: '扫码签到任务',
+              platformType: PlatformType.ketangpai,
+              courseName: '扫码签到课程',
               account: user.name,
               status: '失败',
-              detail: 'token为空',
+              detail: 'token 无效或已过期',
             );
             continue;
           }
 
-          final ok = await KTSignApi.scanToSign(qrCodeUrl, user.token);
-          if (ok) {
-            successCount++;
+          final gateResult = await SignNetworkGate().run<bool>(
+            context: context,
+            platformLabel: '课堂派',
+            user: user,
+            console: _scanConsoleController,
+            action: () => KTSignApi.scanToSign(qrCodeUrl, user.token),
+          );
+          if (gateResult.skipped) {
+            final reason = gateResult.reason ?? '用户跳过';
+            failedAccounts.add('${user.name} ($reason)');
             await signLogStore.append(
               platform: '课堂派',
-              courseName: '扫码签到任务',
+              platformType: PlatformType.ketangpai,
+              courseName: '扫码签到课程',
+              account: user.name,
+              status: '失败',
+              detail: reason,
+            );
+            continue;
+          }
+          final ok = gateResult.value == true;
+          if (ok) {
+            successCount++;
+            _scanConsoleController.add(
+              platform: '课堂派',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signSuccess,
+              message: '扫码签到成功',
+            );
+            await signLogStore.append(
+              platform: '课堂派',
+              platformType: PlatformType.ketangpai,
+              courseName: '扫码签到课程',
               account: user.name,
               status: '成功',
             );
           } else {
             failedAccounts.add('${user.name} (签到失败)');
+            _scanConsoleController.add(
+              platform: '课堂派',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signFailure,
+              message: '签到失败',
+            );
             await signLogStore.append(
               platform: '课堂派',
-              courseName: '扫码签到任务',
+              platformType: PlatformType.ketangpai,
+              courseName: '扫码签到课程',
               account: user.name,
               status: '失败',
               detail: '签到失败',
             );
           }
         } else {
-          failedAccounts.add('${user.name} (当前平台不支持批量扫码)');
+          failedAccounts.add('${user.name} (当前账号未登录或会话失效)');
         }
       } catch (e) {
         failedAccounts.add('${user.name} (异常：$e)');
+        _scanConsoleController.add(
+          platform: isRainClassroom ? '雨课堂' : '课堂派',
+          accountName: user.name,
+          accountId: user.uid,
+          stage: SignRunStage.aborted,
+          message: '签到异常',
+          detail: e.toString(),
+        );
         if (isRainClassroom || isKetangpai) {
           await signLogStore.append(
             platform: isRainClassroom ? '雨课堂' : '课堂派',
-            courseName: '扫码签到任务',
+            platformType: signContext.platformType,
+            courseName: '扫码签到课程',
             account: user.name,
             status: '失败',
-            detail: '异常:$e',
+            detail: '异常',
           );
         }
       }
@@ -3324,13 +3694,13 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     _showMultiScanResult(successCount, targetAccounts.length, failedAccounts);
   }
 
-  /// 显示所有签到结果
+  /// 显示批量扫码签到结果。
   void _showMultiScanResult(
     int successCount,
     int totalCount,
     List<String> failedAccounts,
   ) {
-    String message = '签到完成！\n成功: $successCount/$totalCount';
+    var message = '签到完成：\n成功: $successCount/$totalCount';
     if (failedAccounts.isNotEmpty) {
       message += '\n\n失败账号:\n${failedAccounts.join('\n')}';
     }
@@ -3347,9 +3717,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         content: Text(message),
         actions: [
           TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
+            onPressed: () => Navigator.pop(context),
             child: const Text('确定'),
           ),
         ],
@@ -3423,7 +3791,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      strictMode ? '严格' : '标准',
+                      strictMode ? '严格模式' : '普通模式',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 11,
@@ -3494,9 +3862,9 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   String _floatingActionLabel({required bool isTronclass}) {
-    if (PlatformManager().isRainClassroom) return '同步';
-    if (PlatformManager().isChaoxing) return '刷新活动';
-    return '刷新';
+    if (PlatformManager().isRainClassroom) return '同步课程';
+    if (PlatformManager().isChaoxing) return '刷新课程活动';
+    return '刷新课程';
   }
 
   @override
@@ -3507,7 +3875,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
     if (PlatformManager().isWeizhuojiao) {
       return Scaffold(
-        appBar: AppBar(title: const Text('课程')),
+        appBar: AppBar(title: const Text('微助教课程')),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -3521,11 +3889,14 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  '微助教功能正在完善中',
+                  '微助教功能正在完善，请稍后再试。',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
-                const Text('该入口已临时封禁，后续版本开放。', textAlign: TextAlign.center),
+                const Text(
+                  '课程数据会在支持的平台中展示，当前平台暂未接入完整课程能力。',
+                  textAlign: TextAlign.center,
+                ),
               ],
             ),
           ),
@@ -3578,6 +3949,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     _accountChangeSubscription?.cancel();
     _platformChangeSubscription?.cancel();
     _refreshTimer?.cancel();
+    _scanConsoleController.dispose();
     super.dispose();
   }
 }

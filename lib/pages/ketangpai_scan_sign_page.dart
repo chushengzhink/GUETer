@@ -1,26 +1,66 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+
+import '../controllers/sign_controller.dart';
 
 /// 课堂派扫码签到页面
 class KetangpaiScanSignPage extends StatefulWidget {
-  const KetangpaiScanSignPage({super.key});
+  const KetangpaiScanSignPage({
+    super.key,
+    this.signId,
+    this.directSubmit = false,
+    this.signController,
+  });
+
+  final String? signId;
+  final bool directSubmit;
+  final SignController? signController;
 
   @override
   State<KetangpaiScanSignPage> createState() => _KetangpaiScanSignPageState();
 }
 
 class _KetangpaiScanSignPageState extends State<KetangpaiScanSignPage> {
-  final MobileScannerController controller = MobileScannerController();
+  final MobileScannerController controller = MobileScannerController(
+    initialZoom: 0.0,
+  );
   bool _isFlashOn = false;
   bool _hasScanned = false;
+  bool _didResetZoom = false;
+  double _currentZoomScale = 0.0;
+  double _baseZoomScale = 0.0;
+  double _lastZoomScale = 0.0;
+  final double _zoomSensitivity = 0.45;
+  final double _zoomUpdateThreshold = 0.01;
+  late final String _signControllerTag;
+  late final SignController _signController;
+
+  bool get _isDirectMode =>
+      widget.directSubmit || (widget.signId?.trim().isNotEmpty ?? false);
+
+  @override
+  void initState() {
+    super.initState();
+    _signControllerTag = 'ketangpai-scan-${identityHashCode(this)}';
+    _signController = Get.put(
+      widget.signController ?? SignController(),
+      tag: _signControllerTag,
+    );
+    controller.addListener(_syncZoomScaleFromController);
+  }
 
   @override
   void dispose() {
+    controller.removeListener(_syncZoomScaleFromController);
     controller.dispose();
+    if (Get.isRegistered<SignController>(tag: _signControllerTag)) {
+      Get.delete<SignController>(tag: _signControllerTag);
+    }
     super.dispose();
   }
 
-  void _onDetect(BarcodeCapture capture) {
+  Future<void> _onDetect(BarcodeCapture capture) async {
     if (_hasScanned) return;
 
     final List<Barcode> barcodes = capture.barcodes;
@@ -31,8 +71,14 @@ class _KetangpaiScanSignPageState extends State<KetangpaiScanSignPage> {
 
     if (code != null && code.isNotEmpty) {
       _hasScanned = true;
-      if (mounted) {
+      if (!_isDirectMode && mounted) {
         Navigator.of(context).pop(code);
+        return;
+      }
+
+      await _signController.scanSign(code);
+      if (mounted) {
+        _hasScanned = false;
       }
     }
   }
@@ -41,6 +87,48 @@ class _KetangpaiScanSignPageState extends State<KetangpaiScanSignPage> {
     controller.toggleTorch();
     setState(() {
       _isFlashOn = !_isFlashOn;
+    });
+  }
+
+  void _syncZoomScaleFromController() {
+    final state = controller.value;
+    if (!state.isInitialized || !state.isRunning) return;
+
+    if (!_didResetZoom) {
+      _didResetZoom = true;
+      _currentZoomScale = 0.0;
+      _baseZoomScale = 0.0;
+      _lastZoomScale = 0.0;
+      controller.resetZoomScale().catchError((Object error) {
+        debugPrint('Failed to reset scanner zoom: $error');
+      });
+      return;
+    }
+
+    final zoomScale = state.zoomScale.clamp(0.0, 1.0).toDouble();
+    _currentZoomScale = zoomScale;
+    _lastZoomScale = zoomScale;
+  }
+
+  void _handleScaleStart(ScaleStartDetails details) {
+    _syncZoomScaleFromController();
+    _baseZoomScale = _currentZoomScale;
+  }
+
+  void _handleScaleUpdate(ScaleUpdateDetails details) {
+    final scaleDelta = details.scale - 1.0;
+    if (scaleDelta.abs() <= 0.01) return;
+
+    final nextZoomScale = (_baseZoomScale + scaleDelta * _zoomSensitivity)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    if ((nextZoomScale - _lastZoomScale).abs() <= _zoomUpdateThreshold) return;
+
+    _currentZoomScale = nextZoomScale;
+    _lastZoomScale = nextZoomScale;
+
+    controller.setZoomScale(nextZoomScale).catchError((Object error) {
+      debugPrint('Failed to set scanner zoom: $error');
     });
   }
 
@@ -74,35 +162,59 @@ class _KetangpaiScanSignPageState extends State<KetangpaiScanSignPage> {
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          MobileScanner(
-            controller: controller,
-            onDetect: _onDetect,
-          ),
-          CustomPaint(
-            painter: ScannerOverlayPainter(
-              scanAreaSize: scanAreaSize,
-              borderColor: Colors.blueAccent,
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onScaleStart: _handleScaleStart,
+        onScaleUpdate: _handleScaleUpdate,
+        child: Stack(
+          children: [
+            MobileScanner(controller: controller, onDetect: _onDetect),
+            CustomPaint(
+              painter: ScannerOverlayPainter(
+                scanAreaSize: scanAreaSize,
+                borderColor: Colors.blueAccent,
+              ),
+              child: SizedBox.expand(),
             ),
-            child: SizedBox.expand(),
-          ),
-          Positioned(
-            bottom: 100,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Text(
-                '将二维码放入框内扫描',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  backgroundColor: Colors.black54,
+            Positioned(
+              bottom: 100,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(
+                  '将二维码放入框内扫描',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    backgroundColor: Colors.black54,
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+            Obx(() {
+              final isLoading =
+                  _signController.signStatus.value == SignStatus.loading;
+              if (!isLoading) {
+                return const SizedBox.shrink();
+              }
+              return Container(
+                color: Colors.black45,
+                alignment: Alignment.center,
+                child: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 16),
+                    Text(
+                      '正在提交签到',
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }

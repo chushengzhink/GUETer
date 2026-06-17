@@ -25,6 +25,14 @@ List<Map<String, dynamic>> _decodeStoredCookies(String cookiesJson) {
       .toList(growable: false);
 }
 
+List<Cookie> _dedupeCookiesByName(Iterable<Cookie> cookies) {
+  final byName = <String, Cookie>{};
+  for (final cookie in cookies) {
+    byName.putIfAbsent(cookie.name, () => cookie);
+  }
+  return byName.values.toList(growable: false);
+}
+
 class CookieInterceptor extends Interceptor {
   @override
   void onRequest(
@@ -47,23 +55,10 @@ class CookieInterceptor extends Interceptor {
 
         // 学习通特殊处理：从多个子域名加载 Cookie
         if (PlatformManager().isChaoxing) {
-          final probeUris = [
-            Uri.parse('https://chaoxing.com'),
-            Uri.parse('https://.chaoxing.com'),
-            Uri.parse('https://passport2.chaoxing.com'),
-            Uri.parse('https://sso.chaoxing.com'),
-            Uri.parse('https://i.chaoxing.com'),
-          ];
-
-          final allCookies = <Cookie>[];
-          for (final probe in probeUris) {
-            final probeCookies = await cookieJar.loadForRequest(probe);
-            allCookies.addAll(probeCookies);
-          }
-
-          if (allCookies.isNotEmpty) {
-            cookies = allCookies;
-          }
+          cookies = await CookieManager.loadChaoxingCookiesForRequest(
+            cookieJar,
+            uri,
+          );
         }
 
         // 雨课堂特殊处理：如果当前域名没有 Cookie，尝试从 .yuketang.cn 域加载
@@ -74,7 +69,9 @@ class CookieInterceptor extends Interceptor {
       }
 
       if (cookies.isNotEmpty) {
-        final cookieStr = cookies.map((c) => '${c.name}=${c.value}').join('; ');
+        final cookieStr = PlatformManager().isChaoxing
+            ? CookieManager.stringifyCookies(cookies)
+            : cookies.map((c) => '${c.name}=${c.value}').join('; ');
         options.headers['Cookie'] = cookieStr;
 
         if (PlatformManager().isChaoxing) {
@@ -249,6 +246,32 @@ class CookieManager {
   static late SharedPreferences _prefs;
 
   static int refreshCounts = 0; // 只为每个平台刷新一次
+
+  static Future<List<Cookie>> loadChaoxingCookiesForRequest(
+    CookieJar cookieJar,
+    Uri requestUri,
+  ) async {
+    final allCookies = <Cookie>[...await cookieJar.loadForRequest(requestUri)];
+    for (final uri in <Uri>[
+      Uri.parse('https://.chaoxing.com/'),
+      Uri.parse('https://chaoxing.com/'),
+      Uri.parse('https://passport2.chaoxing.com/'),
+      Uri.parse('https://sso.chaoxing.com/'),
+      Uri.parse('https://i.chaoxing.com/'),
+      Uri.parse('https://mooc1-api.chaoxing.com/'),
+      Uri.parse('https://mobilelearn.chaoxing.com/'),
+      Uri.parse('https://mooc2-ans.chaoxing.com/'),
+    ]) {
+      allCookies.addAll(await cookieJar.loadForRequest(uri));
+    }
+    return _dedupeCookiesByName(allCookies);
+  }
+
+  static String stringifyCookies(Iterable<Cookie> cookies) {
+    return _dedupeCookiesByName(
+      cookies,
+    ).map((c) => '${c.name}=${c.value}').join('; ');
+  }
 
   static Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
@@ -608,6 +631,9 @@ class CookieManager {
         'https://passport2.chaoxing.com',
         'https://sso.chaoxing.com',
         'https://i.chaoxing.com',
+        'https://mooc1-api.chaoxing.com',
+        'https://mobilelearn.chaoxing.com',
+        'https://mooc2-ans.chaoxing.com',
       ];
       for (final domain in domains) {
         final cookies = await jar.loadForRequest(Uri.parse(domain));
@@ -782,6 +808,9 @@ class CookieManager {
         Uri.parse('https://passport2.chaoxing.com/'),
         Uri.parse('https://sso.chaoxing.com/'),
         Uri.parse('https://i.chaoxing.com/'),
+        Uri.parse('https://mooc1-api.chaoxing.com/'),
+        Uri.parse('https://mobilelearn.chaoxing.com/'),
+        Uri.parse('https://mooc2-ans.chaoxing.com/'),
       ]);
     } else if (PlatformManager().isTronclass) {
       probeUris.addAll(TronclassGuetConstants.cookieProbeUris);
@@ -992,6 +1021,9 @@ class CookieManager {
           Uri.parse('https://passport2.chaoxing.com/'),
           Uri.parse('https://sso.chaoxing.com/'),
           Uri.parse('https://i.chaoxing.com/'),
+          Uri.parse('https://mooc1-api.chaoxing.com/'),
+          Uri.parse('https://mobilelearn.chaoxing.com/'),
+          Uri.parse('https://mooc2-ans.chaoxing.com/'),
         ];
       case PlatformType.ketangpai:
         return [Uri.parse('https://openapiv5.ketangpai.com/')];

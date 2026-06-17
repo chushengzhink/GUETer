@@ -45,6 +45,11 @@ class AccountManager {
     return '${normalized}_accounts';
   }
 
+  static String _sessionKeyForPlatformName(String platformName) {
+    final normalized = _normalizePlatformStorageName(platformName);
+    return '${normalized}_current_session';
+  }
+
   static String _encryptAccountsPayload(String payload) {
     final encrypted = EncryptionUtil.aesCbcEncrypt(
       payload,
@@ -150,11 +155,21 @@ class AccountManager {
   }
 
   static void _notifyAccountState() {
+    _notifyAccountStateForPlatform(PlatformManager().currentPlatform);
+  }
+
+  static void _notifyAccountStateForPlatform(PlatformType platform) {
+    final platformName = _getPlatformName(platform);
+    final currentAccountId =
+        _normalizePlatformStorageName(platformName) ==
+            _currentPlatformStorageKey
+        ? _currentSessionId
+        : _prefs.getString(_sessionKeyForPlatformName(platformName));
     AccountChangeNotifier().notifySnapshot(
       AccountStateSnapshot(
-        platform: PlatformManager().currentPlatform,
-        accounts: getCurrentPlatformAccounts(),
-        currentAccountId: _currentSessionId,
+        platform: platform,
+        accounts: getAccountsForPlatform(platform),
+        currentAccountId: currentAccountId,
       ),
     );
   }
@@ -292,6 +307,40 @@ class AccountManager {
     }
   }
 
+  static Future<void> setCurrentSessionForPlatformName(
+    String platformName,
+    String? userId, {
+    bool notify = true,
+  }) async {
+    final normalizedPlatform = _normalizePlatformStorageName(platformName);
+    final normalizedUserId = userId?.trim();
+    final isCurrentPlatform = normalizedPlatform == _currentPlatformStorageKey;
+
+    if (normalizedUserId == null || normalizedUserId.isEmpty) {
+      if (isCurrentPlatform) {
+        _currentSessionId = null;
+      }
+      await _prefs.remove(_sessionKeyForPlatformName(normalizedPlatform));
+    } else {
+      _lastLoggedOutUserId = null;
+      _lastLogoutTimestamp = null;
+      if (isCurrentPlatform) {
+        _currentSessionId = normalizedUserId;
+      }
+      await _prefs.setString(
+        _sessionKeyForPlatformName(normalizedPlatform),
+        normalizedUserId,
+      );
+    }
+
+    if (notify) {
+      final platformType =
+          _getPlatformTypeFromName(normalizedPlatform) ??
+          PlatformManager().currentPlatform;
+      _notifyAccountStateForPlatform(platformType);
+    }
+  }
+
   static Future<void> clearCurrentSessionForStartupRecovery({
     required String reason,
     bool notify = true,
@@ -332,19 +381,10 @@ class AccountManager {
     );
 
     if (platform == PlatformType.chaoxing) {
-      final probeUris = [
-        Uri.parse('https://chaoxing.com'),
-        Uri.parse('https://passport2.chaoxing.com'),
-        Uri.parse('https://sso.chaoxing.com'),
-        Uri.parse('https://i.chaoxing.com'),
-        Uri.parse('https://.chaoxing.com'),
-      ];
-
-      final allCookies = <Cookie>[];
-      for (final uri in probeUris) {
-        final cookies = await cookieJar.loadForRequest(uri);
-        allCookies.addAll(cookies);
-      }
+      final allCookies = await CookieManager.loadChaoxingCookiesForRequest(
+        cookieJar,
+        Uri.parse('https://mooc1-api.chaoxing.com/'),
+      );
 
       if (allCookies.isEmpty) {
         ApiService.appendExternalConsoleLog(
@@ -354,9 +394,7 @@ class AccountManager {
         return null;
       }
 
-      final cookieStr = allCookies
-          .map((c) => '${c.name}=${c.value}')
-          .join('; ');
+      final cookieStr = CookieManager.stringifyCookies(allCookies);
       ApiService.appendExternalConsoleLog(
         '学习通',
         'Cookie 长度: ${cookieStr.length}, 键: ${allCookies.map((c) => c.name).take(10).join(", ")}',
@@ -436,6 +474,19 @@ class AccountManager {
     _accounts = await _getAllAccountsFromStorage();
   }
 
+  static Future<List<User>> refreshAccountsForPlatformName(
+    String platformName,
+  ) async {
+    final normalizedPlatform = _normalizePlatformStorageName(platformName);
+    final accounts = await _getAccountsFromStorageForPlatformName(
+      normalizedPlatform,
+    );
+    if (normalizedPlatform == _currentPlatformStorageKey) {
+      _accounts = accounts;
+    }
+    return _sortedAccountsForDisplay(accounts);
+  }
+
   static List<User> getAllAccounts() {
     return _sortedAccountsForDisplay(_accounts);
   }
@@ -453,7 +504,10 @@ class AccountManager {
   }
 
   static List<User> getAccountsForPlatform(PlatformType platform) {
-    final platformName = _getPlatformName(platform);
+    return getAccountsForPlatformName(_getPlatformName(platform));
+  }
+
+  static List<User> getAccountsForPlatformName(String platformName) {
     final accountsKey = _accountsKeyForPlatformName(platformName);
     final accountsJson = _prefs.getString(accountsKey);
 
@@ -477,6 +531,31 @@ class AccountManager {
     } catch (_) {
       return [];
     }
+  }
+
+  static User _mergeAccountForUpsert(User existing, User incoming) {
+    String keepNonEmpty(String incomingValue, String existingValue) {
+      return incomingValue.trim().isNotEmpty ? incomingValue : existingValue;
+    }
+
+    return User(
+      uid: keepNonEmpty(incoming.uid, existing.uid),
+      name: keepNonEmpty(incoming.name, existing.name),
+      avatar: keepNonEmpty(incoming.avatar, existing.avatar),
+      phone: keepNonEmpty(incoming.phone, existing.phone),
+      school: keepNonEmpty(incoming.school, existing.school),
+      platform: keepNonEmpty(incoming.platform, existing.platform),
+      token: keepNonEmpty(incoming.token, existing.token),
+      password: keepNonEmpty(incoming.password, existing.password),
+      studentId: incoming.studentId?.trim().isNotEmpty == true
+          ? incoming.studentId
+          : existing.studentId,
+      credentialExpiry: incoming.credentialExpiry ?? existing.credentialExpiry,
+      lastRefreshTime: incoming.lastRefreshTime ?? existing.lastRefreshTime,
+      refreshToken: incoming.refreshToken?.trim().isNotEmpty == true
+          ? incoming.refreshToken
+          : existing.refreshToken,
+    );
   }
 
   static Future<void> addAccount(
@@ -512,12 +591,15 @@ class AccountManager {
     final index = accounts.indexWhere((acc) => acc.uid == user.uid);
 
     if (index != -1) {
-      accounts[index] = user;
+      accounts[index] = _mergeAccountForUpsert(accounts[index], user);
     } else {
       accounts.add(user);
       if (isCurrentPlatform && !hasActiveSession()) {
         _currentSessionId = user.uid;
-        await _prefs.setString(_sessionKey, user.uid);
+        await _prefs.setString(
+          _sessionKeyForPlatformName(normalizedPlatform),
+          user.uid,
+        );
       }
     }
 
@@ -537,8 +619,11 @@ class AccountManager {
       await CookieManager.saveTempCookies(user.uid);
     }
 
-    if (notify && isCurrentPlatform) {
-      _notifyAccountState();
+    if (notify) {
+      final platformType =
+          _getPlatformTypeFromName(normalizedPlatform) ??
+          PlatformManager().currentPlatform;
+      _notifyAccountStateForPlatform(platformType);
     }
   }
 
@@ -730,5 +815,9 @@ class AccountManager {
 
   static void notifyStateChanged() {
     _notifyAccountState();
+  }
+
+  static void notifyStateChangedForPlatform(PlatformType platform) {
+    _notifyAccountStateForPlatform(platform);
   }
 }

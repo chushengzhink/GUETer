@@ -3,7 +3,11 @@ import 'package:flutter/material.dart';
 import '../api/kt_follow_sign.dart';
 import '../api/login.dart';
 import '../models/user.dart';
+import '../platform.dart';
+import '../services/sign_platform_context.dart';
+import '../services/sign_run_console.dart';
 import '../session/account.dart';
+import '../widgets/sign_run_console_panel.dart';
 import 'widget/scan.dart';
 
 /// 共享房间签到页面
@@ -13,16 +17,26 @@ class KetangpaiSharedRoomPage extends StatefulWidget {
   const KetangpaiSharedRoomPage({super.key});
 
   @override
-  State<KetangpaiSharedRoomPage> createState() => _KetangpaiSharedRoomPageState();
+  State<KetangpaiSharedRoomPage> createState() =>
+      _KetangpaiSharedRoomPageState();
 }
 
 class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
   final List<User> _users = <User>[];
   final Set<String> _selectedUserIds = <String>{};
   final Map<String, bool> _tokenHealth = <String, bool>{};
+  final SignRunConsoleController _consoleController = SignRunConsoleController(
+    platformContext: SignPlatformContext.ketangpai,
+  );
   bool _loading = true;
   bool _signing = false;
   String _lastScanText = '扫码结果';
+
+  @override
+  void dispose() {
+    _consoleController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -35,9 +49,7 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
       _loading = true;
     });
 
-    final users = AccountManager.getAllAccounts()
-        .where((user) => user.isKetangpai)
-        .toList();
+    final users = AccountManager.getAccountsForPlatform(PlatformType.ketangpai);
 
     final tokenHealth = <String, bool>{};
     for (final user in users) {
@@ -48,6 +60,7 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
     }
 
     if (!mounted) return;
+    _consoleController.resetForPlatform(SignPlatformContext.ketangpai);
     setState(() {
       _users
         ..clear()
@@ -96,9 +109,9 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
 
     if (_selectedUserIds.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先选择至少一个课堂派账号')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先选择至少一个课堂派账号')));
       return;
     }
 
@@ -106,6 +119,7 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
     if (qr == null) {
       return;
     }
+    if (!mounted) return;
 
     setState(() {
       _lastScanText = qr;
@@ -121,6 +135,9 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
       users: selectedUsers,
       courseName: '课堂派共享房间扫码签到',
       tokenHealthHint: _tokenHealth,
+      context: context,
+      console: _consoleController,
+      isContextMounted: () => mounted,
     );
 
     if (!mounted) return;
@@ -191,7 +208,9 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Column(
@@ -199,7 +218,10 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
                         children: [
                           const Text(
                             '扫一次码，全部账号一起签到',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                           const SizedBox(height: 8),
                           Text(
@@ -212,7 +234,9 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
                               Expanded(
                                 child: ElevatedButton.icon(
                                   onPressed: _signing ? null : _scanAndSignAll,
-                                  icon: const Icon(Icons.qr_code_scanner_outlined),
+                                  icon: const Icon(
+                                    Icons.qr_code_scanner_outlined,
+                                  ),
                                   label: Text(_signing ? '签到中...' : '点击扫码'),
                                 ),
                               ),
@@ -226,6 +250,8 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
                         ],
                       ),
                     ),
+                    const SizedBox(height: 16),
+                    SignRunConsolePanel(controller: _consoleController),
                     const SizedBox(height: 16),
                     Text(
                       '本地签到用户：',

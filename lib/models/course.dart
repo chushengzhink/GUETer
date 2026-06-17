@@ -90,21 +90,34 @@ class Course {
   }
 
   factory Course.fromCXJson(Map<String, dynamic> json) {
-    final content = json['content'];
-    final courseData = content['course']['data'][0];
+    final contentRaw = json['content'];
+    final content = contentRaw is Map
+        ? contentRaw.map((key, value) => MapEntry(key.toString(), value))
+        : <String, dynamic>{};
+    final courseRaw = content['course'];
+    final course = courseRaw is Map
+        ? courseRaw.map((key, value) => MapEntry(key.toString(), value))
+        : <String, dynamic>{};
+    final dataRaw = course['data'];
+    final courseDataRaw = dataRaw is List && dataRaw.isNotEmpty
+        ? dataRaw.first
+        : course;
+    final courseData = courseDataRaw is Map
+        ? courseDataRaw.map((key, value) => MapEntry(key.toString(), value))
+        : <String, dynamic>{};
 
     return Course(
-      courseId: courseData['id'].toString(),
-      classId: content['id'].toString(),
-      cpi: content['cpi'].toString(),
-      image: courseData['imageurl'] ?? '',
+      courseId: _firstNonEmpty(courseData['id']),
+      classId: _firstNonEmpty(content['id']),
+      cpi: _firstNonEmpty(content['cpi']),
+      image: _normalizeImageUrl(courseData['imageurl']),
       name: courseData['name'] ?? '未知课程',
       teacher: courseData['teacherfactor'] ?? '未知教师',
       schools: courseData['schools'],
       note: content['name'],
-      state: content['state'] == 0,
-      beginDate: content['beginDate'],
-      endDate: content['endDate'],
+      state: content['state'] == null || content['state'].toString() == '0',
+      beginDate: content['beginDate']?.toString(),
+      endDate: content['endDate']?.toString(),
     );
   }
 
@@ -181,6 +194,35 @@ class Course {
     );
   }
 
+  factory Course.fromJson(Map<String, dynamic> json) {
+    return Course(
+      courseId: json['courseId']?.toString() ?? '',
+      classId: json['classId']?.toString() ?? '',
+      cpi: json['cpi']?.toString().isEmpty == true
+          ? null
+          : json['cpi']?.toString(),
+      image: json['image']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      teacher: json['teacher']?.toString() ?? '',
+      schools: json['schools']?.toString().isEmpty == true
+          ? null
+          : json['schools']?.toString(),
+      note: json['note']?.toString().isEmpty == true
+          ? null
+          : json['note']?.toString(),
+      state: json['state']?.toString() != 'false',
+      beginDate: json['beginDate']?.toString().isEmpty == true
+          ? null
+          : json['beginDate']?.toString(),
+      endDate: json['endDate']?.toString().isEmpty == true
+          ? null
+          : json['endDate']?.toString(),
+      lessonId: json['lessonId']?.toString().isEmpty == true
+          ? null
+          : json['lessonId']?.toString(),
+    );
+  }
+
   Map<String, String> toJson() => {
     'courseId': courseId,
     'classId': classId,
@@ -193,5 +235,6 @@ class Course {
     'state': state.toString(),
     'beginDate': beginDate ?? '',
     'endDate': endDate ?? '',
+    'lessonId': lessonId ?? '',
   };
 }

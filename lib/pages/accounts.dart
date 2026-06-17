@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api/api_service.dart';
 import '../api/login.dart';
 import '../session/account.dart';
 import '../session/account_events.dart';
@@ -14,12 +15,16 @@ import '../session/tronclass_auth.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import '../utils/global_palette.dart';
+import '../theme/animations.dart';
 import '../theme/design_tokens.dart';
 import '../theme/components/dashboard_components.dart';
+import '../services/update_service.dart';
 import 'widget/avatar.dart';
 import 'login.dart';
 import 'tronclass_web_login.dart';
 import 'ketangpai_main_struct.dart';
+import 'update_announcements_page.dart';
+import 'user_manual_page.dart';
 
 class AccountsPage extends StatefulWidget {
   const AccountsPage({super.key});
@@ -44,12 +49,14 @@ class _AccountsPageState extends State<AccountsPage>
   StreamSubscription? _platformChangeSubscription;
   Color _globalPrimary = const Color(0xFF1F9EA8);
   Color _globalSecondary = const Color(0xFF157B88);
+  UpdateCheckStatus? _updateStatus;
 
   @override
   void initState() {
     super.initState();
     AppSettings.globalColorSchemeNotifier.addListener(_onGlobalSchemeChanged);
     _loadGlobalPalette();
+    _loadUpdateStatus();
     _loadAccounts();
     _platformChangeSubscription = PlatformManager().platformChanges.listen((
       platform,
@@ -71,13 +78,17 @@ class _AccountsPageState extends State<AccountsPage>
     });
 
     // 监听账户变更事件
-    _accountChangeSubscription = AccountChangeNotifier().accountChanges.listen((
-      accountId,
-    ) {
-      if (mounted) {
-        _loadAccounts();
-      }
-    });
+    _accountChangeSubscription = AccountChangeNotifier().accountStateChanges
+        .listen((snapshot) {
+          if (!mounted) {
+            return;
+          }
+          if (snapshot.platform == PlatformManager().currentPlatform) {
+            _applyAccountSnapshot(snapshot);
+            return;
+          }
+          _loadAccounts();
+        });
   }
 
   @override
@@ -108,10 +119,61 @@ class _AccountsPageState extends State<AccountsPage>
     });
   }
 
+  Future<void> _loadUpdateStatus() async {
+    final status = await UpdateCheckStatusStore().load();
+    if (!mounted) return;
+    setState(() {
+      _updateStatus = status;
+    });
+  }
+
+  void _applyAccountSnapshot(AccountStateSnapshot snapshot) {
+    if (snapshot.platform != PlatformManager().currentPlatform) {
+      return;
+    }
+
+    _applyVisibleAccounts(
+      snapshot.accounts,
+      snapshot.currentAccountId,
+      snapshot.platform,
+      clearLoginState: snapshot.accounts.isEmpty,
+    );
+    ApiService.appendExternalConsoleLog(
+      '通用',
+      '[AccountsPage] snapshotApplied platform=${snapshot.platform.name} '
+          'count=${snapshot.accounts.length} current=${snapshot.currentAccountId ?? '-'} '
+          'visibleCurrentAccount=${snapshot.accounts.any((account) => account.uid == snapshot.currentAccountId)}',
+    );
+    unawaited(
+      _refreshLoginStateForVisibleAccounts(
+        snapshot.accounts,
+        snapshot.platform,
+      ),
+    );
+  }
+
   Future<void> _loadAccounts() async {
     final targetPlatform = PlatformManager().currentPlatform;
+    final filteredAccounts =
+        await AccountManager.refreshAccountsForPlatformName(
+          PlatformManager().currentPlatformName,
+        );
     final current = AccountManager.currentSessionId;
-    final filteredAccounts = AccountManager.getCurrentPlatformAccounts();
+
+    if (!mounted || PlatformManager().currentPlatform != targetPlatform) {
+      return;
+    }
+    _applyVisibleAccounts(
+      filteredAccounts,
+      current,
+      targetPlatform,
+      clearLoginState: filteredAccounts.isEmpty,
+    );
+    ApiService.appendExternalConsoleLog(
+      '通用',
+      '[AccountsPage] loadAccounts platform=${PlatformManager().currentPlatformName} '
+          'storageCount=${filteredAccounts.length} current=${current ?? '-'} applied=true',
+    );
 
     try {
       if (filteredAccounts.isEmpty) {
@@ -190,6 +252,11 @@ class _AccountsPageState extends State<AccountsPage>
           ..clear()
           ..addAll(ketangpaiState);
       });
+      ApiService.appendExternalConsoleLog(
+        '通用',
+        '[AccountsPage] loginStateRefreshDone platform=${targetPlatform.name} '
+            'count=${filteredAccounts.length}',
+      );
     } catch (e) {
       debugPrint('[AccountsPage] 加载账户状态失败: $e');
       if (!mounted || PlatformManager().currentPlatform != targetPlatform) {
@@ -206,6 +273,95 @@ class _AccountsPageState extends State<AccountsPage>
           _isPlatformSwitching = false;
         });
       }
+    }
+  }
+
+  void _applyVisibleAccounts(
+    List<User> accounts,
+    String? currentAccountId,
+    PlatformType platform, {
+    bool clearLoginState = false,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _accounts = List<User>.of(accounts);
+      _currentAccountId = currentAccountId;
+      _selectedPlatform = platform;
+      _isPlatformSwitching = false;
+      if (clearLoginState) {
+        _chaoxingLoginState.clear();
+        _rainClassroomLoginState.clear();
+        _tronclassLoginState.clear();
+        _ketangpaiLoginState.clear();
+      }
+    });
+  }
+
+  Future<void> _refreshLoginStateForVisibleAccounts(
+    List<User> accounts,
+    PlatformType platform,
+  ) async {
+    if (accounts.isEmpty) {
+      return;
+    }
+
+    try {
+      if (platform == PlatformType.chaoxing) {
+        final state = await _refreshChaoxingLoginState(accounts).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => <String, bool>{},
+        );
+        if (!mounted || PlatformManager().currentPlatform != platform) return;
+        setState(() {
+          _chaoxingLoginState
+            ..clear()
+            ..addAll(state);
+        });
+      } else if (platform == PlatformType.rainClassroom) {
+        final state = await _refreshRainClassroomLoginState(accounts).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => <String, bool>{},
+        );
+        if (!mounted || PlatformManager().currentPlatform != platform) return;
+        setState(() {
+          _rainClassroomLoginState
+            ..clear()
+            ..addAll(state);
+        });
+      } else if (platform == PlatformType.tronclass) {
+        final state = await _refreshTronclassLoginState(accounts).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => <String, bool>{},
+        );
+        if (!mounted || PlatformManager().currentPlatform != platform) return;
+        setState(() {
+          _tronclassLoginState
+            ..clear()
+            ..addAll(state);
+        });
+      } else if (platform == PlatformType.ketangpai) {
+        final state = await _refreshKetangpaiLoginState(accounts).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => <String, bool>{},
+        );
+        if (!mounted || PlatformManager().currentPlatform != platform) return;
+        setState(() {
+          _ketangpaiLoginState
+            ..clear()
+            ..addAll(state);
+        });
+      }
+
+      ApiService.appendExternalConsoleLog(
+        '通用',
+        '[AccountsPage] loginStateRefreshDone platform=${platform.name} '
+            'count=${accounts.length}',
+      );
+    } catch (e) {
+      debugPrint('[AccountsPage] 鍒锋柊璐︽埛鐘舵€佸け璐? $e');
     }
   }
 
@@ -386,43 +542,58 @@ class _AccountsPageState extends State<AccountsPage>
     ];
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-      child: Card(
-        elevation: 0,
-        color: Theme.of(context).cardColor,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: AppAnimations.fadeSlideIn(
+        begin: const Offset(0, 0.08),
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            color: Theme.of(
+              context,
+            ).colorScheme.surface.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(AppRadius.xlarge),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+            boxShadow: AppShadows.low(Theme.of(context).colorScheme.shadow),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
                   Container(
-                    width: 38,
-                    height: 38,
+                    width: 36,
+                    height: 36,
                     decoration: BoxDecoration(
                       color: _globalPrimary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(AppRadius.medium),
                     ),
-                    child: Icon(Icons.swap_horiz, color: _globalPrimary),
+                    child: Icon(
+                      Icons.swap_horiz_rounded,
+                      color: _globalPrimary,
+                      size: 20,
+                    ),
                   ),
-                  const SizedBox(width: 10),
-                  const Expanded(
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           '平台快捷切换',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700),
                         ),
-                        SizedBox(height: 2),
+                        const SizedBox(height: 2),
                         Text(
                           '这里切平台，课程页会同步刷新。',
-                          style: TextStyle(fontSize: 12, color: Colors.black54),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
                         ),
                       ],
                     ),
@@ -434,7 +605,7 @@ class _AccountsPageState extends State<AccountsPage>
                     ),
                     decoration: BoxDecoration(
                       color: _globalPrimary.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(999),
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
                     ),
                     child: Text(
                       '当前：$currentPlatformName',
@@ -447,11 +618,10 @@ class _AccountsPageState extends State<AccountsPage>
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                alignment: WrapAlignment.center,
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.sm,
                 children: entries.map((entry) {
                   final platform = entry['platform'] as PlatformType;
                   final label = entry['label'] as String;
@@ -461,95 +631,14 @@ class _AccountsPageState extends State<AccountsPage>
 
                   return InkWell(
                     borderRadius: BorderRadius.circular(14),
-                    onTap: () async {
-                      if (platform == PlatformType.weizhuojiao) {
-                        _showWeizhuojiaoComingSoonNotice();
-                        return;
-                      }
-
-                      debugPrint(
-                        '[PlatformSwitch] 从 $currentPlatform 切换到 $platform',
-                      );
-
-                      // 立即清空旧平台账户详情，显示切换中
-                      setState(() {
-                        _isPlatformSwitching = true;
-                        _accounts = [];
-                        _currentAccountId = null;
-                        _chaoxingLoginState.clear();
-                        _rainClassroomLoginState.clear();
-                        _tronclassLoginState.clear();
-                        _ketangpaiLoginState.clear();
-                      });
-
-                      try {
-                        // 用户主动点击平台切换按钮，设置 2 秒超时
-                        await PlatformManager()
-                            .setPlatform(platform, userInitiated: true)
-                            .timeout(
-                              const Duration(seconds: 2),
-                              onTimeout: () {
-                                debugPrint('[PlatformSwitch] 切换超时，强制完成 UI 更新');
-                              },
-                            );
-                      } catch (e) {
-                        debugPrint('[PlatformSwitch] 切换失败: $e');
-                      } finally {
-                        if (mounted) {
-                          setState(() => _isPlatformSwitching = false);
-                        }
-                      }
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      width: 108,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        gradient: selected
-                            ? LinearGradient(
-                                colors: [
-                                  _globalPrimary,
-                                  _globalSecondary.withValues(alpha: 0.92),
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              )
-                            : null,
-                        color: selected ? null : Colors.grey.shade50,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: selected
-                              ? _globalPrimary
-                              : Colors.grey.withValues(alpha: 0.20),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            icon,
-                            color: selected ? Colors.white : _globalPrimary,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            label,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: selected ? Colors.white : Colors.black,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            subtitle,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: selected
-                                  ? Colors.white.withValues(alpha: 0.88)
-                                  : Colors.black54,
-                            ),
-                          ),
-                        ],
-                      ),
+                    onTap: () => _handlePlatformTap(platform, currentPlatform),
+                    child: _PlatformSwitcherChip(
+                      label: label,
+                      subtitle: subtitle,
+                      icon: icon,
+                      selected: selected,
+                      primary: _globalPrimary,
+                      secondary: _globalSecondary,
                     ),
                   );
                 }).toList(),
@@ -559,6 +648,47 @@ class _AccountsPageState extends State<AccountsPage>
         ),
       ),
     );
+  }
+
+  Future<void> _handlePlatformTap(
+    PlatformType platform,
+    PlatformType currentPlatform,
+  ) async {
+    if (platform == PlatformType.weizhuojiao) {
+      _showWeizhuojiaoComingSoonNotice();
+      return;
+    }
+
+    debugPrint('[PlatformSwitch] 从 $currentPlatform 切换到 $platform');
+
+    // 立即清空旧平台账户详情，显示切换中
+    setState(() {
+      _isPlatformSwitching = true;
+      _accounts = [];
+      _currentAccountId = null;
+      _chaoxingLoginState.clear();
+      _rainClassroomLoginState.clear();
+      _tronclassLoginState.clear();
+      _ketangpaiLoginState.clear();
+    });
+
+    try {
+      // 用户主动点击平台切换按钮，设置 2 秒超时
+      await PlatformManager()
+          .setPlatform(platform, userInitiated: true)
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () {
+              debugPrint('[PlatformSwitch] 切换超时，强制完成 UI 更新');
+            },
+          );
+    } catch (e) {
+      debugPrint('[PlatformSwitch] 切换失败: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isPlatformSwitching = false);
+      }
+    }
   }
 
   Future<void> _logoutAccount(User user) async {
@@ -1084,45 +1214,6 @@ class _AccountsPageState extends State<AccountsPage>
     }
   }
 
-  Widget _buildTitle(String name, bool isCurrentAccount, User user) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          margin: const EdgeInsets.only(left: 8),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.secondaryContainer,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            _platformLabel(user),
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSecondaryContainer,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-        if (isCurrentAccount)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            margin: const EdgeInsets.only(left: 8),
-            decoration: BoxDecoration(
-              color: _globalPrimary,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Text(
-              '当前',
-              style: TextStyle(color: Colors.white, fontSize: 12),
-            ),
-          ),
-      ],
-    );
-  }
-
   Widget _buildListItemContent(
     BuildContext context,
     User user,
@@ -1155,38 +1246,174 @@ class _AccountsPageState extends State<AccountsPage>
         tronclassStatus ??
         ketangpaiStatus ??
         weizhuojiaoStatus;
-    final subtitle = platformStatus == null
-        ? 'ID: ${user.uid}\n手机号: ${user.phone}'
-        : 'ID: ${user.uid}\n手机号: ${user.phone}\n平台状态: $platformStatus';
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: AvatarWidget(key: ValueKey(user.avatar), imageUrl: user.avatar),
-      title: _buildTitle(user.name, isCurrentAccount, user),
-      subtitle: Text(subtitle),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (canLogout && !_isMultiSelectMode)
-            IconButton(
-              tooltip: '退出登录',
-              icon: const Icon(Icons.logout),
-              onPressed: () => _logoutAccount(user),
-            ),
-          if (_isMultiSelectMode)
-            Checkbox(
-              value: isSelected,
-              onChanged: (bool? value) {
-                if (value != null) _toggleSelection(user.uid);
-              },
-            ),
-        ],
-      ),
+    return _AccountCard(
+      user: user,
+      platformLabel: _platformLabel(user),
+      platformStatus: platformStatus ?? '未知状态',
+      isLoggedIn: platformStatus == '已登录' || platformStatus == '工具页',
+      canLogout: canLogout,
+      isCurrentAccount: isCurrentAccount,
+      isSelected: isSelected,
+      isMultiSelectMode: _isMultiSelectMode,
+      primary: _globalPrimary,
+      secondary: _globalSecondary,
       onTap: _isMultiSelectMode ? null : () => _switchToAccount(user),
       onLongPress: () {
         _toggleMultiSelect();
         _toggleSelection(user.uid);
       },
+      onLogout: () => _logoutAccount(user),
+      onSelectedChanged: (value) {
+        if (value != null) _toggleSelection(user.uid);
+      },
+      avatar: AvatarWidget(key: ValueKey(user.avatar), imageUrl: user.avatar),
+    );
+  }
+
+  Widget _buildAccountListSection() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: AppAnimations.fadeSlideIn(
+        begin: const Offset(0, 0.08),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _isMultiSelectMode ? '选择账号' : '账号列表',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                AnimatedSwitcher(
+                  duration: AppDuration.fast,
+                  child: _isMultiSelectMode
+                      ? _StatusBadge(
+                          key: const ValueKey('selecting'),
+                          label: '已选 ${_selectedAccounts.length}',
+                          icon: Icons.checklist_rounded,
+                          foreground: _globalPrimary,
+                          background: _globalPrimary.withValues(alpha: 0.10),
+                        )
+                      : _StatusBadge(
+                          key: const ValueKey('normal'),
+                          label: '${_accounts.length} 个账号',
+                          icon: Icons.people_alt_outlined,
+                          foreground: Theme.of(context).colorScheme.primary,
+                          background: Theme.of(
+                            context,
+                          ).colorScheme.primary.withValues(alpha: 0.10),
+                        ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              _isMultiSelectMode ? '勾选后可使用顶部删除按钮批量移除账号。' : '点按切换当前账号，长按进入多选模式。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            for (var index = 0; index < _accounts.length; index++) ...[
+              _StaggeredListItem(
+                index: index,
+                child: Builder(
+                  builder: (context) {
+                    final user = _accounts[index];
+                    final isSelected = _selectedAccounts.contains(user.uid);
+                    final isCurrent =
+                        user.uid == _currentAccountId &&
+                        _isAccountLoggedIn(user);
+                    return _buildListItemContent(
+                      context,
+                      user,
+                      isSelected,
+                      isCurrent,
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyAccountsState() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 28, 16, 96),
+      child: AppAnimations.fadeSlideIn(
+        begin: const Offset(0, 0.08),
+        child: DashboardEmptyState(
+          title: '暂无账号',
+          subtitle: '点击右下角添加账号，或切换平台查看其他账号。',
+          icon: Icons.person_add_alt_1_outlined,
+          color: _globalPrimary,
+          action: FilledButton.tonalIcon(
+            onPressed: () {
+              if (_selectedPlatform == PlatformType.tronclass) {
+                _navigateToPasswordLogin();
+                return;
+              }
+              if (_selectedPlatform == PlatformType.weizhuojiao) {
+                _showWeizhuojiaoComingSoonNotice();
+                return;
+              }
+              _navigateToPasswordLogin();
+            },
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('添加账号'),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingAccountsState() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+      child: AppAnimations.fadeSlideIn(
+        begin: const Offset(0, 0.06),
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(AppRadius.xlarge),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: _globalPrimary,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Text(
+                  '正在同步 ${_selectedPlatformLabel()} 的账号状态...',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -1208,8 +1435,7 @@ class _AccountsPageState extends State<AccountsPage>
         : null;
     final loggedInCount = _accounts.where(_isAccountLoggedIn).length;
 
-    if (_isPlatformSwitching ||
-        (_accounts.isEmpty && _currentAccountId == null)) {
+    if (_isPlatformSwitching) {
       return DashboardHeader(
         eyebrow: 'ACCOUNT CENTER',
         title: '账户管理',
@@ -1477,6 +1703,207 @@ class _AccountsPageState extends State<AccountsPage>
     );
   }
 
+  Widget _buildVersionHelpPanel() {
+    final status = _updateStatus;
+    if (status != null && status.hasUpdate) {
+      return _buildUpdateAvailableCard(status);
+    }
+    return _buildHelpShortcutsCard(status);
+  }
+
+  Widget _buildUpdateAvailableCard(UpdateCheckStatus status) {
+    final colors = Theme.of(context).colorScheme;
+    final notes = status.releaseNotes.trim();
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.primaryContainer.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(AppRadius.large),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(AppRadius.medium),
+                ),
+                child: Icon(
+                  Icons.system_update_alt_rounded,
+                  color: colors.primary,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '版本可更新',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${status.currentVersion} -> ${status.latestVersion}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (notes.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              notes,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colors.onSurfaceVariant,
+                height: 1.35,
+              ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.sm),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xs,
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: _openUpdateAnnouncements,
+                icon: const Icon(Icons.campaign_outlined),
+                label: const Text('查看更新公告'),
+              ),
+              OutlinedButton.icon(
+                onPressed: status.downloadUrl.isEmpty
+                    ? null
+                    : () => launchUrl(
+                        Uri.parse(status.downloadUrl),
+                        mode: LaunchMode.externalApplication,
+                      ),
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: const Text('前往下载'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHelpShortcutsCard(UpdateCheckStatus? status) {
+    final subtitle = status == null
+        ? '暂未获取到版本信息'
+        : '当前已是最新版本 ${status.currentVersion}';
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(AppRadius.large),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+            child: Text(
+              subtitle,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: _buildHelpShortcutTile(
+                  icon: Icons.menu_book_outlined,
+                  label: '使用手册',
+                  onTap: () => _openUserManual(),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: _buildHelpShortcutTile(
+                  icon: Icons.help_outline_rounded,
+                  label: '常见问题',
+                  onTap: () => _openUserManual(initialSectionId: 'faq'),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: _buildHelpShortcutTile(
+                  icon: Icons.campaign_outlined,
+                  label: '更新公告',
+                  onTap: _openUpdateAnnouncements,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHelpShortcutTile({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.medium),
+      onTap: onTap,
+      child: Container(
+        height: 76,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        decoration: BoxDecoration(
+          color: colors.surfaceContainerHighest.withValues(alpha: 0.48),
+          borderRadius: BorderRadius.circular(AppRadius.medium),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: _globalPrimary),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openUserManual({String? initialSectionId}) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => UserManualPage(initialSectionId: initialSectionId),
+      ),
+    );
+  }
+
+  void _openUpdateAnnouncements() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const UpdateAnnouncementsPage()));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1609,57 +2036,27 @@ class _AccountsPageState extends State<AccountsPage>
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+              child: AppAnimations.fadeSlideIn(
+                begin: const Offset(0, 0.06),
+                child: _buildVersionHelpPanel(),
+              ),
+            ),
             _buildPlatformSwitcherPanel(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-              child: _buildOverviewCard(),
-            ),
-            if (_accounts.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 28, 16, 96),
-                child: DashboardEmptyState(
-                  title: '暂无账号',
-                  subtitle: '点击右下角添加账号，或切换平台查看其他账号。',
-                  icon: Icons.person_add_alt_1_outlined,
-                  color: _globalPrimary,
-                ),
-              )
-            else
-              ListView.builder(
-                itemCount: _accounts.length,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemBuilder: (context, index) {
-                  final user = _accounts[index];
-                  final isSelected = _selectedAccounts.contains(user.uid);
-                  final isCurrent =
-                      user.uid == _currentAccountId && _isAccountLoggedIn(user);
-                  return Card(
-                    elevation: isCurrent ? 2 : 0,
-                    margin: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    color: isCurrent
-                        ? Theme.of(context).colorScheme.primaryContainer
-                        : Theme.of(context).colorScheme.surface,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.large),
-                      side: BorderSide(
-                        color: isCurrent
-                            ? _globalPrimary.withValues(alpha: 0.35)
-                            : Theme.of(context).colorScheme.outlineVariant,
-                      ),
-                    ),
-                    child: _buildListItemContent(
-                      context,
-                      user,
-                      isSelected,
-                      isCurrent,
-                    ),
-                  );
-                },
+              child: AppAnimations.fadeSlideIn(
+                begin: const Offset(0, 0.08),
+                child: _buildOverviewCard(),
               ),
+            ),
+            if (_isPlatformSwitching)
+              _buildLoadingAccountsState()
+            else if (_accounts.isEmpty)
+              _buildEmptyAccountsState()
+            else
+              _buildAccountListSection(),
             const SizedBox(height: 96),
           ],
         ),
@@ -1736,6 +2133,435 @@ class _AccountsPageState extends State<AccountsPage>
             ),
         ],
       ),
+    );
+  }
+}
+
+class _PlatformSwitcherChip extends StatelessWidget {
+  const _PlatformSwitcherChip({
+    required this.label,
+    required this.subtitle,
+    required this.icon,
+    required this.selected,
+    required this.primary,
+    required this.secondary,
+  });
+
+  final String label;
+  final String subtitle;
+  final IconData icon;
+  final bool selected;
+  final Color primary;
+  final Color secondary;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final foreground = selected ? Colors.white : scheme.onSurface;
+    final muted = selected
+        ? Colors.white.withValues(alpha: 0.82)
+        : scheme.onSurfaceVariant;
+
+    return AnimatedContainer(
+      duration: AppDuration.normal,
+      curve: AppCurves.emphasized,
+      constraints: const BoxConstraints(minWidth: 102),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        gradient: selected
+            ? LinearGradient(
+                colors: [primary, secondary.withValues(alpha: 0.94)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : null,
+        color: selected ? null : scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(AppRadius.large),
+        border: Border.all(color: selected ? primary : scheme.outlineVariant),
+        boxShadow: selected ? AppShadows.low(primary) : null,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: AppDuration.normal,
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: selected
+                  ? Colors.white.withValues(alpha: 0.16)
+                  : primary.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(AppRadius.medium),
+            ),
+            child: Icon(
+              icon,
+              size: 17,
+              color: selected ? Colors.white : primary,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: foreground,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccountCard extends StatelessWidget {
+  const _AccountCard({
+    required this.user,
+    required this.platformLabel,
+    required this.platformStatus,
+    required this.isLoggedIn,
+    required this.canLogout,
+    required this.isCurrentAccount,
+    required this.isSelected,
+    required this.isMultiSelectMode,
+    required this.primary,
+    required this.secondary,
+    required this.avatar,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onLogout,
+    required this.onSelectedChanged,
+  });
+
+  final User user;
+  final String platformLabel;
+  final String platformStatus;
+  final bool isLoggedIn;
+  final bool canLogout;
+  final bool isCurrentAccount;
+  final bool isSelected;
+  final bool isMultiSelectMode;
+  final Color primary;
+  final Color secondary;
+  final Widget avatar;
+  final VoidCallback? onTap;
+  final VoidCallback onLongPress;
+  final VoidCallback onLogout;
+  final ValueChanged<bool?> onSelectedChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final statusColor = isLoggedIn
+        ? const Color(0xFF16A34A)
+        : const Color(0xFFF97316);
+    final surface = isCurrentAccount
+        ? Color.alphaBlend(primary.withValues(alpha: 0.10), scheme.surface)
+        : scheme.surface;
+
+    return Semantics(
+      button: true,
+      selected: isCurrentAccount || isSelected,
+      label: '${user.name}，$platformLabel，$platformStatus',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: BorderRadius.circular(AppRadius.xlarge),
+          child: AnimatedContainer(
+            duration: AppDuration.normal,
+            curve: AppCurves.emphasized,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(AppRadius.xlarge),
+              border: Border.all(
+                color: isSelected
+                    ? secondary
+                    : isCurrentAccount
+                    ? primary.withValues(alpha: 0.45)
+                    : scheme.outlineVariant,
+                width: isSelected || isCurrentAccount ? 1.5 : 1,
+              ),
+              boxShadow: isCurrentAccount
+                  ? AppShadows.medium(primary)
+                  : AppShadows.low(scheme.shadow),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Hero(
+                      tag: 'account-avatar-${user.platform}-${user.uid}',
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(AppRadius.medium),
+                        child: avatar,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  user.name.isEmpty ? '未命名账号' : user.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: scheme.onSurface,
+                                  ),
+                                ),
+                              ),
+                              if (isCurrentAccount)
+                                _StatusBadge(
+                                  label: '当前',
+                                  icon: Icons.check_circle_rounded,
+                                  foreground: primary,
+                                  background: primary.withValues(alpha: 0.12),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: AppSpacing.xs),
+                          Wrap(
+                            spacing: AppSpacing.xs,
+                            runSpacing: AppSpacing.xs,
+                            children: [
+                              _StatusBadge(
+                                label: platformLabel,
+                                icon: Icons.layers_outlined,
+                                foreground: secondary,
+                                background: secondary.withValues(alpha: 0.12),
+                              ),
+                              _StatusBadge(
+                                label: platformStatus,
+                                icon: isLoggedIn
+                                    ? Icons.verified_user_outlined
+                                    : Icons.error_outline_rounded,
+                                foreground: statusColor,
+                                background: statusColor.withValues(alpha: 0.12),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    AnimatedSwitcher(
+                      duration: AppDuration.fast,
+                      child: isMultiSelectMode
+                          ? Checkbox(
+                              key: const ValueKey('checkbox'),
+                              value: isSelected,
+                              onChanged: onSelectedChanged,
+                            )
+                          : canLogout
+                          ? IconButton(
+                              key: const ValueKey('logout'),
+                              tooltip: '退出登录',
+                              icon: const Icon(Icons.logout_rounded),
+                              onPressed: onLogout,
+                            )
+                          : Icon(
+                              key: const ValueKey('chevron'),
+                              Icons.chevron_right_rounded,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.md),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final wide = constraints.maxWidth >= 440;
+                    final uid = _AccountInfoPill(
+                      icon: Icons.badge_outlined,
+                      label: 'UID',
+                      value: user.uid.isEmpty ? '-' : user.uid,
+                    );
+                    final phone = _AccountInfoPill(
+                      icon: Icons.phone_iphone_outlined,
+                      label: '手机号',
+                      value: user.phone.isEmpty ? '未填写' : user.phone,
+                    );
+                    if (wide) {
+                      return Row(
+                        children: [
+                          Expanded(child: uid),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(child: phone),
+                        ],
+                      );
+                    }
+                    return Column(
+                      children: [
+                        uid,
+                        const SizedBox(height: AppSpacing.sm),
+                        phone,
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AccountInfoPill extends StatelessWidget {
+  const _AccountInfoPill({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(AppRadius.medium),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+          const SizedBox(width: AppSpacing.xs),
+          Text(
+            '$label：',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: scheme.onSurface,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.foreground,
+    required this.background,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color foreground;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: foreground),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: foreground,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StaggeredListItem extends StatelessWidget {
+  const _StaggeredListItem({required this.index, required this.child});
+
+  final int index;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final delay = Duration(milliseconds: (index.clamp(0, 6)) * 28);
+
+    return FutureBuilder<void>(
+      future: Future<void>.delayed(delay),
+      builder: (context, snapshot) {
+        final ready = snapshot.connectionState == ConnectionState.done;
+        return AnimatedOpacity(
+          duration: AppDuration.normal,
+          curve: AppCurves.emphasized,
+          opacity: ready ? 1 : 0,
+          child: AnimatedSlide(
+            duration: AppDuration.normal,
+            curve: AppCurves.emphasized,
+            offset: ready ? Offset.zero : const Offset(0, 0.06),
+            child: child,
+          ),
+        );
+      },
     );
   }
 }

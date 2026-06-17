@@ -3,8 +3,12 @@ import 'package:dio/dio.dart';
 import 'dart:convert';
 
 import 'api_service.dart';
+import 'platform_request_stability.dart';
+import 'sign_request_profile.dart';
 import 'ketangpai_attendance_api.dart';
+import 'ketangpai_content_utils.dart';
 import 'ketangpai_course.dart';
+import 'ketangpai_exam_api.dart';
 import 'tronclass_sign_api.dart';
 import 'tronclass_client.dart';
 import '../session/account.dart';
@@ -13,16 +17,49 @@ import '../models/active.dart';
 import '../models/course.dart';
 import '../models/tronclass_rollcalls.dart';
 
+PlatformRequestOptions _apiStableOptions(String operationId) {
+  return PlatformRequestOptions(
+    operationId: operationId,
+    cachePolicy: PlatformRequestCachePolicy.staleIfError,
+    requestKind: PlatformRequestKind.read,
+    allowControlledParallelism: true,
+  );
+}
+
 class CXCourseApi {
+  static Map<String, dynamic>? _asStringMap(dynamic value) {
+    if (value is! Map) return null;
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  static List<Map<String, dynamic>> _asMapList(dynamic value) {
+    if (value is! List) return const [];
+    return value
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList();
+  }
+
   /// 获取课程列表
   static Future<Map<String, dynamic>?> getCourses() async {
     try {
-      final url =
-          'https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&getTchClazzType=1&mcode=';
+      final userId = AccountManager.currentSessionId;
+      if (userId == null || userId.isEmpty) {
+        ApiService.appendExternalConsoleLog(
+          '学习通',
+          'getCourses: currentSessionId is empty',
+        );
+        return null;
+      }
 
+      const url = 'https://mooc1-api.chaoxing.com/mycourse/backclazzdata';
       final response = await ApiService.sendRequest(
         url,
+        params: const {'view': 'json', 'getTchClazzType': '1', 'mcode': ''},
         responseType: ResponseType.plain,
+        platformOptions: _apiStableOptions('chaoxing.course.legacy_list'),
       );
 
       ApiService.appendExternalConsoleLog(
@@ -38,12 +75,12 @@ class CXCourseApi {
         '响应数据前500字符: ${response.data.toString().substring(0, response.data.toString().length > 500 ? 500 : response.data.toString().length)}',
       );
 
-      // 检查是否返回 HTML（登录失效）
+      // 学习通网关会用 HTML 返回 400，通常是请求头或 Cookie 形态异常。
       if (response.data is String &&
           response.data.toString().trim().startsWith('<!')) {
         ApiService.appendExternalConsoleLog(
           '学习通',
-          '接口返回 HTML，可能是登录态失效或 Cookie 无效',
+          '课程接口返回 HTML，学习通网关拒绝，请检查请求头或 Cookie 是否异常',
         );
         return null;
       }
@@ -84,7 +121,7 @@ class CXCourseApi {
       final result = coursesData['result'];
       ApiService.appendExternalConsoleLog('学习通', 'result=$result');
 
-      if (result != 1) {
+      if (result != 1 && result?.toString() != '1') {
         ApiService.appendExternalConsoleLog('学习通', 'result != 1，返回 null');
         return null;
       }
@@ -174,7 +211,11 @@ class CXCourseApi {
         'fields': 'clazzid,popupagreement,personid,clazzname,createtime',
       };
 
-      final response = await ApiService.sendRequest(url, params: params);
+      final response = await ApiService.sendRequest(
+        url,
+        params: params,
+        platformOptions: _apiStableOptions('chaoxing.course.join_class_time'),
+      );
 
       final joinClassTime = response.data['data'][0]['createtime'];
       return joinClassTime;
@@ -221,6 +262,7 @@ class CXCourseApi {
         url,
         method: 'GET',
         params: params,
+        platformOptions: _apiStableOptions('chaoxing.activity.task_list'),
       );
       return response.data;
     } catch (e) {
@@ -253,6 +295,7 @@ class CXCourseApi {
         url,
         method: 'GET',
         params: params,
+        platformOptions: _apiStableOptions('chaoxing.activity.web_list'),
       );
       return response.data;
     } catch (e) {
@@ -284,12 +327,13 @@ class CXCourseApi {
         return null;
       }
 
-      List<Active> contentList = [];
-      List<dynamic> activeList = taskData['activeList'];
-      List<dynamic> webActiveList = webTaskData['data']['activeList'];
+      final contentList = <Active>[];
+      final activeList = _asMapList(taskData['activeList']);
+      final webData = _asStringMap(webTaskData['data']) ?? const {};
+      final webActiveList = _asMapList(webData['activeList']);
 
       // app 和 web 的 api 活动结束时间存在差异 顺序会匹配错误
-      Map<String, dynamic> activeMap = {
+      final activeMap = <String, Map<String, dynamic>>{
         for (var activeItem in webActiveList)
           activeItem['id'].toString(): activeItem,
       };
@@ -299,19 +343,26 @@ class CXCourseApi {
         String activeId = activeData['id'].toString();
 
         if (activeMap.containsKey(activeId)) {
-          var activeItem = activeMap[activeId];
+          final activeItem = activeMap[activeId];
+          if (activeItem == null) {
+            contentList.add(active);
+            continue;
+          }
           if (active.status) {
             if (active.description.isEmpty) {
-              active.description = activeItem['nameFour'];
+              active.description = activeItem['nameFour']?.toString() ?? '';
             }
           }
 
           if (active.activeType == ActiveType.signIn ||
-              active.activeType == ActiveType.signOut) {
+              active.activeType == ActiveType.signOut ||
+              active.activeType == ActiveType.scheduledSignIn) {
             final otherId = activeItem['otherId'];
             if (otherId != null) {
               try {
-                active.signType = getSignTypeFromIndex(int.parse(otherId));
+                active.signType = getSignTypeFromIndex(
+                  int.parse(otherId.toString()),
+                );
               } catch (e) {
                 debugPrint('解析 otherId 失败：$otherId, 错误：$e');
               }
@@ -723,7 +774,11 @@ class RCCourseApi {
         url,
         method: 'POST',
         headers: headers,
+        legacyHeaders: headers,
         body: jsonData,
+        signProfile: SignRequestProfiles.rainClassroomCheckIn(
+          referer: referer ?? 'https://www.yuketang.cn/',
+        ),
       );
       final data = response.data;
 
@@ -775,6 +830,7 @@ class RCCourseApi {
         url,
         method: 'POST',
         body: jsonData,
+        signProfile: SignRequestProfiles.rainClassroomCheckIn(),
       );
       final data = response.data;
 
@@ -916,6 +972,9 @@ class RCCourseApi {
           ApiService.sendRequest(
             '/v2/api/web/courses/list?identity=2',
             method: 'GET',
+            platformOptions: _apiStableOptions(
+              'rainclassroom.course.online_list',
+            ),
           ),
           getOnLessonAndUpcomingExam(),
         ]);
@@ -1240,6 +1299,75 @@ class RCCourseApi {
 }
 
 class TCCourseApi {
+  static Map<String, dynamic>? _asCourseStringMap(dynamic value) {
+    if (value is! Map) {
+      return null;
+    }
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  static List<dynamic>? _extractCourseListPayload(dynamic payload) {
+    final root = _asCourseStringMap(payload);
+    if (root == null) {
+      return payload is List ? payload : null;
+    }
+    final data = root['data'];
+    if (data is List) {
+      return data;
+    }
+    final dataMap = _asCourseStringMap(data);
+    for (final key in const ['items', 'list', 'records', 'rows']) {
+      final nested = dataMap?[key];
+      if (nested is List) {
+        return nested;
+      }
+    }
+    for (final key in const ['items', 'list', 'records', 'rows', 'courses']) {
+      final nested = root[key];
+      if (nested is List) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  static String _responseShape(dynamic payload) {
+    final root = _asCourseStringMap(payload);
+    if (root == null) {
+      return payload is List
+          ? 'rootList length=${payload.length}'
+          : 'type=${payload.runtimeType}';
+    }
+    final data = root['data'];
+    final dataMap = _asCourseStringMap(data);
+    return 'rootKeys=${root.keys.take(8).join(',')} dataType=${data.runtimeType} dataKeys=${dataMap?.keys.take(8).join(',') ?? ''}';
+  }
+
+  static Course _courseFromTronclassMap(Map<String, dynamic> e) {
+    final teacher = _asCourseStringMap(e['teacher']);
+    return Course(
+      courseId: e['id']?.toString() ?? '',
+      classId: e['id']?.toString() ?? '',
+      image: e['cover_url']?.toString() ?? '',
+      name: e['name']?.toString() ?? '未知课程',
+      teacher: teacher?['name']?.toString() ?? '未知教师',
+      state: true,
+    );
+  }
+
+  @visibleForTesting
+  static List<Course>? parseCourseListPayload(dynamic payload) {
+    final data = _extractCourseListPayload(payload);
+    if (data == null) {
+      return null;
+    }
+    return data
+        .map(_asCourseStringMap)
+        .whereType<Map<String, dynamic>>()
+        .map(_courseFromTronclassMap)
+        .toList();
+  }
+
   static Future<List<Course>?> getCoursesList() async {
     try {
       final userId = AccountManager.currentSessionId;
@@ -1254,26 +1382,37 @@ class TCCourseApi {
         queryParameters: const {'page': '1', 'per_page': '50'},
       );
 
-      if (response.data is Map<String, dynamic>) {
-        final data = response.data['data'];
-        if (data is List) {
-          debugPrint(
-            '[TCCourseApi] getCoursesList: found ${data.length} courses',
-          );
-          return data.whereType<Map<String, dynamic>>().map((e) {
-            return Course(
-              courseId: e['id']?.toString() ?? '',
-              classId: e['id']?.toString() ?? '',
-              image: e['cover_url'] ?? '',
-              name: e['name'] ?? '未知课程',
-              teacher: e['teacher']?['name'] ?? '未知教师',
-              state: true,
-            );
-          }).toList();
-        }
+      final courses = parseCourseListPayload(response.data);
+      if (courses != null) {
+        debugPrint(
+          '[TCCourseApi] getCoursesList: found ${courses.length} courses',
+        );
+        return courses;
       }
 
-      debugPrint('[TCCourseApi] getCoursesList: no valid data in response');
+      final data = _extractCourseListPayload(response.data);
+      if (data != null) {
+        debugPrint(
+          '[TCCourseApi] getCoursesList: found ${data.length} courses',
+        );
+        return data.map(_asStringMap).whereType<Map<String, dynamic>>().map((
+          e,
+        ) {
+          final teacher = _asStringMap(e['teacher']);
+          return Course(
+            courseId: e['id']?.toString() ?? '',
+            classId: e['id']?.toString() ?? '',
+            image: e['cover_url']?.toString() ?? '',
+            name: e['name']?.toString() ?? '未知课程',
+            teacher: teacher?['name']?.toString() ?? '未知教师',
+            state: true,
+          );
+        }).toList();
+      }
+
+      debugPrint(
+        '[TCCourseApi] getCoursesList: no valid data in response shape=${_responseShape(response.data)}',
+      );
       return [];
     } catch (e, stackTrace) {
       debugPrint('[TCCourseApi] getCoursesList error: $e');
@@ -1622,12 +1761,7 @@ class TronclassInteractionItem {
 
 class KTCourseApi {
   static int _contentTypeOf(Map<String, dynamic> item) {
-    return int.tryParse(
-          item['contenttype']?.toString() ??
-              item['contentType']?.toString() ??
-              '',
-        ) ??
-        -1;
+    return ketangpaiContentTypeOf(item);
   }
 
   static String _searchableTextOf(Map<String, dynamic> item) {
@@ -1645,6 +1779,25 @@ class KTCourseApi {
         .where((part) => part.trim().isNotEmpty)
         .join(' ')
         .toLowerCase();
+  }
+
+  static bool _fieldMatchesAny(
+    Map<String, dynamic> item,
+    Iterable<String> needles,
+  ) {
+    final values = <String>[
+      item['category']?.toString() ?? '',
+      item['categoryname']?.toString() ?? '',
+      item['categoryName']?.toString() ?? '',
+      item['modulename']?.toString() ?? '',
+      item['moduleName']?.toString() ?? '',
+      item['typename']?.toString() ?? '',
+      item['type_name']?.toString() ?? '',
+      item['activitytype']?.toString() ?? '',
+    ].map((value) => value.toLowerCase()).toList();
+    return values.any(
+      (value) => needles.any((needle) => value.contains(needle)),
+    );
   }
 
   static List<Map<String, dynamic>> _filterKetangpaiContent(
@@ -1733,6 +1886,9 @@ class KTCourseApi {
     int contentType = 0,
     int page = 1,
     int limit = 50,
+    Object dirId = '0',
+    Object desc = '2',
+    String vtrType = '',
   }) async {
     try {
       final list = await KTPCourseApi.getCourseContent(
@@ -1740,6 +1896,9 @@ class KTCourseApi {
         contentType: contentType,
         page: page,
         limit: limit,
+        dirId: dirId,
+        desc: desc,
+        vtrType: vtrType,
       );
       return {
         'list': list,
@@ -1758,21 +1917,33 @@ class KTCourseApi {
     int contentType = 0,
     int page = 1,
     int limit = 50,
+    bool fetchAll = true,
+    int maxPages = 10,
+    Object dirId = '0',
+    Object desc = '2',
+    String vtrType = '',
   }) async {
     try {
-      final content = await getCourseContent(
+      if (fetchAll) {
+        return KTPCourseApi.getCourseContentAll(
+          courseId,
+          contentType: contentType,
+          limit: limit,
+          maxPages: maxPages,
+          dirId: dirId,
+          desc: desc,
+          vtrType: vtrType,
+        );
+      }
+      return KTPCourseApi.getCourseContent(
         courseId,
         contentType: contentType,
         page: page,
         limit: limit,
+        dirId: dirId,
+        desc: desc,
+        vtrType: vtrType,
       );
-      if (content != null && content['list'] is List) {
-        return (content['list'] as List)
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
-      }
-      return [];
     } catch (e) {
       debugPrint('KTCourseApi.getCourseContentList error: $e');
       return [];
@@ -1897,23 +2068,10 @@ class KTCourseApi {
     String courseId,
   ) async {
     try {
-      final url =
-          'https://openapiv5.ketangpai.com/TestpaperApi/testpaperdetails';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': examId,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      return await KetangpaiExamApi.getExamDetail(
+        courseId: courseId,
+        testPaperId: examId,
       );
-      if (response.data is Map<String, dynamic> &&
-          response.data['status'] == 1) {
-        return response.data['data'];
-      }
-      return null;
     } catch (e) {
       debugPrint('KTCourseApi.getExamInfo error: $e');
       return null;
@@ -1925,22 +2083,10 @@ class KTCourseApi {
     String courseId,
   ) async {
     try {
-      final url = 'https://openapiv5.ketangpai.com/TestpaperApi/doSubjectList';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': examId,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      return await KetangpaiExamApi.getExamQuestions(
+        courseId: courseId,
+        testPaperId: examId,
       );
-      if (response.data is Map<String, dynamic> &&
-          response.data['status'] == 1) {
-        return response.data['data'];
-      }
-      return null;
     } catch (e) {
       debugPrint('KTCourseApi.getExamQuestions error: $e');
       return null;
@@ -1954,21 +2100,13 @@ class KTCourseApi {
     required String answer,
   }) async {
     try {
-      final url = 'https://openapiv5.ketangpai.com/TestpaperApi/saveAnswer';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': testPaperId,
-        'subjectid': subjectId,
-        'answer': answer,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      return await KetangpaiExamApi.saveAnswer(
+        courseId: courseId,
+        testPaperId: testPaperId,
+        subjectId: subjectId,
+        answer: answer,
+        attachment: '',
       );
-      return response.data is Map<String, dynamic> &&
-          response.data['status'] == 1;
     } catch (e) {
       debugPrint('KTCourseApi.submitExamAnswer error: $e');
       return false;
@@ -1977,19 +2115,11 @@ class KTCourseApi {
 
   static Future<bool> submitExamPaper(String courseId, String examId) async {
     try {
-      final url = 'https://openapiv5.ketangpai.com/TestpaperApi/handup';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': examId,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      final response = await ApiService.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      final result = await KetangpaiExamApi.submitExam(
+        courseId: courseId,
+        testPaperId: examId,
       );
-      return response.data is Map<String, dynamic> &&
-          response.data['status'] == 1;
+      return result['success'] == true;
     } catch (e) {
       debugPrint('KTCourseApi.submitExamPaper error: $e');
       return false;

@@ -14,6 +14,9 @@ import '../session/account.dart';
 import '../session/credential_manager.dart';
 import '../session/login_context.dart';
 import '../platform.dart';
+import 'platform_functional_request_profile.dart';
+import 'sign_request_profile.dart';
+import 'platform_request_stability.dart';
 
 typedef DebugSendRequestOverride =
     Future<Response<dynamic>> Function(
@@ -91,8 +94,8 @@ class HeadersManager {
       _uniqueId = EncryptionUtil.getUniqueId();
       prefs.setString(_uniqueIdKey, _uniqueId);
     }
-    // 鍐呮祴鐗堬細@Azeroth
-    // 姝ｅ紡鐗堬細@Kalimdor
+    // 内测版：@Azeroth
+    // 正式版：@Kalimdor
     final userAgentTemp =
         '(device:$_deviceModel) Language/zh_CN com.chaoxing.mobile/ChaoXingStudy_${_cxProductId}_${_cxVersion}_android_phone_${_cxVersionCode}_$_cxApiVersion (@Kalimdor)_$_uniqueId';
     final schild = EncryptionUtil.md5Hash(
@@ -130,6 +133,7 @@ class ApiService {
   static const String _consolePlatformRainClassroom = '\u96e8\u8bfe\u5802';
   static const String _consolePlatformTronclass = '\u7545\u8bfe';
   static const String _consolePlatformKetangpai = '\u8bfe\u5802\u6d3e';
+  static const String _consolePlatformOpenList = 'OpenList';
 
   static late Dio _dio;
   static SharedPreferences? _consolePrefs;
@@ -141,7 +145,7 @@ class ApiService {
   static final Random _random = Random();
   static bool _strictSecurityMode = false;
 
-  // 鍏ㄥ眬璇锋眰鑺傛祦锛氶伩鍏嶇煭鏃堕棿杩炵画璇锋眰瑙﹀彂椋庢帶璇垽
+  // 全局请求节流：避免短时间连续请求触发风控误判
   static const int _minRequestIntervalMs = 350;
   static const int _requestJitterMs = 120;
   static const int _highRiskSignIntervalMs = 1400;
@@ -160,6 +164,31 @@ class ApiService {
   @visibleForTesting
   static DebugSendRequestOverride? debugSendRequestOverride;
 
+  static Future<Response<dynamic>>? dispatchDebugOverrideForLogin(
+    String url, {
+    required String method,
+    Map<String, String>? params,
+    Map<String, String>? headers,
+    dynamic body,
+    ResponseType responseType = ResponseType.json,
+    bool allowRedirects = true,
+  }) {
+    final override = debugSendRequestOverride;
+    if (override == null) {
+      return null;
+    }
+    return override(
+      url,
+      method: method,
+      params: params,
+      headers: headers,
+      body: body,
+      responseType: responseType,
+      allowRedirects: allowRedirects,
+      skipCredentialValidation: true,
+    );
+  }
+
   @visibleForTesting
   static Future<bool> Function(String userId)? debugCredentialValidatorOverride;
 
@@ -169,7 +198,7 @@ class ApiService {
   @visibleForTesting
   static String get startupLastLogsKey => _startupLastLogsKey;
 
-  /// 鑾峰彇闆ㄨ鍫傛湇鍔″櫒瀵瑰簲鐨?baseUrl
+  /// 获取雨课堂服务器对应 baseUrl
   static const _serverBaseUrlMap = {
     RainClassroomServerType.yuketang: 'https://www.yuketang.cn',
     RainClassroomServerType.pro: 'https://pro.yuketang.cn',
@@ -199,6 +228,7 @@ class ApiService {
       'timestamp': DateTime.now().toIso8601String(),
       'platform': _consolePlatformCommon,
       'message': line,
+      ..._classifyLog(_consolePlatformCommon, line),
     });
     if (_consoleLogs.length > _maxConsoleLogLines) {
       final overflow = _consoleLogs.length - _maxConsoleLogLines;
@@ -224,12 +254,16 @@ class ApiService {
       platform = _consolePlatformTronclass;
     } else if (tag.contains(_consolePlatformKetangpai) || tag == 'ketangpai') {
       platform = _consolePlatformKetangpai;
+    } else if (tag.contains(_consolePlatformOpenList) || tag == 'openlist') {
+      platform = _consolePlatformOpenList;
     }
 
+    final line = '[$hh:$mm:$ss] [$tag] $message';
     _consoleLogs.add({
       'timestamp': now.toIso8601String(),
       'platform': platform,
-      'message': '[$hh:$mm:$ss] [$tag] $message',
+      'message': line,
+      ..._classifyLog(platform, line),
     });
 
     if (_consoleLogs.length > _maxConsoleLogLines) {
@@ -263,6 +297,131 @@ class ApiService {
     return List<Map<String, String>>.unmodifiable(
       _consoleLogs.where((log) => log['platform'] == platform).toList(),
     );
+  }
+
+  static Map<String, int> getConsoleHealthSummary({String? platform}) {
+    final logs = getConsoleLogs(platform: platform);
+    var failures = 0;
+    var warnings = 0;
+    var retryable = 0;
+    var cacheHits = 0;
+    var dedupeHits = 0;
+    var staleFallbacks = 0;
+    for (final log in logs) {
+      switch (log['level']) {
+        case 'error':
+          failures++;
+        case 'warning':
+          warnings++;
+      }
+      if (log['retryable'] == 'true') {
+        retryable++;
+      }
+      if (log['fromCache'] == 'true') {
+        cacheHits++;
+      }
+      if (log['dedupeHit'] == 'true') {
+        dedupeHits++;
+      }
+      if ((log['staleReason'] ?? '').isNotEmpty) {
+        staleFallbacks++;
+      }
+    }
+    return <String, int>{
+      'total': logs.length,
+      'failures': failures,
+      'warnings': warnings,
+      'retryable': retryable,
+      'cacheHits': cacheHits,
+      'dedupeHits': dedupeHits,
+      'staleFallbacks': staleFallbacks,
+    };
+  }
+
+  static String sanitizeConsoleLogText(String value) {
+    var text = value;
+    text = text.replaceAllMapped(
+      RegExp(
+        r'(token|cookie|sessionId|authorization)=?[^\s,;]+',
+        caseSensitive: false,
+      ),
+      (match) => '${match.group(1)}=<redacted>',
+    );
+    text = text.replaceAllMapped(
+      RegExp(r'(password|pwd|audit[_-]?key)=?[^\s,;]+', caseSensitive: false),
+      (match) => '${match.group(1)}=<redacted>',
+    );
+    text = text.replaceAll(
+      RegExp(r'\b10(?:\.\d{1,3}){3}(?::\d{2,5})?\b'),
+      '<private-host>',
+    );
+    text = text.replaceAll(RegExp(r'\b(?:\d{8,12})\b'), '<id>');
+    return text;
+  }
+
+  static Map<String, String> _classifyLog(String platform, String message) {
+    final lower = message.toLowerCase();
+    var level = 'info';
+    if (lower.contains('failed') ||
+        lower.contains('error') ||
+        lower.contains('exception') ||
+        lower.contains('timeout') ||
+        lower.contains('失败') ||
+        lower.contains('错误') ||
+        lower.contains('不可达')) {
+      level = 'error';
+    } else if (lower.contains('retry') ||
+        lower.contains('fallback') ||
+        lower.contains('warning') ||
+        lower.contains('重试') ||
+        lower.contains('降级')) {
+      level = 'warning';
+    }
+    final retryable =
+        lower.contains('timeout') ||
+        lower.contains('connection') ||
+        lower.contains('retry') ||
+        lower.contains('超时') ||
+        lower.contains('网络') ||
+        lower.contains('不可达');
+    return <String, String>{
+      'level': level,
+      'operation': _inferOperation(message),
+      'retryable': '$retryable',
+      'result': level == 'error' ? 'failed' : 'ok',
+      ..._extractPlatformRequestMeta(message),
+    };
+  }
+
+  static Map<String, String> _extractPlatformRequestMeta(String message) {
+    final meta = <String, String>{};
+    for (final key in const <String>[
+      'operationId',
+      'cachePolicy',
+      'fromCache',
+      'dedupeHit',
+      'failureCategory',
+      'staleReason',
+    ]) {
+      final match = RegExp('$key=([^\\s]+)').firstMatch(message);
+      if (match != null) {
+        meta[key] = match.group(1) ?? '';
+      }
+    }
+    return meta;
+  }
+
+  static String _inferOperation(String message) {
+    final lower = message.toLowerCase();
+    if (lower.contains('login') || lower.contains('登录')) return 'login';
+    if (lower.contains('upload') || lower.contains('上传')) return 'upload';
+    if (lower.contains('download') || lower.contains('下载')) {
+      return 'download';
+    }
+    if (lower.contains('list') || lower.contains('拉课')) return 'list';
+    if (lower.contains('audit') || lower.contains('审计')) return 'audit';
+    if (lower.contains('offline') || lower.contains('离线')) return 'offline';
+    return 'request';
   }
 
   static void clearConsoleLogs() {
@@ -390,38 +549,28 @@ class ApiService {
       if (PlatformManager().isChaoxing) {
         _dio.options.baseUrl = 'https://www.chaoxing.com';
         _dio.options.headers = HeadersManager.chaoxingHeaders;
-        debugPrint(
-          '[ApiService] 鍒囨崲鍒板涔犻€氾紝baseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
-        );
+        debugPrint('[ApiService] 切换到学习通，baseUrl已更新为 ${_dio.options.baseUrl}');
       } else if (PlatformManager().isRainClassroom) {
         _dio.options.baseUrl =
             _serverBaseUrlMap[PlatformManager().currentServer]!;
         _dio.options.headers = HeadersManager.rainClassroomHeaders;
-        debugPrint(
-          '[ApiService] 鍒囨崲鍒伴洦璇惧爞锛宐aseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
-        );
+        debugPrint('[ApiService] 切换到雨课堂，baseUrl已更新为 ${_dio.options.baseUrl}');
       } else if (PlatformManager().isTronclass) {
         _dio.options.baseUrl = PlatformManager().tronclassBaseUrl;
         _dio.options.headers = HeadersManager.tronclassHeaders;
-        debugPrint(
-          '[ApiService] 鍒囨崲鍒扮晠璇撅紝baseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
-        );
+        debugPrint('[ApiService] 切换到畅课，baseUrl已更新为 ${_dio.options.baseUrl}');
       } else if (PlatformManager().isKetangpai) {
         _dio.options.baseUrl = PlatformManager().ketangpaiBaseUrl;
         _dio.options.headers = HeadersManager.ketangpaiHeaders;
-        debugPrint(
-          '[ApiService] 鍒囨崲鍒拌鍫傛淳锛宐aseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
-        );
+        debugPrint('[ApiService] 切换到课堂派，baseUrl已更新为 ${_dio.options.baseUrl}');
       } else if (PlatformManager().isWeizhuojiao) {
         _dio.options.baseUrl = 'https://v18.teachermate.cn';
         _dio.options.headers = HeadersManager._wzjHeaders;
-        debugPrint(
-          '[ApiService] 鍒囨崲鍒板井鍔╂暀锛宐aseUrl宸叉洿鏂颁负 ${_dio.options.baseUrl}',
-        );
+        debugPrint('[ApiService] 切换到微助教，baseUrl已更新为 ${_dio.options.baseUrl}');
       }
       appendExternalConsoleLog(
         'ApiService',
-        '骞冲彴鍒囨崲瀹屾垚: platform=$platform baseUrl=${_dio.options.baseUrl}',
+        '平台切换完成: platform=$platform baseUrl=${_dio.options.baseUrl}',
       );
     };
   }
@@ -452,12 +601,13 @@ class ApiService {
     );
 
     /*
-    // 鍒濆鍖栧钩鍙板彉鍖栧洖璋?    (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+    // 初始化平台变化回调。
       final client = HttpClient();
       client.userAgent = HeadersManager._cxUserAgent;
       return client;
-    }; // dio 鑷姩閲嶅畾鍚戜細浣跨敤榛樿鐨?User-Agent
-    // 浼间箮鏃犳硶鍦ㄥ垵濮嬪寲缁撴潫鍚庤繘琛屾洿鏀?     */
+    }; // dio 自动重定向会使用默认 User-Agent
+    // 因此这里保留自定义 header 配置。
+    */
     _setupPlatformChangeCallback();
 
     _dio.interceptors.add(CookieInterceptor());
@@ -486,17 +636,20 @@ class ApiService {
     _strictSecurityMode = AppSettings.strictSecurityModeNotifier.value;
   }
 
-  /// 鍙戦€?HTTP 璇锋眰
+  /// 发送 HTTP 请求
   static Future<Response<dynamic>> sendRequest(
     String url, {
     String method = 'GET',
     Map<String, String>? params,
     Map<String, String>? headers,
+    Map<String, String>? legacyHeaders,
     dynamic body,
     ResponseType responseType = ResponseType.json,
     bool allowRedirects = true,
     bool skipCredentialValidation = false,
     LoginContext? loginContext,
+    SignRequestProfile? signProfile,
+    PlatformRequestOptions? platformOptions,
   }) async {
     // Validate credential before request (skip during login)
     if (!skipCredentialValidation && !CookieManager.isLoggingIn) {
@@ -509,34 +662,16 @@ class ApiService {
         if (!isValid) {
           final user = AccountManager.getAccountById(currentUserId);
           if (user != null) {
-            appendExternalConsoleLog(user.platform, '鍑瘉楠岃瘉澶辫触锛岃閲嶆柊鐧诲綍');
+            appendExternalConsoleLog(user.platform, '凭证验证失败，请重新登录');
           }
         }
       }
     }
 
-    final debugOverride = debugSendRequestOverride;
-    if (debugOverride != null) {
-      return debugOverride(
-        url,
-        method: method,
-        params: params,
-        headers: headers,
-        body: body,
-        responseType: responseType,
-        allowRedirects: allowRedirects,
-        skipCredentialValidation: skipCredentialValidation,
-      );
+    final extra = <String, dynamic>{};
+    if (loginContext != null) {
+      extra['loginContext'] = loginContext;
     }
-
-    final options = Options(
-      method: method,
-      headers: headers,
-      responseType: responseType,
-      extra: {
-        if (loginContext != null) 'loginContext': loginContext,
-      },
-    );
 
     final isAbsoluteUrl =
         url.startsWith('http://') || url.startsWith('https://');
@@ -553,14 +688,113 @@ class ApiService {
           'fullUrl=$fullUrl',
     );
 
-    var response = await _requestWithRetry(
-      url,
-      queryParameters: params,
+    final debugOverride = debugSendRequestOverride;
+    final operation = '${method.toUpperCase()} $url';
+    final platformName = PlatformManager().currentPlatformName;
+    final userId = AccountManager.currentSessionId ?? '';
+    final shouldUseStableRequest = PlatformRequestStability.shouldHandle(
+      method: method,
+      options: platformOptions,
+    );
+    var stableFromCache = false;
+    var stableDedupeHit = false;
+    String? stableStaleReason;
+    var functionalProfileName = '';
+    var functionalHeaderCount = 0;
+    final signContext = signProfile == null
+        ? null
+        : SignRequestContext(
+            platform: PlatformManager().currentPlatform,
+            url: fullUrl,
+            method: method,
+            baseUrl: _dio.options.baseUrl.isEmpty ? null : _dio.options.baseUrl,
+            referer: _headerValue(headers, 'Referer'),
+            contentKind: SignRequestContext.inferContentKind(
+              method: method,
+              body: body,
+              headers: headers,
+            ),
+            csrfTokenHint:
+                _headerValue(headers, 'X-CSRFToken') ??
+                _headerValue(headers, 'x-csrftoken'),
+          );
+    final functionalContext = _buildFunctionalContext(
+      platform: PlatformManager().currentPlatform,
+      url: fullUrl,
+      method: method,
+      baseUrl: _dio.options.baseUrl.isEmpty ? null : _dio.options.baseUrl,
+      headers: headers,
       body: body,
-      options: options,
+    );
+    var response = await SignRequestExecutor.run(
+      profile: signProfile,
+      headers: _mergeFunctionalHeaders(
+        headers: headers,
+        signProfile: signProfile,
+        platform: PlatformManager().currentPlatform,
+        platformOptions: platformOptions,
+        context: functionalContext,
+        onApplied: (profileName, headerCount) {
+          functionalProfileName = profileName;
+          functionalHeaderCount = headerCount;
+        },
+      ),
+      legacyHeaders: legacyHeaders,
+      operation: operation,
+      context: signContext,
+      logSink: appendExternalConsoleLog,
+      send: (effectiveHeaders) async {
+        Future<Response<dynamic>> network(CancelToken? cancelToken) async {
+          if (debugOverride != null) {
+            return debugOverride(
+              url,
+              method: method,
+              params: params,
+              headers: effectiveHeaders,
+              body: body,
+              responseType: responseType,
+              allowRedirects: allowRedirects,
+              skipCredentialValidation: skipCredentialValidation,
+            );
+          }
+
+          final options = Options(
+            method: method,
+            headers: effectiveHeaders,
+            responseType: responseType,
+            extra: extra,
+          );
+
+          return _requestWithRetry(
+            url,
+            queryParameters: params,
+            body: body,
+            options: options,
+            cancelToken: cancelToken,
+          );
+        }
+
+        if (shouldUseStableRequest) {
+          final stableResult = await PlatformRequestStability.execute(
+            platform: platformName,
+            userId: userId,
+            url: fullUrl,
+            method: method,
+            params: params,
+            options: platformOptions!,
+            network: network,
+          );
+          stableFromCache = stableResult.fromCache;
+          stableDedupeHit = stableResult.dedupeHit;
+          stableStaleReason = stableResult.staleReason;
+          return stableResult.response;
+        }
+
+        return network(null);
+      },
     );
 
-    if (allowRedirects) {
+    if (allowRedirects && debugOverride == null) {
       int redirectCount = 0;
       const maxRedirects = 10;
       final visitedUrls = <String>{response.requestOptions.uri.toString()};
@@ -596,32 +830,153 @@ class ApiService {
         }
         visitedUrls.add(locationUrl);
 
+        final redirectHeaders = response.requestOptions.headers.map(
+          (key, value) => MapEntry(key, value?.toString() ?? ''),
+        );
         response = await _requestWithRetry(
           locationUrl,
           options: Options(
             method: 'GET',
-            headers: options.headers,
-            responseType: options.responseType,
-            extra: options.extra,
+            headers: redirectHeaders,
+            responseType: responseType,
+            extra: extra,
           ),
         );
         redirectCount++;
       }
     }
 
-    if (options.responseType == ResponseType.json) {
+    if (responseType == ResponseType.json) {
       if (response.data is String) {
         response.data = jsonDecode(response.data);
       }
-    } // dio 鐨?json 瑙ｆ瀽鏈夐棶棰?
+    } // dio 对 json 解析有兼容问题
     _logRequest(
       'response',
       url,
       extra:
-          'status=${response.statusCode} uri=${response.requestOptions.uri} ${_responseSummary(response.data)}',
+          'status=${response.statusCode} uri=${response.requestOptions.uri} '
+          '${_platformOptionsLog(platformName, userId, platformOptions, stableFromCache, stableDedupeHit, stableStaleReason)} '
+          '${_functionalProfileLog(functionalProfileName, functionalHeaderCount)} '
+          '${_responseSummary(response.data)}',
     );
 
     return response;
+  }
+
+  static PlatformFunctionalRequestContext _buildFunctionalContext({
+    required PlatformType platform,
+    required String url,
+    required String method,
+    required String? baseUrl,
+    required Map<String, String>? headers,
+    required dynamic body,
+  }) {
+    return PlatformFunctionalRequestContext(
+      platform: platform,
+      url: url,
+      method: method,
+      baseUrl: baseUrl,
+      referer: _headerValue(headers, 'Referer'),
+      contentKind: PlatformFunctionalRequestContext.inferContentKind(
+        method: method,
+        body: body,
+        headers: headers,
+      ),
+    );
+  }
+
+  static Map<String, String>? _mergeFunctionalHeaders({
+    required Map<String, String>? headers,
+    required SignRequestProfile? signProfile,
+    required PlatformType platform,
+    required PlatformRequestOptions? platformOptions,
+    required PlatformFunctionalRequestContext context,
+    required void Function(String profileName, int headerCount) onApplied,
+  }) {
+    if (!_shouldApplyFunctionalProfile(
+      method: context.method,
+      signProfile: signProfile,
+      platform: platform,
+      options: platformOptions,
+    )) {
+      return headers;
+    }
+    final profile = PlatformFunctionalRequestProfiles.forPlatform(platform);
+    final merged = profile.mergeHeaders(headers, context: context);
+    onApplied(profile.profileName, merged.length);
+    return merged;
+  }
+
+  static bool _shouldApplyFunctionalProfile({
+    required String method,
+    required SignRequestProfile? signProfile,
+    required PlatformType platform,
+    required PlatformRequestOptions? options,
+  }) {
+    if (signProfile != null || options == null) return false;
+    if (!options.functionalProfileEnabled) return false;
+    if (!_isFunctionalProfilePlatform(platform)) return false;
+    if (options.requestKind == PlatformRequestKind.read) return true;
+    return method.toUpperCase() == 'GET' &&
+        options.cachePolicy != PlatformRequestCachePolicy.networkOnly &&
+        options.requestKind == null;
+  }
+
+  static bool _isFunctionalProfilePlatform(PlatformType platform) {
+    return platform == PlatformType.chaoxing ||
+        platform == PlatformType.rainClassroom ||
+        platform == PlatformType.tronclass ||
+        platform == PlatformType.ketangpai;
+  }
+
+  static String _functionalProfileLog(String profileName, int headerCount) {
+    if (profileName.isEmpty) return '';
+    return 'functionalProfile=$profileName profileHeaders=$headerCount';
+  }
+
+  static String _platformOptionsLog(
+    String platform,
+    String userId,
+    PlatformRequestOptions? options,
+    bool fromCache,
+    bool dedupeHit,
+    String? staleReason,
+  ) {
+    if (options == null) return '';
+    final parts = <String>[
+      'operationId=${options.operationId}',
+      'cachePolicy=${options.cachePolicy.name}',
+      'fromCache=$fromCache',
+      'dedupeHit=$dedupeHit',
+    ];
+    if (staleReason != null && staleReason.isNotEmpty) {
+      parts.add('staleReason=$staleReason');
+      parts.add('failureCategory=$staleReason');
+    }
+    final throttleState = PlatformRequestStability.throttle.stateFor(
+      platform: platform,
+      userId: userId,
+    );
+    parts.add('queueWaitMs=${throttleState.lastQueueWaitMs}');
+    if (throttleState.isDegraded) {
+      parts.add('throttle=serial');
+      if (throttleState.lastDegradeReason != null) {
+        parts.add('degradeReason=${throttleState.lastDegradeReason}');
+      }
+    }
+    return parts.join(' ');
+  }
+
+  static String? _headerValue(Map<String, String>? headers, String key) {
+    if (headers == null) return null;
+    final lowerKey = key.toLowerCase();
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() == lowerKey) {
+        return entry.value;
+      }
+    }
+    return null;
   }
 
   static Future<void> _throttleRequest(String url, String method) async {
@@ -694,6 +1049,7 @@ class ApiService {
     Map<String, String>? queryParameters,
     dynamic body,
     required Options options,
+    CancelToken? cancelToken,
   }) async {
     Response? lastResponse;
     Object? lastError;
@@ -722,6 +1078,7 @@ class ApiService {
           queryParameters: queryParameters,
           data: body,
           options: options,
+          cancelToken: cancelToken,
         );
 
         if (_shouldRetryByStatus(response.statusCode) &&
@@ -778,7 +1135,7 @@ class ApiService {
     await Future.delayed(Duration(milliseconds: baseMs + jitterMs));
   }
 
-  /// 灏嗗涔犻€氱殑Star3鍥剧墖杞崲涓篠tar4 鍑忓皯涓€娆￠噸瀹氬悜
+  /// 将学习通 Star3 图片地址转换为 Star4，减少重定向
   @visibleForTesting
   static void resetForTests() {
     _dio = Dio();
@@ -811,7 +1168,7 @@ class ApiService {
         }
       }
     } catch (e) {
-      debugPrint('URL杞崲澶辫触: $e');
+      debugPrint('URL转换失败: $e');
     }
     return url;
   }

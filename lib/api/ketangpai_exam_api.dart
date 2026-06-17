@@ -1,6 +1,6 @@
-import 'platform_request_context.dart';
+import 'ketangpai_service.dart';
+import '../models/ketangpai_exam.dart';
 import '../session/account.dart';
-import '../platform.dart';
 
 /// 课堂派考试 API
 class KetangpaiExamApi {
@@ -15,53 +15,32 @@ class KetangpaiExamApi {
       throw Exception('未登录，无法获取考试列表');
     }
 
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.ketangpai,
-      userId: userId,
-    );
-
     try {
-      final url = '/FutureV2/CourseMeans/getCourseContent';
-      final body = {
-        'courseid': courseId,
-        'contenttype': 6, // 6 = 测试/考试
-        'dirid': 0,
-        'lessonlink': [],
-        'sort': [],
-        'page': page,
-        'limit': limit,
-        'desc': 3,
-        'courserole': 0,
-        'vtr_type': '',
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-
-      final response = await context.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      final result = await KetangpaiService.getExamList(
+        courseId: courseId,
+        page: page,
+        limit: limit,
       );
-
-      if (response.data is Map<String, dynamic>) {
-        final status = response.data['status'];
-        if (status == 1) {
-          final data = response.data['data'];
-          if (data is Map<String, dynamic>) {
-            final list = data['list'];
-            if (list is List) {
-              return list
-                  .whereType<Map>()
-                  .map((e) => Map<String, dynamic>.from(e))
-                  .toList();
-            }
-          }
-        }
+      if (!result.success) {
+        return [];
       }
-
+      return result.data ?? const <Map<String, dynamic>>[];
+    } catch (_) {
       return [];
-    } finally {
-      context.dispose();
     }
+  }
+
+  static Future<List<KetangpaiExamSummary>> getExamSummariesTyped({
+    required String courseId,
+    int page = 1,
+    int limit = 50,
+  }) async {
+    final list = await getExamList(
+      courseId: courseId,
+      page: page,
+      limit: limit,
+    );
+    return list.map(KetangpaiExamSummary.fromJson).toList();
   }
 
   /// 获取考试详情
@@ -74,36 +53,30 @@ class KetangpaiExamApi {
       throw Exception('未登录，无法获取考试详情');
     }
 
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.ketangpai,
-      userId: userId,
-    );
-
     try {
-      final url = '/TestpaperApi/testpaperdetails';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': testPaperId,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-
-      final response = await context.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      final result = await KetangpaiService.getExamDetail(
+        courseId: courseId,
+        testPaperId: testPaperId,
       );
-
-      if (response.data is Map<String, dynamic>) {
-        final status = response.data['status'];
-        if (status == 1) {
-          return response.data['data'];
-        }
+      if (!result.success) {
+        return null;
       }
-
+      return result.data;
+    } catch (_) {
       return null;
-    } finally {
-      context.dispose();
     }
+  }
+
+  static Future<KetangpaiExamDetail?> getExamDetailTyped({
+    required String courseId,
+    required String testPaperId,
+  }) async {
+    final data = await getExamDetail(
+      courseId: courseId,
+      testPaperId: testPaperId,
+    );
+    if (data == null) return null;
+    return KetangpaiExamDetail.fromJson(data);
   }
 
   /// 获取考试题目列表
@@ -116,37 +89,30 @@ class KetangpaiExamApi {
       throw Exception('未登录，无法获取考试题目');
     }
 
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.ketangpai,
-      userId: userId,
-    );
-
     try {
-      final url = '/TestpaperApi/doSubjectList';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': testPaperId,
-        'testCode': 'undefined',
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-
-      final response = await context.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      final result = await KetangpaiService.getExamQuestions(
+        courseId: courseId,
+        testPaperId: testPaperId,
       );
-
-      if (response.data is Map<String, dynamic>) {
-        final status = response.data['status'];
-        if (status == 1) {
-          return response.data['data'];
-        }
+      if (!result.success) {
+        return null;
       }
-
+      return result.data;
+    } catch (_) {
       return null;
-    } finally {
-      context.dispose();
     }
+  }
+
+  static Future<KetangpaiExamPaper?> getExamQuestionsTyped({
+    required String courseId,
+    required String testPaperId,
+  }) async {
+    final data = await getExamQuestions(
+      courseId: courseId,
+      testPaperId: testPaperId,
+    );
+    if (data == null) return null;
+    return KetangpaiExamPaper.fromJson(data);
   }
 
   /// 保存答案
@@ -162,36 +128,17 @@ class KetangpaiExamApi {
       throw Exception('未登录，无法保存答案');
     }
 
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.ketangpai,
-      userId: userId,
-    );
-
     try {
-      final url = '/TestpaperApi/saveAnswer';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': testPaperId,
-        'subjectid': subjectId,
-        'answer': answer,
-        'attachment': attachment,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-
-      final response = await context.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      final result = await KetangpaiService.saveAnswer(
+        courseId: courseId,
+        testPaperId: testPaperId,
+        subjectId: subjectId,
+        answer: answer,
+        attachment: attachment,
       );
-
-      if (response.data is Map<String, dynamic>) {
-        final code = response.data['code'];
-        return code == 10000;
-      }
-
+      return result.success;
+    } catch (_) {
       return false;
-    } finally {
-      context.dispose();
     }
   }
 
@@ -205,58 +152,19 @@ class KetangpaiExamApi {
       throw Exception('未登录，无法提交试卷');
     }
 
-    final context = await PlatformRequestContext.create(
-      platform: PlatformType.ketangpai,
-      userId: userId,
-    );
-
     try {
-      final url = '/TestpaperApi/handup';
-      final body = {
-        'courseid': courseId,
-        'testpaperid': testPaperId,
-        'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-
-      final response = await context.sendRequest(
-        url,
-        method: 'POST',
-        body: body,
+      final result = await KetangpaiService.submitExam(
+        courseId: courseId,
+        testPaperId: testPaperId,
       );
-
-      if (response.data is Map<String, dynamic>) {
-        final code = response.data['code'];
-        final message = response.data['message']?.toString() ?? '';
-        return {
-          'success': code == 10000,
-          'message': message,
-        };
-      }
-
-      return {
-        'success': false,
-        'message': '提交失败',
-      };
-    } finally {
-      context.dispose();
+      return {'success': result.success, 'message': result.message};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
     }
   }
 
   /// 解析题目类型
   static String parseQuestionType(int type) {
-    switch (type) {
-      case 1:
-        return '单选题';
-      case 2:
-        return '多选题';
-      case 3:
-        return '判断题';
-      case 4:
-        return '填空题';
-      case 5:
-        return '简答题';
-      default:
-        return '未知题型';
-    }
+    return KetangpaiQuestionType.fromCode(type).label;
   }
 }

@@ -45,7 +45,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get anonymousChatSubtitle =>
-      'Nearby anonymous chat and file sharing powered by Nearby Connections';
+      'Nearby rooms using Google Nearby or BLE + Hotspot automatically';
 
   @override
   String get localTransferTitle => 'Local Transfer';

@@ -1,9 +1,10 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
-import '../api/chaoxing_chapter_api.dart';
-import '../api/course.dart';
+import '../core/async/app_async_view.dart';
+import '../features/courses/chaoxing/chaoxing_course_detail_controller.dart';
+import '../features/courses/chaoxing/chaoxing_course_detail_state.dart';
 import '../models/active.dart';
 import '../models/course.dart';
 import 'actives/evaluate.dart';
@@ -24,88 +25,19 @@ class ChaoxingCourseDetailPage extends StatefulWidget {
 }
 
 class _ChaoxingCourseDetailPageState extends State<ChaoxingCourseDetailPage> {
-  bool _loading = true;
-  List<Active> _activeList = const [];
-  List<Map<String, dynamic>> _chapters = const [];
-  List<Map<String, dynamic>> _unfinishedTasks = const [];
-
-  List<Map<String, dynamic>> _normalizeMapList(dynamic value) {
-    if (value is! List) {
-      return const [];
-    }
-    return value
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
-  }
+  late final ChaoxingCourseDetailController _controller;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _controller = ChaoxingCourseDetailController(course: widget.course);
+    _controller.load();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-    });
-
-    try {
-      final activeFuture = CXCourseApi.getActiveList(
-        widget.course.courseId,
-        widget.course.classId,
-        widget.course.cpi ?? '',
-      );
-      final chapterFuture = ChaoxingChapterApi.getChapterList(
-        widget.course.courseId,
-        widget.course.classId,
-      );
-      final taskFuture = ChaoxingChapterApi.getUnfinishedTasks(
-        widget.course.courseId,
-        widget.course.classId,
-        widget.course.cpi ?? '',
-      );
-
-      final results = await Future.wait([
-        activeFuture,
-        chapterFuture,
-        taskFuture,
-      ]);
-
-      if (!mounted) {
-        return;
-      }
-
-      final chapterData = results[1] as Map<String, dynamic>?;
-      setState(() {
-        _activeList = results[0] as List<Active>? ?? const [];
-        _chapters = _normalizeMapList(chapterData?['points']);
-        _unfinishedTasks = _normalizeMapList(results[2]);
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('加载课程详情失败: $e')));
-    }
-  }
-
-  List<Map<String, dynamic>> get _homeworks {
-    return _unfinishedTasks
-        .where((item) => item['type']?.toString() == 'work')
-        .toList();
-  }
-
-  List<Map<String, dynamic>> _tasksForChapter(String chapterId) {
-    return _unfinishedTasks
-        .where((item) => item['chapterId']?.toString() == chapterId)
-        .toList();
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   String _taskTypeLabel(String type) {
@@ -232,7 +164,7 @@ class _ChaoxingCourseDetailPageState extends State<ChaoxingCourseDetailPage> {
     }
   }
 
-  Widget _buildSummaryCard() {
+  Widget _buildSummaryCard(ChaoxingCourseDetailState state) {
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       child: Padding(
@@ -240,10 +172,10 @@ class _ChaoxingCourseDetailPageState extends State<ChaoxingCourseDetailPage> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _summaryItem('活动', _activeList.length),
-            _summaryItem('章节', _chapters.length),
-            _summaryItem('任务', _unfinishedTasks.length),
-            _summaryItem('作业', _homeworks.length),
+            _summaryItem('活动', state.activities.length),
+            _summaryItem('章节', state.chapters.length),
+            _summaryItem('任务', state.unfinishedTasks.length),
+            _summaryItem('作业', state.homeworks.length),
           ],
         ),
       ),
@@ -264,16 +196,16 @@ class _ChaoxingCourseDetailPageState extends State<ChaoxingCourseDetailPage> {
     );
   }
 
-  Widget _buildActivitiesTab() {
-    if (_activeList.isEmpty) {
+  Widget _buildActivitiesTab(ChaoxingCourseDetailState state) {
+    if (state.activities.isEmpty) {
       return const Center(child: Text('暂无活动'));
     }
 
     return ListView.separated(
       padding: const EdgeInsets.all(12),
-      itemCount: _activeList.length,
+      itemCount: state.activities.length,
       itemBuilder: (context, index) {
-        final active = _activeList[index];
+        final active = state.activities[index];
         return Card(
           child: ListTile(
             leading: Icon(
@@ -293,18 +225,18 @@ class _ChaoxingCourseDetailPageState extends State<ChaoxingCourseDetailPage> {
     );
   }
 
-  Widget _buildChaptersTab() {
-    if (_chapters.isEmpty) {
+  Widget _buildChaptersTab(ChaoxingCourseDetailState state) {
+    if (state.chapters.isEmpty) {
       return const Center(child: Text('暂无章节数据'));
     }
 
     return ListView.builder(
       padding: const EdgeInsets.all(12),
-      itemCount: _chapters.length,
+      itemCount: state.chapters.length,
       itemBuilder: (context, index) {
-        final chapter = _chapters[index];
+        final chapter = state.chapters[index];
         final chapterId = chapter['id']?.toString() ?? '';
-        final chapterTasks = _tasksForChapter(chapterId);
+        final chapterTasks = state.tasksForChapter(chapterId);
         return Card(
           child: ExpansionTile(
             title: Text(chapter['title']?.toString() ?? '未命名章节'),
@@ -365,16 +297,17 @@ class _ChaoxingCourseDetailPageState extends State<ChaoxingCourseDetailPage> {
     );
   }
 
-  Widget _buildHomeworkTab() {
-    if (_homeworks.isEmpty) {
+  Widget _buildHomeworkTab(ChaoxingCourseDetailState state) {
+    final homeworks = state.homeworks;
+    if (homeworks.isEmpty) {
       return const Center(child: Text('暂无未完成作业'));
     }
 
     return ListView.separated(
       padding: const EdgeInsets.all(12),
-      itemCount: _homeworks.length,
+      itemCount: homeworks.length,
       itemBuilder: (context, index) {
-        final homework = _homeworks[index];
+        final homework = homeworks[index];
         return Card(
           child: ListTile(
             leading: const Icon(Icons.assignment_outlined),
@@ -409,22 +342,45 @@ class _ChaoxingCourseDetailPageState extends State<ChaoxingCourseDetailPage> {
             ],
           ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : Column(
-                children: [
-                  _buildSummaryCard(),
-                  Expanded(
-                    child: TabBarView(
+        body: ListenableBuilder(
+          listenable: _controller,
+          builder: (context, _) {
+            return AppAsyncView<ChaoxingCourseDetailState>(
+              state: _controller.state,
+              emptyTitle: '暂无课程详情',
+              errorTitle: '加载课程详情失败',
+              onRetry: () => _controller.load(),
+              onRefresh: _controller.refresh,
+              dataBuilder: (context, state, isRefreshing) {
+                return Stack(
+                  children: [
+                    Column(
                       children: [
-                        _buildActivitiesTab(),
-                        _buildChaptersTab(),
-                        _buildHomeworkTab(),
+                        _buildSummaryCard(state),
+                        Expanded(
+                          child: TabBarView(
+                            children: [
+                              _buildActivitiesTab(state),
+                              _buildChaptersTab(state),
+                              _buildHomeworkTab(state),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
-                  ),
-                ],
-              ),
+                    if (isRefreshing)
+                      const Positioned(
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        child: LinearProgressIndicator(),
+                      ),
+                  ],
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }

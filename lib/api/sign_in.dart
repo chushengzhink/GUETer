@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 
 import 'api_service.dart';
+import 'sign_request_profile.dart';
 import '../utils/encrypt.dart';
 import '../models/user.dart';
 import '../session/account.dart';
@@ -133,7 +134,14 @@ class SignInApi{
       final cookieStr = await _getUserCookie(user.uid) ?? '';
       final headers = {'Cookie': cookieStr};
 
-      final response = await ApiService.sendRequest(_signUrl, params: params, headers: headers, responseType: ResponseType.plain);
+      final response = await ApiService.sendRequest(
+        _signUrl,
+        params: params,
+        headers: headers,
+        legacyHeaders: headers,
+        responseType: ResponseType.plain,
+        signProfile: SignRequestProfiles.chaoxingMobileLearn(),
+      );
       return response.data;
     } catch (e) {
       debugPrint('normalSign error: $e');
@@ -188,7 +196,14 @@ class SignInApi{
       final cookieStr = await _getUserCookie(user.uid) ?? '';
       final headers = {'Cookie': cookieStr};
 
-      final response = await ApiService.sendRequest(_signUrl, params: params, headers: headers, responseType: ResponseType.plain);
+      final response = await ApiService.sendRequest(
+        _signUrl,
+        params: params,
+        headers: headers,
+        legacyHeaders: headers,
+        responseType: ResponseType.plain,
+        signProfile: SignRequestProfiles.chaoxingMobileLearn(),
+      );
       return response.data;
     } catch (e) {
       debugPrint('codeSign error: $e');
@@ -254,7 +269,14 @@ class SignInApi{
       final cookieStr = await _getUserCookie(user.uid) ?? '';
       final headers = {'Cookie': cookieStr};
 
-      final response = await ApiService.sendRequest(_signUrl, params: params, headers: headers, responseType: ResponseType.plain);
+      final response = await ApiService.sendRequest(
+        _signUrl,
+        params: params,
+        headers: headers,
+        legacyHeaders: headers,
+        responseType: ResponseType.plain,
+        signProfile: SignRequestProfiles.chaoxingMobileLearn(),
+      );
       return response.data;
     } catch (e) {
       debugPrint('locationSign error: $e');
@@ -326,7 +348,14 @@ class SignInApi{
       final cookieStr = await _getUserCookie(user.uid) ?? '';
       final headers = {'Cookie': cookieStr};
 
-      final response = await ApiService.sendRequest(_signUrl, params: params, headers: headers, responseType: ResponseType.plain);
+      final response = await ApiService.sendRequest(
+        _signUrl,
+        params: params,
+        headers: headers,
+        legacyHeaders: headers,
+        responseType: ResponseType.plain,
+        signProfile: SignRequestProfiles.chaoxingMobileLearn(),
+      );
       return response.data;
     } catch (e) {
       debugPrint('qrCodeSign error: $e');

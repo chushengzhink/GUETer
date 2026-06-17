@@ -167,7 +167,7 @@ abstract class AppLocalizations {
   /// No description provided for @anonymousChatSubtitle.
   ///
   /// In en, this message translates to:
-  /// **'Nearby anonymous chat and file sharing powered by Nearby Connections'**
+  /// **'Nearby rooms using Google Nearby or BLE + Hotspot automatically'**
   String get anonymousChatSubtitle;
 
   /// No description provided for @localTransferTitle.

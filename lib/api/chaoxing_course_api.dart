@@ -1,6 +1,23 @@
 import 'package:dio/dio.dart';
 import '../platform.dart';
 import 'platform_request_context.dart';
+import 'platform_request_stability.dart';
+
+const _courseListStableOptions = PlatformRequestOptions(
+  operationId: 'chaoxing.course.list',
+  cachePolicy: PlatformRequestCachePolicy.staleIfError,
+  requestKind: PlatformRequestKind.read,
+  allowControlledParallelism: true,
+);
+
+PlatformRequestOptions _courseStableOptions(String operationId) {
+  return PlatformRequestOptions(
+    operationId: operationId,
+    cachePolicy: PlatformRequestCachePolicy.staleIfError,
+    requestKind: PlatformRequestKind.read,
+    allowControlledParallelism: true,
+  );
+}
 
 /// 学习通课程 API（基于 HAR 抓包重建）
 class ChaoxingCourseApi {
@@ -16,12 +33,9 @@ class ChaoxingCourseApi {
       final response = await context.sendRequest(
         'https://mooc1-api.chaoxing.com/mycourse/backclazzdata',
         method: 'GET',
-        params: {
-          'view': 'json',
-          'getTchClazzType': '1',
-          'mcode': '',
-        },
+        params: {'view': 'json', 'getTchClazzType': '1', 'mcode': ''},
         responseType: ResponseType.json,
+        platformOptions: _courseListStableOptions,
       );
 
       if (response.statusCode == 200 && response.data is Map) {
@@ -47,7 +61,8 @@ class ChaoxingCourseApi {
     );
 
     try {
-      final fields = 'id,bbsid,classscore,isstart,allowdownload,chatid,name,state,isfiled,visiblescore,hideclazz,begindate,forbidintoclazz,'
+      final fields =
+          'id,bbsid,classscore,isstart,allowdownload,chatid,name,state,isfiled,visiblescore,hideclazz,begindate,forbidintoclazz,'
           'coursesetting.fields(id,courseid,hiddencoursecover,coursefacecheck),'
           'course.fields(id,belongschoolid,name,infocontent,objectid,app,appinfo,bulletformat,mappingcourseid,imageurl,teacherfactor,jobcount,'
           'knowledge.fields(id,name,indexOrder,parentnodeid,status,isReview,layer,label,jobcount,begintime,endtime,clickcount,finishcount,openlock,unfinishcount,newchapterrule,'
@@ -63,6 +78,7 @@ class ChaoxingCourseApi {
           'view': 'json',
         },
         responseType: ResponseType.json,
+        platformOptions: _courseStableOptions('chaoxing.course.detail'),
       );
 
       if (response.statusCode == 200 && response.data is Map) {
@@ -92,12 +108,11 @@ class ChaoxingCourseApi {
       final response = await context.sendRequest(
         'https://mooc1-api.chaoxing.com/api/workexam/redpoint',
         method: 'GET',
-        params: {
-          'courseId': courseId,
-          'classId': classId,
-          'cpi': cpi,
-        },
+        params: {'courseId': courseId, 'classId': classId, 'cpi': cpi},
         responseType: ResponseType.json,
+        platformOptions: _courseStableOptions(
+          'chaoxing.course.work_exam_redpoint',
+        ),
       );
 
       if (response.statusCode == 200 && response.data is Map) {
@@ -138,6 +153,7 @@ class ChaoxingCourseApi {
           'microTopicId': '',
         },
         responseType: ResponseType.json,
+        platformOptions: _courseStableOptions('chaoxing.course.materials'),
       );
 
       if (response.statusCode == 200 && response.data is Map) {
@@ -174,6 +190,7 @@ class ChaoxingCourseApi {
           'view': 'json',
         },
         responseType: ResponseType.json,
+        platformOptions: _courseStableOptions('chaoxing.course.analysis'),
       );
 
       if (response.statusCode == 200 && response.data is Map) {
@@ -203,12 +220,9 @@ class ChaoxingCourseApi {
       final response = await context.sendRequest(
         'https://mooc1-api.chaoxing.com/work/task-list',
         method: 'GET',
-        params: {
-          'courseId': courseId,
-          'classId': classId,
-          'cpi': cpi,
-        },
+        params: {'courseId': courseId, 'classId': classId, 'cpi': cpi},
         responseType: ResponseType.json,
+        platformOptions: _courseStableOptions('chaoxing.work.list'),
       );
 
       if (response.statusCode == 200 && response.data is Map) {
@@ -238,12 +252,9 @@ class ChaoxingCourseApi {
       final response = await context.sendRequest(
         'https://mooc1-api.chaoxing.com/exam-ans/exam/phone/task-list',
         method: 'GET',
-        params: {
-          'courseId': courseId,
-          'classId': classId,
-          'cpi': cpi,
-        },
+        params: {'courseId': courseId, 'classId': classId, 'cpi': cpi},
         responseType: ResponseType.json,
+        platformOptions: _courseStableOptions('chaoxing.exam.list'),
       );
 
       if (response.statusCode == 200 && response.data is Map) {
@@ -273,12 +284,9 @@ class ChaoxingCourseApi {
       final response = await context.sendRequest(
         'https://mooc1-api.chaoxing.com/mooc-ans/exam/phone/task-list',
         method: 'GET',
-        params: {
-          'courseId': courseId,
-          'classId': classId,
-          'cpi': cpi,
-        },
+        params: {'courseId': courseId, 'classId': classId, 'cpi': cpi},
         responseType: ResponseType.json,
+        platformOptions: _courseStableOptions('chaoxing.mooc_exam.list'),
       );
 
       if (response.statusCode == 200 && response.data is Map) {

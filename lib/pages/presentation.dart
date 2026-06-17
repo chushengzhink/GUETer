@@ -7,6 +7,7 @@ import 'dart:io' show WebSocket, File;
 
 import '../api/course.dart';
 import '../models/presentation.dart';
+import '../platform.dart';
 import '../session/account.dart';
 import '../session/sign_record_store.dart';
 
@@ -135,6 +136,7 @@ class _PresentationPageState extends State<PresentationPage> {
             }
             await signLogStore.append(
               platform: '雨课堂',
+              platformType: PlatformType.rainClassroom,
               courseName: widget.title,
               account: user.name,
               status: '失败',
@@ -149,6 +151,7 @@ class _PresentationPageState extends State<PresentationPage> {
             }
             await signLogStore.append(
               platform: '雨课堂',
+              platformType: PlatformType.rainClassroom,
               courseName: widget.title,
               account: user.name,
               status: '失败',
@@ -158,6 +161,7 @@ class _PresentationPageState extends State<PresentationPage> {
         } else {
           await signLogStore.append(
             platform: '雨课堂',
+            platformType: PlatformType.rainClassroom,
             courseName: widget.title,
             account: user.name,
             status: '成功',

@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'plugin_manifest.dart';
+import 'plugin_template.dart';
 
 class InvalidPluginManifest {
   const InvalidPluginManifest({
@@ -98,6 +99,30 @@ class PluginStore {
     await manifestFile.writeAsString(_exampleManifest);
     await scan();
     return PluginManifest.parse(_exampleManifest, baseDirectory: target.path);
+  }
+
+  Future<PluginManifest> createFromTemplate(PluginTemplate template) async {
+    final dir = await _baseDirectoryLoader();
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    final target = Directory(p.join(dir.path, template.directoryName));
+    if (!await target.exists()) {
+      await target.create(recursive: true);
+    }
+    final manifestFile = File(p.join(target.path, 'plugin.json'));
+    final readmeFile = File(p.join(target.path, 'README.md'));
+    await manifestFile.writeAsString(template.manifestJson());
+    await readmeFile.writeAsString(
+      template.readme.isEmpty
+          ? '# ${template.title}\n\n${template.description}\n'
+          : template.readme,
+    );
+    await scan();
+    return PluginManifest.parse(
+      template.manifestJson(),
+      baseDirectory: target.path,
+    );
   }
 
   Future<Set<String>> enabledPluginIds() async {

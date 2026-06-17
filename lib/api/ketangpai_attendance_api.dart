@@ -1,6 +1,15 @@
 import 'platform_request_context.dart';
+import 'platform_request_stability.dart';
 import '../session/account.dart';
 import '../platform.dart';
+
+PlatformRequestOptions _ketangpaiAttendanceReadOptions(String operationId) {
+  return PlatformRequestOptions(
+    operationId: operationId,
+    requestKind: PlatformRequestKind.read,
+    allowControlledParallelism: true,
+  );
+}
 
 /// 课堂派考勤统计 API
 class KetangpaiAttendanceApi {
@@ -28,6 +37,9 @@ class KetangpaiAttendanceApi {
         url,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiAttendanceReadOptions(
+          'ketangpai.attendance.stats',
+        ),
       );
 
       if (response.data is Map<String, dynamic>) {
@@ -86,6 +98,9 @@ class KetangpaiAttendanceApi {
         url,
         method: 'POST',
         body: body,
+        platformOptions: _ketangpaiAttendanceReadOptions(
+          'ketangpai.attendance.history',
+        ),
       );
 
       if (response.data is Map<String, dynamic>) {

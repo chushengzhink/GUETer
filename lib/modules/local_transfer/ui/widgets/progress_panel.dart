@@ -90,6 +90,16 @@ class ProgressPanel extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 8),
+                    if (session.sourceLabel?.trim().isNotEmpty == true) ...[
+                      Text(
+                        '来源：${session.sourceLabel}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     if (session.message != null) ...<Widget>[
                       Text(
                         session.message!,

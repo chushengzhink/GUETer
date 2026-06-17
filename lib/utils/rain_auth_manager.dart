@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api/login.dart';
 import '../api/api_service.dart';
-import '../models/user.dart';
-import '../session/account.dart';
 import '../session/cookie.dart';
-import '../platform.dart';
 import 'dart:io';
 
 /// 雨课堂认证管理器
@@ -61,8 +58,9 @@ class RainAuthManager {
   /// 从页面或响应中提取 CSRF token
   static Future<String?> extractCsrfToken() async {
     try {
-      final jar = CookieManager.getTempCookieJar() ??
-                  CookieManager.getCurrentUserCookieJar();
+      final jar =
+          CookieManager.getTempCookieJar() ??
+          CookieManager.getCurrentUserCookieJar();
       if (jar == null) return null;
 
       // 从主域名获取 csrftoken cookie
@@ -71,7 +69,9 @@ class RainAuthManager {
 
       for (final cookie in cookies) {
         if (cookie.name == 'csrftoken') {
-          debugPrint('[RainAuthManager] 提取到 CSRF token: ${cookie.value.substring(0, 10)}...');
+          debugPrint(
+            '[RainAuthManager] 提取到 CSRF token: ${cookie.value.substring(0, 10)}...',
+          );
           return cookie.value;
         }
       }
@@ -93,8 +93,9 @@ class RainAuthManager {
         return;
       }
 
-      final jar = CookieManager.getTempCookieJar() ??
-                  CookieManager.getCurrentUserCookieJar();
+      final jar =
+          CookieManager.getTempCookieJar() ??
+          CookieManager.getCurrentUserCookieJar();
       if (jar == null) return;
 
       // 需要同步 CSRF token 的域名
@@ -134,10 +135,8 @@ class RainAuthManager {
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => _AuthExpiredDialog(
-        message: message,
-        onLoginSuccess: onLoginSuccess,
-      ),
+      builder: (context) =>
+          _AuthExpiredDialog(message: message, onLoginSuccess: onLoginSuccess),
     );
 
     return result ?? false;
@@ -152,10 +151,7 @@ class RainAuthManager {
       final result = await Navigator.pushNamed(
         context,
         '/login',
-        arguments: {
-          'platform': 'rainClassroom',
-          'auto_return': true,
-        },
+        arguments: {'platform': 'rainClassroom', 'auto_return': true},
       );
 
       if (result == true) {
@@ -177,8 +173,9 @@ class RainAuthManager {
   /// 同步多域名Cookie并主动授权（yuketang.cn, pro.yuketang.cn, examination.xuetangx.com）
   static Future<bool> syncMultiDomainCookies() async {
     try {
-      final jar = CookieManager.getTempCookieJar() ??
-                  CookieManager.getCurrentUserCookieJar();
+      final jar =
+          CookieManager.getTempCookieJar() ??
+          CookieManager.getCurrentUserCookieJar();
       if (jar == null) {
         debugPrint('[RainAuthManager] Cookie jar 不可用');
         return false;
@@ -248,7 +245,9 @@ class RainAuthManager {
         }
       }
 
-      debugPrint('[RainAuthManager] pro.yuketang.cn 认证激活失败: ${response.statusCode}');
+      debugPrint(
+        '[RainAuthManager] pro.yuketang.cn 认证激活失败: ${response.statusCode}',
+      );
       return false;
     } catch (e) {
       debugPrint('[RainAuthManager] pro.yuketang.cn 认证激活异常: $e');
@@ -288,10 +287,7 @@ class _AuthExpiredDialog extends StatefulWidget {
   final String? message;
   final VoidCallback? onLoginSuccess;
 
-  const _AuthExpiredDialog({
-    this.message,
-    this.onLoginSuccess,
-  });
+  const _AuthExpiredDialog({this.message, this.onLoginSuccess});
 
   @override
   State<_AuthExpiredDialog> createState() => _AuthExpiredDialogState();

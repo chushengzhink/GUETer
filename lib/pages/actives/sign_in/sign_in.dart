@@ -6,7 +6,13 @@ import '../../../api/chaoxing_sign_api.dart';
 import '../../../api/api_service.dart';
 import '../../../models/user.dart';
 import '../../../models/active.dart';
+import '../../../platform.dart';
 import '../../../session/account.dart';
+import '../../../session/sign_record_store.dart';
+import '../../../services/sign_network_gate.dart';
+import '../../../services/sign_platform_context.dart';
+import '../../../services/sign_run_console.dart';
+import '../../../widgets/sign_run_console_panel.dart';
 import '../../../setting/course_setting.dart';
 import '../../widget/accounts_selector.dart';
 import '../../widget/captcha.dart';
@@ -77,7 +83,11 @@ abstract class SignStrategy {
   );
 
   /// 为单个账号执行签到（批量签到使用）
-  Future<String?> signForAccount(User user, SignParams params, SignInPageState state);
+  Future<String?> signForAccount(
+    User user,
+    SignParams params,
+    SignInPageState state,
+  );
 }
 
 class SignStrategyFactory {
@@ -120,9 +130,14 @@ class SignInPage extends StatefulWidget {
 }
 
 class SignInPageState extends State<SignInPage> {
+  static const String _networkSkippedResultPrefix = '__network_skipped__:';
+
   // 签到策略
   SignStrategy? _currentStrategy;
   late SignParams _signParams;
+  final SignRunConsoleController _consoleController = SignRunConsoleController(
+    platformContext: SignPlatformContext.chaoxing,
+  );
 
   int _signTypeId = 0;
 
@@ -146,7 +161,8 @@ class SignInPageState extends State<SignInPage> {
   // 账号选择
   List<User> _selectedAccounts = [];
   User? _currentUser;
-  final GlobalKey<State<AccountsSelector>> _accountsSelectorKey = GlobalKey<State<AccountsSelector>>();
+  final GlobalKey<State<AccountsSelector>> _accountsSelectorKey =
+      GlobalKey<State<AccountsSelector>>();
 
   // UserId -> {Validate, enc2}
   final Map<String, Map<String, String>> _userCaptchaValidate = {};
@@ -210,6 +226,7 @@ class SignInPageState extends State<SignInPage> {
     for (var controller in _codeControllers) {
       controller.dispose();
     }
+    _consoleController.dispose();
     super.dispose();
   }
 
@@ -217,13 +234,13 @@ class SignInPageState extends State<SignInPage> {
     try {
       final results = await Future.wait([
         ChaoxingSignApi.getActiveInfoWeb(widget.active.id),
-        ChaoxingSignApi.getAttendInfoWeb(widget.active.id)
+        ChaoxingSignApi.getAttendInfoWeb(widget.active.id),
       ]);
 
       final activeInfo = results[0];
       final attendInfo = results[1];
 
-      if (activeInfo != null){
+      if (activeInfo != null) {
         _signTypeId = activeInfo['otherId'];
         _needCaptcha = activeInfo['showVCode'] == 1;
 
@@ -248,24 +265,28 @@ class SignInPageState extends State<SignInPage> {
         }
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('获取活动信息失败')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('获取活动信息失败')));
         }
       }
-      if (attendInfo != null){
+      if (attendInfo != null) {
         _status = attendInfo['status'];
-        if (_status == 1){
+        if (_status == 1) {
           _showSuccessMessage('当前用户已签到');
           if (_currentUser != null) {
             setState(() {
-              _selectedAccounts.removeWhere((user) => user.uid == _currentUser!.uid);
+              _selectedAccounts.removeWhere(
+                (user) => user.uid == _currentUser!.uid,
+              );
             });
           }
         }
       }
 
-      if (widget.active.signType == SignType.normal && _needPhoto && _selectedAccounts.isNotEmpty) {
+      if (widget.active.signType == SignType.normal &&
+          _needPhoto &&
+          _selectedAccounts.isNotEmpty) {
         _assignImages();
       }
     } catch (e) {
@@ -336,9 +357,7 @@ class SignInPageState extends State<SignInPage> {
           backgroundColor: Theme.of(context).colorScheme.primary,
           foregroundColor: Colors.white,
         ),
-        body: const Center(
-          child: CircularProgressIndicator()
-        )
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -357,8 +376,7 @@ class SignInPageState extends State<SignInPage> {
                 const SizedBox(height: 20),
 
                 // 签到操作区域 - 根据策略动态显示
-                if (_currentStrategy != null)
-                  _buildSignOperationArea(),
+                if (_currentStrategy != null) _buildSignOperationArea(),
 
                 const SizedBox(height: 20),
 
@@ -369,7 +387,8 @@ class SignInPageState extends State<SignInPage> {
                     setState(() {
                       _selectedAccounts = selected;
                     });
-                    if (widget.active.signType == SignType.normal && _needPhoto) {
+                    if (widget.active.signType == SignType.normal &&
+                        _needPhoto) {
                       _assignImages();
                     }
                   },
@@ -377,13 +396,16 @@ class SignInPageState extends State<SignInPage> {
                 ),
 
                 const SizedBox(height: 20),
+
+                SignRunConsolePanel(controller: _consoleController),
+
+                const SizedBox(height: 20),
               ],
             ),
           ),
 
           // 加载指示器
-          if (_isLoading)
-            _buildLoadingOverlay(),
+          if (_isLoading) _buildLoadingOverlay(),
         ],
       ),
     );
@@ -438,6 +460,7 @@ class SignInPageState extends State<SignInPage> {
       _isLoading = true;
       _isMultiSigning = true;
     });
+    _consoleController.resetForPlatform(SignPlatformContext.chaoxing);
 
     final failedAccounts = <String>[];
     final totalCount = _selectedAccounts.length;
@@ -465,7 +488,7 @@ class SignInPageState extends State<SignInPage> {
 
     final results = <String?>[];
     for (var user in _selectedAccounts) {
-      final result = await _currentStrategy!.signForAccount(user, _signParams, this);
+      final result = await _signAccountWithNetworkGate(user);
       results.add(result);
     }
 
@@ -488,9 +511,57 @@ class SignInPageState extends State<SignInPage> {
     }
   }
 
-  Future<void> _handleSignResult(String? result, User user, List<String> failedAccounts) async {
+  Future<String?> _signAccountWithNetworkGate(User user) async {
+    final gateResult = await SignNetworkGate().run<String?>(
+      context: context,
+      platformLabel: '学习通',
+      user: user,
+      console: _consoleController,
+      action: () => _currentStrategy!.signForAccount(user, _signParams, this),
+    );
+    if (gateResult.skipped) {
+      return '$_networkSkippedResultPrefix${gateResult.reason ?? '用户跳过'}';
+    }
+    return gateResult.value;
+  }
+
+  Future<void> _handleSignResult(
+    String? result,
+    User user,
+    List<String> failedAccounts,
+  ) async {
+    final recordStore = SignRecordStore();
     if (result == null) {
       failedAccounts.add('${user.name} (无响应)');
+      _consoleController.add(
+        platform: '学习通',
+        accountName: user.name,
+        accountId: user.uid,
+        stage: SignRunStage.signFailure,
+        message: '签到无响应',
+      );
+      await recordStore.append(
+        platform: '学习通',
+        platformType: PlatformType.chaoxing,
+        courseName: widget.active.name,
+        account: user.name,
+        status: '失败',
+        detail: '无响应',
+      );
+      return;
+    }
+
+    if (result.startsWith(_networkSkippedResultPrefix)) {
+      final reason = result.substring(_networkSkippedResultPrefix.length);
+      failedAccounts.add('${user.name} ($reason)');
+      await recordStore.append(
+        platform: '学习通',
+        platformType: PlatformType.chaoxing,
+        courseName: widget.active.name,
+        account: user.name,
+        status: '失败',
+        detail: reason,
+      );
       return;
     }
 
@@ -513,15 +584,63 @@ class SignInPageState extends State<SignInPage> {
           _showErrorMessage('验证码取消或失败');
           return;
         }
-        final resignResult = await _currentStrategy!.signForAccount(user, _signParams, this);
+        final resignResult = await _currentStrategy!.signForAccount(
+          user,
+          _signParams,
+          this,
+        );
         await _handleSignResult(resignResult, user, failedAccounts);
       }
     } else if (result == 'success') {
+      _consoleController.add(
+        platform: '学习通',
+        accountName: user.name,
+        accountId: user.uid,
+        stage: SignRunStage.signSuccess,
+        message: '签到成功',
+      );
       ApiService.appendExternalConsoleLog('学习通', '${user.name} 签到成功');
+      await recordStore.append(
+        platform: '学习通',
+        platformType: PlatformType.chaoxing,
+        courseName: widget.active.name,
+        account: user.name,
+        status: '成功',
+      );
     } else if (result == 'success2') {
       failedAccounts.add('${user.name} (已过截止时间)');
+      _consoleController.add(
+        platform: '学习通',
+        accountName: user.name,
+        accountId: user.uid,
+        stage: SignRunStage.signFailure,
+        message: '已过截止时间',
+      );
+      await recordStore.append(
+        platform: '学习通',
+        platformType: PlatformType.chaoxing,
+        courseName: widget.active.name,
+        account: user.name,
+        status: '失败',
+        detail: '已过截止时间',
+      );
     } else {
       failedAccounts.add('${user.name} ($result)');
+      _consoleController.add(
+        platform: '学习通',
+        accountName: user.name,
+        accountId: user.uid,
+        stage: SignRunStage.signFailure,
+        message: result,
+      );
+      await recordStore.append(
+        platform: '学习通',
+        platformType: PlatformType.chaoxing,
+        courseName: widget.active.name,
+        account: user.name,
+        status: '失败',
+        detail: result,
+      );
     }
   }
 
@@ -529,7 +648,7 @@ class SignInPageState extends State<SignInPage> {
     try {
       final validate = await CaptchaPage.showSlideCaptchaDialog(
         context,
-        referer: widget.active.url
+        referer: widget.active.url,
       );
 
       if (validate != null) {
@@ -611,10 +730,7 @@ class SignInPageState extends State<SignInPage> {
   void showProgressSnackBar(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 2),
-      ),
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
     );
   }
 
@@ -640,10 +756,7 @@ class SignInPageState extends State<SignInPage> {
         : '成功 $successCount 个，失败 $failedCount 个：${_failedAccounts.join(", ")}';
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 4),
-      ),
+      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
     );
 
     _failedAccounts.clear();

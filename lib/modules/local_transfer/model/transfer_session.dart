@@ -79,6 +79,7 @@ class TransferSession {
     required this.createdAt,
     required this.startedAt,
     required this.finishedAt,
+    this.sourceLabel,
   });
 
   final String localSessionId;
@@ -92,6 +93,7 @@ class TransferSession {
   final DateTime createdAt;
   final DateTime? startedAt;
   final DateTime? finishedAt;
+  final String? sourceLabel;
 
   bool get isMessageOnly => message != null && entries.isEmpty;
 
@@ -130,6 +132,8 @@ class TransferSession {
     bool clearStartedAt = false,
     DateTime? finishedAt,
     bool clearFinishedAt = false,
+    String? sourceLabel,
+    bool clearSourceLabel = false,
   }) {
     return TransferSession(
       localSessionId: localSessionId ?? this.localSessionId,
@@ -147,6 +151,7 @@ class TransferSession {
       createdAt: createdAt ?? this.createdAt,
       startedAt: clearStartedAt ? null : startedAt ?? this.startedAt,
       finishedAt: clearFinishedAt ? null : finishedAt ?? this.finishedAt,
+      sourceLabel: clearSourceLabel ? null : sourceLabel ?? this.sourceLabel,
     );
   }
 }

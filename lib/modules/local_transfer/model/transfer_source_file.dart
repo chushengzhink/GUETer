@@ -59,6 +59,27 @@ class TransferSourceFile {
     );
   }
 
+  static Future<TransferSourceFile> fromLocalPath(
+    String path, {
+    String? fileName,
+  }) async {
+    final file = File(path);
+    final stat = await file.stat();
+    final resolvedName = fileName?.trim().isNotEmpty == true
+        ? fileName!.trim()
+        : path.split(Platform.pathSeparator).last;
+    return TransferSourceFile(
+      fileName: resolvedName,
+      size: stat.size,
+      fileType: _inferMimeType(resolvedName),
+      path: path,
+      bytes: null,
+      preview: null,
+      lastModified: stat.modified,
+      lastAccessed: stat.accessed,
+    );
+  }
+
   factory TransferSourceFile.text(
     String text, {
     String fileName = 'message.txt',

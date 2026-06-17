@@ -15,6 +15,7 @@ import 'widgets/device_name_dialog.dart';
 import 'widgets/device_tile.dart';
 import 'widgets/progress_panel.dart';
 import 'widgets/send_panel.dart';
+import '../../../pages/file_preview_page.dart';
 
 class LocalTransferPage extends StatefulWidget {
   const LocalTransferPage({super.key});
@@ -139,6 +140,10 @@ class _LocalTransferPageState extends State<LocalTransferPage> {
       return;
     }
     await _controller.sendText(text, device);
+  }
+
+  Future<void> _previewReceivedFile(String path) {
+    return FilePreviewPage.open(context, path);
   }
 
   @override
@@ -301,7 +306,7 @@ class _LocalTransferPageState extends State<LocalTransferPage> {
                   sessions: _controller.sessions,
                   onRetry: _controller.retrySession,
                   onCancel: _controller.cancelSession,
-                  onOpenFile: _controller.openReceivedFile,
+                  onOpenFile: _previewReceivedFile,
                   onCopyMessage: _controller.copyMessageToClipboard,
                 ),
                 const SizedBox(height: 16),

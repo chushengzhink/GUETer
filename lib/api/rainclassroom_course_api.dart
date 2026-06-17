@@ -1,8 +1,24 @@
 import 'package:flutter/foundation.dart';
 
 import 'platform_request_context.dart';
+import 'platform_request_stability.dart';
+import 'sign_request_profile.dart';
 import '../session/account.dart';
 import '../platform.dart';
+
+const _rainCourseStableOptions = PlatformRequestOptions(
+  operationId: 'rainclassroom.course.list',
+  cachePolicy: PlatformRequestCachePolicy.staleIfError,
+  requestKind: PlatformRequestKind.read,
+  allowControlledParallelism: true,
+);
+
+const _rainUpcomingStableOptions = PlatformRequestOptions(
+  operationId: 'rainclassroom.course.upcoming',
+  cachePolicy: PlatformRequestCachePolicy.staleIfError,
+  requestKind: PlatformRequestKind.read,
+  allowControlledParallelism: true,
+);
 
 class RainClassroomCourseApi {
   /// 存储每个用户的 bearerToken 和 lessonToken
@@ -23,6 +39,7 @@ class RainClassroomCourseApi {
       final response = await context.sendRequest(
         '/v/course_meta/learning_list/',
         method: 'GET',
+        platformOptions: _rainCourseStableOptions,
       );
 
       return response.data;
@@ -47,11 +64,14 @@ class RainClassroomCourseApi {
       final response = await context.sendRequest(
         '/api/v3/classroom/on-lesson-upcoming-exam',
         method: 'GET',
+        platformOptions: _rainUpcomingStableOptions,
       );
 
       return response.data;
     } catch (e) {
-      debugPrint('[RainClassroomCourseApi] getOnLessonAndUpcomingExam error: $e');
+      debugPrint(
+        '[RainClassroomCourseApi] getOnLessonAndUpcomingExam error: $e',
+      );
       return null;
     }
   }
@@ -74,6 +94,7 @@ class RainClassroomCourseApi {
         '/api/v3/app/scan',
         method: 'POST',
         body: {'url': qrCodeUrl},
+        signProfile: SignRequestProfiles.rainClassroomCheckIn(),
       );
 
       final data = response.data;
@@ -87,7 +108,9 @@ class RainClassroomCourseApi {
         // {"code":0,"msg":"OK","data":{"type":"checkin","value":"1632189922935066880"}}
         final lessonId = data['data']?['value'];
         if (lessonId == null) {
-          debugPrint('[RainClassroomCourseApi] scan: missing lessonId in response');
+          debugPrint(
+            '[RainClassroomCourseApi] scan: missing lessonId in response',
+          );
           return null;
         }
         // 扫描成功后自动签到
@@ -124,11 +147,14 @@ class RainClassroomCourseApi {
           'lessonId': lessonId,
           'joinIfNotIn': true,
         },
+        signProfile: SignRequestProfiles.rainClassroomCheckIn(),
       );
 
       final data = response.data;
       if (data == null || data['code'] == null) {
-        debugPrint('[RainClassroomCourseApi] checkIn: invalid response structure');
+        debugPrint(
+          '[RainClassroomCourseApi] checkIn: invalid response structure',
+        );
         return null;
       }
 
@@ -141,7 +167,9 @@ class RainClassroomCourseApi {
         if (bearerToken != null && lessonToken != null) {
           _setToken(userId, bearerToken, lessonToken);
         } else {
-          debugPrint('[RainClassroomCourseApi] checkIn: missing bearerToken or lessonToken');
+          debugPrint(
+            '[RainClassroomCourseApi] checkIn: missing bearerToken or lessonToken',
+          );
         }
         return 0;
       } else {

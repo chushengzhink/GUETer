@@ -1,9 +1,14 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:uuid/uuid.dart';
 
+import '../api/tronclass_batch_sign_executor.dart';
 import '../api/tronclass_sign_api.dart';
+import '../models/user.dart';
+import '../services/sign_platform_context.dart';
+import '../services/sign_run_console.dart';
+import '../widgets/sign_run_console_panel.dart';
+import '../widgets/tronclass_account_selector.dart';
 import 'tronclass_number_input.dart';
 import 'widget/tronclass_liquid_glass.dart';
 
@@ -35,6 +40,11 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
   String _successCode = '';
   bool _isBruteForcing = false;
   int _bruteForceAttempts = 0;
+  bool _isBatchSigning = false;
+  List<User> _selectedAccounts = <User>[];
+  final SignRunConsoleController _consoleController = SignRunConsoleController(
+    platformContext: SignPlatformContext.tronclass,
+  );
 
   late final AnimationController _printerAnimationController;
   late final Animation<double> _printerPaperAnimation;
@@ -62,47 +72,8 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
   void dispose() {
     _codeFocus.dispose();
     _printerAnimationController.dispose();
+    _consoleController.dispose();
     super.dispose();
-  }
-
-  Future<Response<Map<String, dynamic>>> _requestSign(String code) {
-    return TronclassSignApi.signNumber(
-      rollcallId: widget.rollcallId,
-      numberCode: code,
-      deviceId: const Uuid().v4(),
-    );
-  }
-
-  Future<void> _submitCode(String code) async {
-    if (code.length != 4 || int.tryParse(code) == null) {
-      setState(() {
-        _hasError = true;
-        _errorMessage = '请输入完整的 4 位签到密码';
-      });
-      return;
-    }
-
-    setState(() {
-      _hasError = false;
-      _errorMessage = '';
-    });
-
-    try {
-      final response = await _requestSign(code);
-      if (!mounted) return;
-      if (TronclassSignApi.isSignSuccess(response)) {
-        _showSuccessState(code);
-      } else {
-        _showFailureState(
-          TronclassSignApi.getSignMessage(response.data).isNotEmpty
-              ? TronclassSignApi.getSignMessage(response.data)
-              : '签到失败，点名已结束',
-        );
-      }
-    } catch (_) {
-      if (!mounted) return;
-      _showFailureState('签到失败，请稍后再试');
-    }
   }
 
   Future<void> _bruteForceSignCodes() async {
@@ -172,6 +143,97 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     }
+  }
+
+  Future<void> _submitCodeBatch(String code) async {
+    if (_selectedAccounts.isEmpty) {
+      setState(() {
+        _hasError = true;
+        _errorMessage = '请至少选择一个畅课账号';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请至少选择一个畅课账号')));
+      return;
+    }
+
+    if (code.length != 4 || int.tryParse(code) == null) {
+      setState(() {
+        _hasError = true;
+        _errorMessage = '请输入完整的 4 位签到密码';
+      });
+      return;
+    }
+
+    setState(() {
+      _hasError = false;
+      _errorMessage = '';
+      _isBatchSigning = true;
+    });
+    _consoleController.clear();
+
+    try {
+      final result = await TronclassBatchSignExecutor().sign(
+        context: context,
+        courseName: widget.activityName?.trim().isNotEmpty == true
+            ? widget.activityName!.trim()
+            : '畅课数字签到',
+        console: _consoleController,
+        users: _selectedAccounts,
+        isContextMounted: () => mounted,
+        action: (_, deviceId) => TronclassSignApi.signNumber(
+          rollcallId: widget.rollcallId,
+          numberCode: code,
+          deviceId: deviceId,
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _isBatchSigning = false;
+      });
+      if (result.successCount > 0) {
+        _showSuccessState(code);
+      } else {
+        _showFailureState(
+          '批量签到完成，成功 ${result.successCount}/${result.totalCount}，跳过 ${result.skippedCount}',
+        );
+      }
+      await _showBatchResult(result);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isBatchSigning = false;
+      });
+      _showFailureState('签到失败: $e');
+    }
+  }
+
+  Future<void> _showBatchResult(TronclassBatchSignResult result) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('畅课批量签到结果'),
+        content: SingleChildScrollView(
+          child: Text(
+            '成功: ${result.successCount}/${result.totalCount}\n'
+            '跳过: ${result.skippedCount}\n'
+            '失败: ${result.failedCount}\n\n'
+            '${result.items.map((item) => '${item.user.name}: ${item.skipped
+                ? '跳过'
+                : item.success
+                ? '成功'
+                : '失败'} - ${item.message}').join('\n')}',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSuccessState(String code) {
@@ -530,6 +592,15 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
                       const SizedBox(height: 16),
                       _buildShowcaseCard(),
                       const SizedBox(height: 16),
+                      TronclassAccountSelector(
+                        enabled: !_isBatchSigning && !_isBruteForcing,
+                        onSelectionChanged: (users) {
+                          setState(() {
+                            _selectedAccounts = users;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 16),
                       TronclassGlassCard(
                         child: Column(
                           children: [
@@ -558,7 +629,7 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
                                   });
                                 }
                               },
-                              onCompleted: _submitCode,
+                              onCompleted: _submitCodeBatch,
                             ),
                             const SizedBox(height: 16),
                             const Text(
@@ -578,7 +649,7 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
                                   context,
                                   color: TronclassGlassPalette.accentDeep,
                                 ),
-                                onPressed: _isBruteForcing
+                                onPressed: _isBruteForcing || _isBatchSigning
                                     ? null
                                     : _confirmBruteForce,
                                 icon: Icon(
@@ -594,6 +665,8 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
                           ],
                         ),
                       ),
+                      const SizedBox(height: 16),
+                      SignRunConsolePanel(controller: _consoleController),
                       const SizedBox(height: 8),
                     ],
                   ),

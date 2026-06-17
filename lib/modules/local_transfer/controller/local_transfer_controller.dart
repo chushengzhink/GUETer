@@ -13,10 +13,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../services/gueter_storage_service.dart';
 import '../local_transfer_config.dart';
 import '../local_transfer_module.dart';
 import '../model/transfer_device.dart';
@@ -465,7 +464,15 @@ class LocalTransferController extends ChangeNotifier {
   Future<void> sendFiles(
     List<TransferSourceFile> files,
     TransferDevice target,
-  ) async {
+  ) {
+    return sendFilesWithSource(files, target);
+  }
+
+  Future<void> sendFilesWithSource(
+    List<TransferSourceFile> files,
+    TransferDevice target, {
+    String? sourceLabel,
+  }) async {
     if (files.isEmpty) {
       return;
     }
@@ -499,6 +506,7 @@ class LocalTransferController extends ChangeNotifier {
       createdAt: DateTime.now(),
       startedAt: null,
       finishedAt: null,
+      sourceLabel: sourceLabel,
     );
     _upsertSession(session);
 
@@ -684,7 +692,11 @@ class LocalTransferController extends ChangeNotifier {
     if (sourceFiles.isEmpty) {
       return;
     }
-    await sendFiles(sourceFiles, session.device);
+    await sendFilesWithSource(
+      sourceFiles,
+      session.device,
+      sourceLabel: session.sourceLabel,
+    );
   }
 
   Future<void> copyMessageToClipboard(String message) async {
@@ -904,16 +916,8 @@ class LocalTransferController extends ChangeNotifier {
       return directory.path;
     }
 
-    Directory baseDir;
-    if (Platform.isAndroid) {
-      baseDir =
-          await getExternalStorageDirectory() ??
-          await getApplicationDocumentsDirectory();
-    } else {
-      baseDir = await getApplicationDocumentsDirectory();
-    }
-    final directory = Directory(
-      p.join(baseDir.path, 'LocalTransfer', 'Incoming'),
+    final directory = await GueterStorageService.instance.publicDirectory(
+      GueterPublicDirectory.localTransfer,
     );
     if (!directory.existsSync()) {
       directory.createSync(recursive: true);

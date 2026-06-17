@@ -8,18 +8,35 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/course.dart';
 import '../api/api_service.dart';
 import '../api/platform_request_context.dart';
+import '../api/platform_request_stability.dart';
 import '../api/chaoxing_chapter_api.dart';
 import '../api/chaoxing_homework_api.dart';
 import '../session/account.dart';
 import '../session/app_settings.dart';
 import '../platform.dart';
+import '../services/platform_network_warmup_service.dart';
+import '../services/platform_page_snapshot_store.dart';
 import '../utils/user_agent.dart';
 import '../utils/global_palette.dart';
 import '../theme/design_tokens.dart';
 import '../theme/animations.dart';
 import '../theme/components/app_badge.dart';
+import '../materials/material_search_context.dart';
+import '../smart/smart_models.dart';
+import '../widgets/context_help.dart';
+import '../widgets/material_context_search.dart';
+import '../widgets/smart_inline_panel.dart';
 import '../services/notification_service.dart';
 import 'tronclass_todo_detail_page.dart';
+
+PlatformRequestOptions _todoStableOptions(String operationId) {
+  return PlatformRequestOptions(
+    operationId: operationId,
+    cachePolicy: PlatformRequestCachePolicy.staleIfError,
+    requestKind: PlatformRequestKind.read,
+    allowControlledParallelism: true,
+  );
+}
 
 /// 单个平台的待办数据容器
 class TodoPlatformData {
@@ -28,6 +45,9 @@ class TodoPlatformData {
   DateTime? lastRefreshTime;
   bool isLoading;
   bool requestLock;
+  bool isShowingCachedData;
+  bool refreshFailed;
+  DateTime? snapshotUpdatedAt;
 
   TodoPlatformData({
     List<Map<String, dynamic>>? pendingTodos,
@@ -35,6 +55,8 @@ class TodoPlatformData {
     this.lastRefreshTime,
     this.isLoading = false,
     this.requestLock = false,
+    this.isShowingCachedData = false,
+    this.refreshFailed = false,
   }) : pendingTodos = pendingTodos ?? [],
        completedTodos = completedTodos ?? [];
 }
@@ -67,6 +89,21 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   StreamSubscription<String?>? _accountChangeSubscription;
   Timer? _countdownTimer;
   String? _selectedDateFilter;
+  final PlatformPageSnapshotStore _snapshotStore = PlatformPageSnapshotStore();
+
+  String _firstTodoSearchTitle() {
+    for (final data in _platformData.values) {
+      for (final todo in data.pendingTodos) {
+        final title = (todo['title'] ?? todo['name'] ?? todo['content'])
+            ?.toString()
+            .trim();
+        if (title != null && title.isNotEmpty) {
+          return title;
+        }
+      }
+    }
+    return '作业 考试 课程资料';
+  }
 
   /// 获取所有已登录平台的账号信息（不读取全局 currentPlatform）
   Map<PlatformType, String> _getAllPlatformAccounts() {
@@ -126,6 +163,15 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
     // 先加载本地持久化数据
     await _loadPersistedTodos();
+    final platformAccounts = _getAllPlatformAccounts();
+    for (final entry in platformAccounts.entries) {
+      unawaited(
+        PlatformNetworkWarmupService().warmupDio(
+          platform: entry.key,
+          userId: entry.value,
+        ),
+      );
+    }
 
     if (mounted) {
       setState(() => _isInitializing = false);
@@ -143,6 +189,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   Future<void> _loadPersistedTodos() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final platformAccounts = _getAllPlatformAccounts();
 
       for (final platform in [
         PlatformType.tronclass,
@@ -150,6 +197,29 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         PlatformType.rainClassroom,
         PlatformType.ketangpai,
       ]) {
+        final userId = platformAccounts[platform];
+        if (userId != null && userId.isNotEmpty) {
+          final snapshot = await _snapshotStore.readList(
+            platform: platform,
+            userId: userId,
+            page: 'todos',
+          );
+          if (snapshot != null) {
+            final data = _platformData[platform]!;
+            data.pendingTodos = snapshot.data;
+            data.completedTodos = [];
+            data.lastRefreshTime = snapshot.updatedAt;
+            data.snapshotUpdatedAt = snapshot.updatedAt;
+            data.isShowingCachedData = snapshot.data.isNotEmpty;
+            data.refreshFailed = false;
+            ApiService.appendExternalConsoleLog(
+              'TodosPage',
+              '${platform.name}: snapshot hit ${data.pendingTodos.length} todos',
+            );
+            continue;
+          }
+        }
+
         final key = 'todos_${platform.name}';
         final jsonStr = prefs.getString(key);
 
@@ -172,7 +242,11 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
             data.lastRefreshTime = DateTime.parse(
               decoded['lastRefreshTime'] as String,
             );
+            data.snapshotUpdatedAt = data.lastRefreshTime;
           }
+          data.isShowingCachedData =
+              data.pendingTodos.isNotEmpty || data.completedTodos.isNotEmpty;
+          data.refreshFailed = false;
 
           ApiService.appendExternalConsoleLog(
             'TodosPage',
@@ -195,6 +269,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   Future<void> _persistTodos() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final platformAccounts = _getAllPlatformAccounts();
 
       for (final entry in _platformData.entries) {
         final platform = entry.key;
@@ -208,6 +283,17 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         });
 
         await prefs.setString(key, json);
+        final userId = platformAccounts[platform];
+        if (userId != null && userId.isNotEmpty) {
+          await _snapshotStore.writeList(
+            platform: platform,
+            userId: userId,
+            page: 'todos',
+            data: data.pendingTodos,
+            updatedAt: data.lastRefreshTime,
+          );
+          data.snapshotUpdatedAt = data.lastRefreshTime;
+        }
       }
 
       ApiService.appendExternalConsoleLog(
@@ -415,6 +501,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     setState(() {
       data.isLoading = true;
       data.requestLock = true;
+      data.refreshFailed = false;
     });
 
     PlatformRequestContext? context;
@@ -428,7 +515,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         'TodosPage',
         'Tronclass: requesting GET /api/todos',
       );
-      final response = await context.sendRequest('/api/todos');
+      final response = await context.sendRequest(
+        '/api/todos',
+        platformOptions: _todoStableOptions('tronclass.todo.list'),
+      );
 
       if (!mounted) {
         ApiService.appendExternalConsoleLog(
@@ -461,6 +551,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       setState(() {
         data.pendingTodos = todos;
         data.lastRefreshTime = DateTime.now();
+        data.isShowingCachedData = false;
+        data.refreshFailed = false;
       });
 
       await _persistTodos();
@@ -469,6 +561,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       await _loadTronclassCourseItems(userId, context, data);
     } catch (e) {
       ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: error = $e');
+      data.refreshFailed = true;
     } finally {
       if (mounted) {
         setState(() {
@@ -496,6 +589,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       final coursesResponse = await context.sendRequest(
         '/api/users/$userId/courses',
         params: {'page': '1', 'per_page': '50'},
+        platformOptions: _todoStableOptions('tronclass.course.list'),
       );
 
       if (!mounted) return;
@@ -508,148 +602,13 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           .map((t) => t['id']?.toString() ?? '')
           .toSet();
 
-      for (final course in coursesData) {
-        final courseId = course['id']?.toString() ?? '';
-        final courseName = course['name']?.toString() ?? '';
-        if (courseId.isEmpty) continue;
-
-        // 获取测试列表
-        try {
-          final examResponse = await context.sendRequest(
-            '/api/courses/$courseId/exam-list',
-            params: {
-              'page': '1',
-              'page_size': '10',
-              'conditions':
-                  '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
-            },
-          );
-
-          if (examResponse.data is Map<String, dynamic>) {
-            final exams = examResponse.data['exams'];
-            if (exams is List) {
-              for (final exam in exams) {
-                if (exam is! Map<String, dynamic>) continue;
-                final isClosed = exam['is_closed'] == true;
-                if (isClosed) continue;
-
-                final id = exam['id']?.toString() ?? '';
-                if (id.isEmpty || existingIds.contains(id)) continue;
-
-                existingIds.add(id);
-                courseItems.add({
-                  'id': id,
-                  'title': exam['title']?.toString() ?? '',
-                  'type': 'exam',
-                  'course_name': courseName,
-                  'end_time': exam['end_time']?.toString() ?? '',
-                  'is_locked': exam['is_started'] != true,
-                });
-              }
-            }
-          }
-        } catch (e) {
-          ApiService.appendExternalConsoleLog(
-            'TodosPage',
-            'Tronclass: fetch exams for course $courseId error: $e',
-          );
-        }
-
-        // 获取作业列表
-        try {
-          final homeworkResponse = await context.sendRequest(
-            '/api/courses/$courseId/homework-activities',
-            params: {
-              'page': '1',
-              'page_size': '10',
-              'conditions':
-                  '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
-            },
-          );
-
-          if (homeworkResponse.data is Map<String, dynamic>) {
-            final homeworks = homeworkResponse.data['homework_activities'];
-            if (homeworks is List) {
-              for (final homework in homeworks) {
-                if (homework is! Map<String, dynamic>) continue;
-                final isClosed = homework['is_closed'] == true;
-                final submitted = homework['submitted'] == true;
-                if (isClosed || submitted) continue;
-
-                final id = homework['id']?.toString() ?? '';
-                if (id.isEmpty || existingIds.contains(id)) continue;
-
-                existingIds.add(id);
-                courseItems.add({
-                  'id': id,
-                  'title': homework['title']?.toString() ?? '',
-                  'type': 'homework',
-                  'course_name': courseName,
-                  'end_time': homework['end_time']?.toString() ?? '',
-                  'is_locked': homework['is_in_progress'] != true,
-                });
-              }
-            }
-          }
-        } catch (e) {
-          ApiService.appendExternalConsoleLog(
-            'TodosPage',
-            'Tronclass: fetch homeworks for course $courseId error: $e',
-          );
-        }
-
-        // 获取互动列表
-        try {
-          final interactionResponse = await context.sendRequest(
-            '/api/courses/$courseId/classroom-list',
-          );
-
-          if (interactionResponse.data is Map<String, dynamic>) {
-            final interactions = interactionResponse.data['classrooms'];
-            if (interactions is List) {
-              for (final interaction in interactions) {
-                if (interaction is! Map<String, dynamic>) continue;
-
-                final id = interaction['id']?.toString() ?? '';
-                if (id.isEmpty || existingIds.contains(id)) continue;
-
-                final skipReason =
-                    TCCourseApi.tronclassInteractionSkipReason(interaction);
-                if (skipReason != null) {
-                  ApiService.appendExternalConsoleLog(
-                    'TodosPage',
-                    'Tronclass: skip interaction id=$id title=${interaction['title']} '
-                        'status=${interaction['status']} finish_at=${interaction['finish_at']} '
-                        'start_at=${interaction['start_at']} updated_status_at=${interaction['updated_status_at']} '
-                        'skipReason=$skipReason',
-                  );
-                  continue;
-                }
-
-                existingIds.add(id);
-                final stateLabel =
-                    TCCourseApi.evaluateTronclassInteractionState(interaction);
-                courseItems.add({
-                  'id': id,
-                  'title': interaction['title']?.toString() ?? '',
-                  'type': 'classroom',
-                  'course_id': courseId,
-                  'course_name': courseName,
-                  'start_time': interaction['start_at']?.toString() ?? '',
-                  'end_time': interaction['end_time']?.toString() ?? '',
-                  'interaction_state': stateLabel,
-                  'is_locked': false,
-                });
-              }
-            }
-          }
-        } catch (e) {
-          ApiService.appendExternalConsoleLog(
-            'TodosPage',
-            'Tronclass: fetch interactions for course $courseId error: $e',
-          );
-        }
-      }
+      courseItems.addAll(
+        await _loadTronclassCourseItemsControlled(
+          context: context,
+          coursesData: coursesData,
+          existingIds: existingIds,
+        ),
+      );
 
       if (!mounted) return;
 
@@ -679,6 +638,214 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       ApiService.appendExternalConsoleLog(
         'TodosPage',
         'Tronclass: load course items error: $e',
+      );
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadTronclassCourseItemsControlled({
+    required PlatformRequestContext context,
+    required List<Map<String, dynamic>> coursesData,
+    required Set<String> existingIds,
+  }) async {
+    final concurrency = AppSettings.performanceSettings.lowPower ? 1 : 2;
+    final results = <Map<String, dynamic>>[];
+    var nextIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        final index = nextIndex;
+        nextIndex++;
+        if (index >= coursesData.length) return;
+        final items = await _loadTronclassItemsForCourse(
+          context: context,
+          course: coursesData[index],
+        );
+        for (final item in items) {
+          final id = item['id']?.toString() ?? '';
+          if (id.isEmpty || existingIds.contains(id)) continue;
+          existingIds.add(id);
+          results.add(item);
+        }
+      }
+    }
+
+    await Future.wait(
+      List<Future<void>>.generate(
+        concurrency.clamp(1, coursesData.length),
+        (_) => worker(),
+      ),
+    );
+    return results;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadTronclassItemsForCourse({
+    required PlatformRequestContext context,
+    required Map<String, dynamic> course,
+  }) async {
+    final courseId = course['id']?.toString() ?? '';
+    final courseName = course['name']?.toString() ?? '';
+    if (courseId.isEmpty) return const <Map<String, dynamic>>[];
+
+    final items = <Map<String, dynamic>>[];
+    await _appendTronclassExamItems(
+      context: context,
+      courseId: courseId,
+      courseName: courseName,
+      output: items,
+    );
+    await _appendTronclassHomeworkItems(
+      context: context,
+      courseId: courseId,
+      courseName: courseName,
+      output: items,
+    );
+    await _appendTronclassInteractionItems(
+      context: context,
+      courseId: courseId,
+      courseName: courseName,
+      output: items,
+    );
+    return items;
+  }
+
+  Future<void> _appendTronclassExamItems({
+    required PlatformRequestContext context,
+    required String courseId,
+    required String courseName,
+    required List<Map<String, dynamic>> output,
+  }) async {
+    try {
+      final examResponse = await context.sendRequest(
+        '/api/courses/$courseId/exam-list',
+        params: const {
+          'page': '1',
+          'page_size': '10',
+          'conditions':
+              '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
+        },
+        platformOptions: _todoStableOptions('tronclass.exam.list'),
+      );
+      if (examResponse.data is! Map<String, dynamic>) return;
+      final exams = (examResponse.data as Map<String, dynamic>)['exams'];
+      if (exams is! List) return;
+      for (final exam in exams) {
+        if (exam is! Map<String, dynamic>) continue;
+        if (exam['is_closed'] == true) continue;
+        final id = exam['id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        output.add({
+          'id': id,
+          'title': exam['title']?.toString() ?? '',
+          'type': 'exam',
+          'course_name': courseName,
+          'end_time': exam['end_time']?.toString() ?? '',
+          'is_locked': exam['is_started'] != true,
+        });
+      }
+    } catch (e) {
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: fetch exams for course $courseId error: $e',
+      );
+    }
+  }
+
+  Future<void> _appendTronclassHomeworkItems({
+    required PlatformRequestContext context,
+    required String courseId,
+    required String courseName,
+    required List<Map<String, dynamic>> output,
+  }) async {
+    try {
+      final homeworkResponse = await context.sendRequest(
+        '/api/courses/$courseId/homework-activities',
+        params: const {
+          'page': '1',
+          'page_size': '10',
+          'conditions':
+              '{"itemsSortBy":{"predicate":"created_at","reverse":true}}',
+        },
+        platformOptions: _todoStableOptions('tronclass.homework.list'),
+      );
+      if (homeworkResponse.data is! Map<String, dynamic>) return;
+      final homeworks =
+          (homeworkResponse.data
+              as Map<String, dynamic>)['homework_activities'];
+      if (homeworks is! List) return;
+      for (final homework in homeworks) {
+        if (homework is! Map<String, dynamic>) continue;
+        if (homework['is_closed'] == true || homework['submitted'] == true) {
+          continue;
+        }
+        final id = homework['id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        output.add({
+          'id': id,
+          'title': homework['title']?.toString() ?? '',
+          'type': 'homework',
+          'course_name': courseName,
+          'end_time': homework['end_time']?.toString() ?? '',
+          'is_locked': homework['is_in_progress'] != true,
+        });
+      }
+    } catch (e) {
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: fetch homeworks for course $courseId error: $e',
+      );
+    }
+  }
+
+  Future<void> _appendTronclassInteractionItems({
+    required PlatformRequestContext context,
+    required String courseId,
+    required String courseName,
+    required List<Map<String, dynamic>> output,
+  }) async {
+    try {
+      final interactionResponse = await context.sendRequest(
+        '/api/courses/$courseId/classroom-list',
+        platformOptions: _todoStableOptions('tronclass.interaction.list'),
+      );
+      if (interactionResponse.data is! Map<String, dynamic>) return;
+      final interactions =
+          (interactionResponse.data as Map<String, dynamic>)['classrooms'];
+      if (interactions is! List) return;
+      for (final interaction in interactions) {
+        if (interaction is! Map<String, dynamic>) continue;
+        final id = interaction['id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        final skipReason = TCCourseApi.tronclassInteractionSkipReason(
+          interaction,
+        );
+        if (skipReason != null) {
+          ApiService.appendExternalConsoleLog(
+            'TodosPage',
+            'Tronclass: skip interaction id=$id title=${interaction['title']} '
+                'status=${interaction['status']} finish_at=${interaction['finish_at']} '
+                'start_at=${interaction['start_at']} updated_status_at=${interaction['updated_status_at']} '
+                'skipReason=$skipReason',
+          );
+          continue;
+        }
+        output.add({
+          'id': id,
+          'title': interaction['title']?.toString() ?? '',
+          'type': 'classroom',
+          'course_id': courseId,
+          'course_name': courseName,
+          'start_time': interaction['start_at']?.toString() ?? '',
+          'end_time': interaction['end_time']?.toString() ?? '',
+          'interaction_state': TCCourseApi.evaluateTronclassInteractionState(
+            interaction,
+          ),
+          'is_locked': false,
+        });
+      }
+    } catch (e) {
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Tronclass: fetch interactions for course $courseId error: $e',
       );
     }
   }
@@ -722,6 +889,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     setState(() {
       data.isLoading = true;
       data.requestLock = true;
+      data.refreshFailed = false;
     });
 
     PlatformRequestContext? context;
@@ -743,67 +911,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
       if (coursesData != null && coursesData['result'] == 1) {
         final channelList = coursesData['channelList'] as List<dynamic>? ?? [];
-
-        for (final channel in channelList) {
-          if (channel['content']?['course'] == null) continue;
-
-          final courseData = channel['content']['course'];
-          final courseId = courseData['data']?[0]?['id']?.toString() ?? '';
-          final clazzId = channel['content']['id']?.toString() ?? '';
-          final cpi = channel['cpi']?.toString() ?? '';
-          final courseName = courseData['data']?[0]?['name']?.toString() ?? '';
-
-          if (courseId.isEmpty || clazzId.isEmpty) continue;
-
-          try {
-            final homeworks = await ChaoxingHomeworkApi.getHomeworkList(
-              courseId,
-              clazzId,
-            );
-            for (final homework in homeworks) {
-              final status = homework['status']?.toString() ?? '';
-              if (status == '1' || status == 'completed') continue;
-
-              allTodos.add({
-                'id':
-                    homework['workId']?.toString() ??
-                    homework['id']?.toString() ??
-                    '',
-                'title': homework['title']?.toString() ?? '作业',
-                'platform': '学习通',
-                'course_name': courseName,
-                'end_time': homework['endTime']?.toString() ?? '',
-                'type': 'homework',
-                'account': userId,
-              });
-            }
-
-            final unfinishedTasks = await ChaoxingChapterApi.getUnfinishedTasks(
-              courseId,
-              clazzId,
-              cpi,
-            );
-            for (final task in unfinishedTasks) {
-              allTodos.add({
-                'id':
-                    task['objectId']?.toString() ??
-                    task['jobId']?.toString() ??
-                    '',
-                'title': task['title']?.toString() ?? '学习任务',
-                'platform': '学习通',
-                'course_name': courseName,
-                'chapter_name': task['chapterName']?.toString() ?? '',
-                'type': task['type']?.toString() ?? 'task',
-                'account': userId,
-              });
-            }
-          } catch (e) {
-            ApiService.appendExternalConsoleLog(
-              'TodosPage',
-              'Chaoxing: error fetching todos for course $courseId: $e',
-            );
-          }
-        }
+        allTodos.addAll(
+          await _loadChaoxingTodosControlled(channelList, userId),
+        );
       }
 
       if (!mounted) return;
@@ -818,6 +928,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         data.lastRefreshTime = DateTime.now();
         data.isLoading = false;
         data.requestLock = false;
+        data.isShowingCachedData = false;
+        data.refreshFailed = false;
       });
 
       await _persistTodos();
@@ -826,10 +938,107 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       setState(() {
         data.isLoading = false;
         data.requestLock = false;
+        data.refreshFailed = true;
       });
     } finally {
       context?.dispose();
     }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadChaoxingTodosControlled(
+    List<dynamic> channelList,
+    String userId,
+  ) async {
+    final courses = channelList
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .where((channel) => channel['content']?['course'] != null)
+        .toList();
+    final concurrency = AppSettings.performanceSettings.lowPower ? 1 : 2;
+    final results = <Map<String, dynamic>>[];
+    var nextIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        final index = nextIndex;
+        nextIndex++;
+        if (index >= courses.length) return;
+        final items = await _loadChaoxingTodosForCourse(courses[index], userId);
+        results.addAll(items);
+      }
+    }
+
+    if (courses.isEmpty) return const <Map<String, dynamic>>[];
+    await Future.wait(
+      List<Future<void>>.generate(
+        concurrency.clamp(1, courses.length),
+        (_) => worker(),
+      ),
+    );
+    return results;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadChaoxingTodosForCourse(
+    Map<String, dynamic> channel,
+    String userId,
+  ) async {
+    final courseData = channel['content']['course'];
+    final courseId = courseData['data']?[0]?['id']?.toString() ?? '';
+    final clazzId = channel['content']['id']?.toString() ?? '';
+    final cpi = channel['cpi']?.toString() ?? '';
+    final courseName = courseData['data']?[0]?['name']?.toString() ?? '';
+    if (courseId.isEmpty || clazzId.isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+
+    final output = <Map<String, dynamic>>[];
+    try {
+      final homeworks = await ChaoxingHomeworkApi.getHomeworkList(
+        courseId,
+        clazzId,
+      );
+      for (final homework in homeworks) {
+        final status = homework['status']?.toString() ?? '';
+        if (status == '1' || status == 'completed') continue;
+        output.add({
+          'id':
+              homework['workId']?.toString() ??
+              homework['id']?.toString() ??
+              '',
+          'title': homework['title']?.toString() ?? '作业',
+          'platform': '学习通',
+          'course_name': courseName,
+          'end_time': homework['endTime']?.toString() ?? '',
+          'type': 'homework',
+          'account': userId,
+        });
+      }
+
+      final unfinishedTasks = await ChaoxingChapterApi.getUnfinishedTasks(
+        courseId,
+        clazzId,
+        cpi,
+      );
+      for (final task in unfinishedTasks) {
+        output.add({
+          'id': task['objectId']?.toString() ?? task['jobId']?.toString() ?? '',
+          'title': task['title']?.toString() ?? '学习任务',
+          'platform': '学习通',
+          'course_name': courseName,
+          'chapter_name': task['chapterName']?.toString() ?? '',
+          'type': task['type']?.toString() ?? 'task',
+          'account': userId,
+        });
+      }
+    } catch (e) {
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Chaoxing: error fetching todos for course $courseId: $e',
+      );
+    }
+    return output;
   }
 
   Future<void> _loadRainClassroomTodos(String userId) async {
@@ -842,6 +1051,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     setState(() {
       data.isLoading = true;
       data.requestLock = true;
+      data.refreshFailed = false;
     });
 
     PlatformRequestContext? context;
@@ -857,6 +1067,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       );
       final response = await context.sendRequest(
         '/api/v3/classroom/on-lesson-upcoming-exam',
+        platformOptions: _todoStableOptions('rainclassroom.todo.upcoming'),
       );
 
       if (!mounted) return;
@@ -972,6 +1183,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         data.lastRefreshTime = DateTime.now();
         data.isLoading = false;
         data.requestLock = false;
+        data.isShowingCachedData = false;
+        data.refreshFailed = false;
       });
 
       await _persistTodos();
@@ -984,6 +1197,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       setState(() {
         data.isLoading = false;
         data.requestLock = false;
+        data.refreshFailed = true;
       });
     } finally {
       context?.dispose();
@@ -1000,6 +1214,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     setState(() {
       data.isLoading = true;
       data.requestLock = true;
+      data.refreshFailed = false;
     });
 
     PlatformRequestContext? context;
@@ -1049,6 +1264,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         data.lastRefreshTime = DateTime.now();
         data.isLoading = false;
         data.requestLock = false;
+        data.isShowingCachedData = false;
+        data.refreshFailed = false;
       });
 
       await _persistTodos();
@@ -1058,6 +1275,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       setState(() {
         data.isLoading = false;
         data.requestLock = false;
+        data.refreshFailed = true;
       });
     } finally {
       context?.dispose();
@@ -1080,6 +1298,22 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     return _platformData.values.fold(
       0,
       (sum, data) => sum + data.completedTodos.length,
+    );
+  }
+
+  void _showNeedTronclassDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('提示'),
+        content: const Text('请先在账号页切换到畅课平台，再打开畅课待办'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1280,6 +1514,34 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                   padding: EdgeInsets.all(AppSpacing.lg),
                   child: Column(
                     children: [
+                      const SmartInlinePanel(
+                        title: '待办智能建议',
+                        types: {
+                          SmartInsightType.today,
+                          SmartInsightType.todoRisk,
+                          SmartInsightType.accountNetwork,
+                        },
+                      ),
+                      SizedBox(height: AppSpacing.sm),
+                      const ContextHelpHint(
+                        title: '待办页帮助',
+                        tips: [
+                          '页面会先显示本地缓存，再在后台刷新平台待办。',
+                          '快截止和已过期待办会按本地时间规则提示，请以平台详情为准。',
+                          '手动刷新仍受受控并发限制，避免平台误判异常访问。',
+                          '刷新失败时不会清空旧待办，会继续保留缓存数据。',
+                        ],
+                      ),
+                      SizedBox(height: AppSpacing.sm),
+                      MaterialRelatedPanel(
+                        title: '待办相关资料',
+                        contextData: MaterialSearchContext.todo(
+                          title: _firstTodoSearchTitle(),
+                          limit: 3,
+                        ),
+                        maxItems: 3,
+                      ),
+                      SizedBox(height: AppSpacing.md),
                       _buildPlatformSection(
                         platform: PlatformType.chaoxing,
                         title: '学习通',
@@ -1328,6 +1590,34 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     } else {
       return '${diff.inDays}天前';
     }
+  }
+
+  String _todoPlatformStatusText({
+    required bool hasAccount,
+    required bool loading,
+    required TodoPlatformData data,
+    required DateTime? lastRefresh,
+    required bool isFiltered,
+    required int displayCount,
+    required int totalCount,
+  }) {
+    if (!hasAccount) return '未登录账号';
+    if (loading && data.isShowingCachedData) {
+      return '正在显示缓存待办，后台刷新中';
+    }
+    if (loading) return '加载中...';
+    if (data.refreshFailed && data.isShowingCachedData) {
+      return '正在显示缓存待办，后台刷新失败';
+    }
+    if (lastRefresh == null) return '点击刷新按钮加载待办';
+    if (isFiltered) {
+      return displayCount == 0 ? '筛选日期无待办' : '$displayCount 个待办（已筛选）';
+    }
+    final refreshText = _formatRefreshTime(lastRefresh);
+    if (totalCount == 0) {
+      return '暂无待办 · 上次刷新: $refreshText';
+    }
+    return '$totalCount 个待办 · 上次刷新: $refreshText';
   }
 
   Widget _buildCompactStatBadge(
@@ -1667,6 +1957,15 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
     final displayTodos = filteredTodos;
     final isFiltered = _selectedDateFilter != null;
+    final statusText = _todoPlatformStatusText(
+      hasAccount: hasAccount,
+      loading: loading,
+      data: data,
+      lastRefresh: lastRefresh,
+      isFiltered: isFiltered,
+      displayCount: displayTodos.length,
+      totalCount: allTodos.length,
+    );
 
     return AppAnimations.fadeSlideIn(
       child: Card(
@@ -1690,19 +1989,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Text(
-                hasAccount
-                    ? loading
-                          ? '加载中...'
-                          : lastRefresh == null
-                          ? '点击刷新按钮加载待办'
-                          : isFiltered
-                          ? displayTodos.isEmpty
-                                ? '筛选日期无待办'
-                                : '${displayTodos.length} 个待办（已筛选）'
-                          : allTodos.isEmpty
-                          ? '暂无待办 · 上次刷新: ${_formatRefreshTime(lastRefresh)}'
-                          : '${allTodos.length} 个待办 · 上次刷新: ${_formatRefreshTime(lastRefresh)}'
-                    : '未登录账号',
+                statusText,
                 style: TextStyle(
                   color: hasAccount
                       ? Theme.of(
@@ -1973,19 +2260,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
                 // 检查当前平台是否为畅课
                 if (PlatformManager().currentPlatform !=
                     PlatformType.tronclass) {
-                  showDialog(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('提示'),
-                      content: const Text('请先在账号页切换到畅课平台，再打开畅课待办'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('知道了'),
-                        ),
-                      ],
-                    ),
-                  );
+                  _showNeedTronclassDialog();
                   return;
                 }
 
@@ -2134,65 +2409,66 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           Icons.chevron_right,
           color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
         ),
-        onTap: () async {
-          final examId = todo['id']?.toString() ?? '';
-          final classroomId = todo['classroom_id']?.toString() ?? '';
-
-          if (examId.isEmpty || classroomId.isEmpty) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('考试信息不完整')));
-            return;
-          }
-
-          try {
-            final userAgent = await UserAgentHelper.getRainClassroomUA();
-            final headers = UserAgentHelper.getRainClassroomHeaders(userAgent);
-
-            final tokenResponse = await ApiService.sendRequest(
-              '/v/exam/gen_token',
-              method: 'POST',
-              headers: headers,
-              body: {'exam_id': examId, 'classroom_id': classroomId},
-            );
-
-            if (tokenResponse.data == null ||
-                tokenResponse.data['status'] != 200) {
-              throw Exception('生成考试token失败');
-            }
-
-            final tokenData = tokenResponse.data['data'];
-            if (tokenData == null) {
-              throw Exception('考试token数据为空');
-            }
-
-            final token = tokenData['token'];
-            final examHost =
-                tokenData['exam_host'] ?? 'https://examination.xuetangx.com';
-            final userId = tokenData['user_id']?.toString() ?? '';
-
-            final nextUrl = Uri.encodeComponent(
-              '$examHost/exam/$examId?isFrom=2&platform=mobile',
-            );
-            final examUrl =
-                '$examHost/login?exam_id=$examId&user_id=$userId&crypt=${Uri.encodeComponent(token)}&next=$nextUrl&language=zh&platform=mobile';
-
-            final uri = Uri.parse(examUrl);
-            if (await canLaunchUrl(uri)) {
-              await launchUrl(uri, mode: LaunchMode.externalApplication);
-            } else {
-              throw Exception('无法打开考试链接');
-            }
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text('打开考试失败: $e')));
-            }
-          }
-        },
+        onTap: () => _openRainClassroomTodo(todo),
       ),
     );
+  }
+
+  Future<void> _openRainClassroomTodo(Map<String, dynamic> todo) async {
+    final examId = todo['id']?.toString() ?? '';
+    final classroomId = todo['classroom_id']?.toString() ?? '';
+
+    if (examId.isEmpty || classroomId.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('考试信息不完整')));
+      return;
+    }
+
+    try {
+      final userAgent = await UserAgentHelper.getRainClassroomUA();
+      final headers = UserAgentHelper.getRainClassroomHeaders(userAgent);
+
+      final tokenResponse = await ApiService.sendRequest(
+        '/v/exam/gen_token',
+        method: 'POST',
+        headers: headers,
+        body: {'exam_id': examId, 'classroom_id': classroomId},
+      );
+
+      if (tokenResponse.data == null || tokenResponse.data['status'] != 200) {
+        throw Exception('生成考试token失败');
+      }
+
+      final tokenData = tokenResponse.data['data'];
+      if (tokenData == null) {
+        throw Exception('考试token数据为空');
+      }
+
+      final token = tokenData['token'];
+      final examHost =
+          tokenData['exam_host'] ?? 'https://examination.xuetangx.com';
+      final userId = tokenData['user_id']?.toString() ?? '';
+
+      final nextUrl = Uri.encodeComponent(
+        '$examHost/exam/$examId?isFrom=2&platform=mobile',
+      );
+      final examUrl =
+          '$examHost/login?exam_id=$examId&user_id=$userId&crypt=${Uri.encodeComponent(token)}&next=$nextUrl&language=zh&platform=mobile';
+
+      final uri = Uri.parse(examUrl);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        throw Exception('无法打开考试链接');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('打开考试失败: $e')));
+      }
+    }
   }
 
   Widget _buildKetangpaiTodoItem(Map<String, dynamic> todo) {
@@ -2340,13 +2616,15 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
           Icons.chevron_right,
           color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
         ),
-        onTap: () {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('课堂派详情页功能开发中')));
-        },
+        onTap: () => _openKetangpaiTodo(todo),
       ),
     );
+  }
+
+  void _openKetangpaiTodo(Map<String, dynamic> todo) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('课堂派详情页功能开发中')));
   }
 
   IconData _getTypeIcon(String type) {

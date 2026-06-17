@@ -18,7 +18,7 @@
   "laterButton": "Later",
   "downloadButton": "Download",
   "anonymousChatTitle": "💬 Anonymous Chat",
-  "anonymousChatSubtitle": "Nearby anonymous chat and file sharing powered by Nearby Connections",
+  "anonymousChatSubtitle": "Nearby rooms using Google Nearby or BLE + Hotspot automatically",
   "localTransferTitle": "Local Transfer",
   "localTransferSubtitle": "Compatible with LocalSend for local file and text transfer",
   "readingTitle": "Reading",

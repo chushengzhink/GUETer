@@ -44,7 +44,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get anonymousChatTitle => '💬 匿名聊天';
 
   @override
-  String get anonymousChatSubtitle => '基于 Nearby Connections 的附近设备匿名聊天与文件分享';
+  String get anonymousChatSubtitle => '自动使用 Google Nearby 或 BLE + 热点的附近房间';
 
   @override
   String get localTransferTitle => '局域网快传';

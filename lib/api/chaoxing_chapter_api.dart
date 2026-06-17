@@ -3,9 +3,19 @@ import 'package:flutter/foundation.dart';
 
 import 'course.dart';
 import 'platform_request_context.dart';
+import 'platform_request_stability.dart';
 import '../platform.dart';
 import '../session/account.dart';
 import '../utils/chaoxing_html_parser.dart';
+
+PlatformRequestOptions _chapterStableOptions(String operationId) {
+  return PlatformRequestOptions(
+    operationId: operationId,
+    cachePolicy: PlatformRequestCachePolicy.staleIfError,
+    requestKind: PlatformRequestKind.read,
+    allowControlledParallelism: true,
+  );
+}
 
 class ChaoxingChapterApi {
   static List<Map<String, dynamic>> _normalizeMapList(dynamic value) {
@@ -80,6 +90,7 @@ class ChaoxingChapterApi {
           'ut': 's',
         },
         responseType: ResponseType.plain,
+        platformOptions: _chapterStableOptions('chaoxing.chapter.list'),
       );
 
       return ChaoxingHtmlParser().parseCoursePoint(
@@ -185,6 +196,7 @@ class ChaoxingChapterApi {
           'num': '$index',
         },
         responseType: ResponseType.plain,
+        platformOptions: _chapterStableOptions('chaoxing.chapter.job_cards'),
       );
 
       final parsed = ChaoxingHtmlParser().parseJobList(

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:html/parser.dart' as html_parser;
 import 'package:encrypt/encrypt.dart' as encrypt_pkg;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/api_service.dart';
 import '../api/platform_dio_manager.dart';
@@ -13,6 +14,51 @@ import '../session/login_context.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import '../tronclass_guet_constants.dart';
+import 'ketangpai_response.dart';
+import 'tronclass_cas_login_http.dart';
+import 'tronclass_login_request_profile.dart';
+
+const String _tronclassCasBfpPrefix = 'tronclass_cas_bfp_';
+const String _tronclassCasCryptoChars =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+final Random _tronclassCasCryptoRandom = Random.secure();
+
+String encryptTronclassCasPassword(String password, String salt) {
+  return encryptTronclassCasPasswordWithKey(password, utf8.encode(salt));
+}
+
+String encryptTronclassCasPasswordWithKey(String password, List<int> key) {
+  if (key.length != 16 && key.length != 24 && key.length != 32) {
+    throw ArgumentError('Key must be 16, 24, or 32 bytes long');
+  }
+
+  final ivStr = List.generate(
+    16,
+    (_) =>
+        _tronclassCasCryptoChars[_tronclassCasCryptoRandom.nextInt(
+          _tronclassCasCryptoChars.length,
+        )],
+  ).join();
+  final randomStr = List.generate(
+    64,
+    (_) =>
+        _tronclassCasCryptoChars[_tronclassCasCryptoRandom.nextInt(
+          _tronclassCasCryptoChars.length,
+        )],
+  ).join();
+
+  final encryptKey = encrypt_pkg.Key(Uint8List.fromList(key));
+  final ivKey = encrypt_pkg.IV(Uint8List.fromList(ivStr.codeUnits));
+  final encrypter = encrypt_pkg.Encrypter(
+    encrypt_pkg.AES(
+      encryptKey,
+      mode: encrypt_pkg.AESMode.cbc,
+      padding: 'PKCS7',
+    ),
+  );
+  return encrypter.encrypt(randomStr + password, iv: ivKey).base64;
+}
 
 String _loginPayloadSummary(dynamic data) {
   if (data is Map<String, dynamic>) {
@@ -145,6 +191,22 @@ User? parseChaoxingUserFromPayload(dynamic payload) {
 }
 
 enum TronclassLoginNextAction { success, requireMfa, requireWebReauth, failure }
+
+class TronclassMfaPromptContext {
+  const TronclassMfaPromptContext({
+    this.mobileHint,
+    this.tip,
+    this.codeTimeSeconds,
+    required Future<Map<String, dynamic>?> Function() resendCode,
+  }) : _resendCode = resendCode;
+
+  final String? mobileHint;
+  final String? tip;
+  final int? codeTimeSeconds;
+  final Future<Map<String, dynamic>?> Function() _resendCode;
+
+  Future<Map<String, dynamic>?> resendCode() => _resendCode();
+}
 
 @visibleForTesting
 const String tronclassVerificationStageNone = 'none';
@@ -814,6 +876,7 @@ class KTLoginApi {
         '/UserApi/login',
         method: 'POST',
         body: requestBody,
+        skipCredentialValidation: true,
       );
       _logLoginEndpoint(
         'KT',
@@ -845,6 +908,7 @@ class KTLoginApi {
         '/UserApi/loginByMobile',
         method: 'POST',
         body: requestBody,
+        skipCredentialValidation: true,
       );
       _logLoginEndpoint(
         'KT',
@@ -924,6 +988,7 @@ class KTLoginApi {
         method: 'POST',
         body: body,
         headers: {'token': token},
+        skipCredentialValidation: true,
       );
       _logLoginEndpoint(
         'KT',
@@ -936,6 +1001,7 @@ class KTLoginApi {
         method: 'POST',
         body: body,
         headers: {'token': token},
+        skipCredentialValidation: true,
       );
       _logLoginEndpoint(
         'KT',
@@ -980,44 +1046,79 @@ class KTLoginApi {
     }
 
     try {
-      final response = await ApiService.sendRequest(
+      final basinResponse = await ApiService.sendRequest(
         '/UserApi/getUserBasinInfo',
         method: 'POST',
         body: {'reqtimestamp': DateTime.now().millisecondsSinceEpoch},
         headers: {'token': token},
+        skipCredentialValidation: true,
       );
 
-      final data = response.data;
-      if (data is! Map<String, dynamic>) {
+      final basinData = _normalizeStringKeyedMap(basinResponse.data);
+      if (basinData == null || isKetangpaiAuthExpired(basinData)) {
         return false;
       }
 
-      final status = data['status'];
-      if (status is num && status == 1) {
-        return true;
-      }
-
-      final code = data['code'];
-      if (code is num && code == 10000) {
-        return true;
-      }
-
-      final basin = data['data'];
+      var basinHealthy = isKetangpaiSuccess(basinData);
+      final basin = basinData['data'];
       if (basin is Map<String, dynamic>) {
         final remoteToken = basin['token']?.toString() ?? '';
         if (remoteToken.isNotEmpty) {
-          return true;
+          basinHealthy = true;
         }
 
         final uid = basin['uid']?.toString() ?? '';
         if (uid.isNotEmpty) {
-          return true;
+          basinHealthy = true;
         }
+      } else if (basin is Map) {
+        final remoteToken = basin['token']?.toString() ?? '';
+        final uid = basin['uid']?.toString() ?? '';
+        basinHealthy = basinHealthy || remoteToken.isNotEmpty || uid.isNotEmpty;
       }
+
+      if (!basinHealthy) {
+        return false;
+      }
+
+      final courseResponse = await ApiService.sendRequest(
+        '/CourseApi/semesterCourseList',
+        method: 'POST',
+        body: _ketangpaiCurrentSemesterBody(),
+        headers: {'token': token},
+        skipCredentialValidation: true,
+      );
+      final courseData = _normalizeStringKeyedMap(courseResponse.data);
+      if (courseData == null || isKetangpaiAuthExpired(courseData)) {
+        ApiService.appendExternalConsoleLog('课堂派', '课堂派业务接口登录态已过期，请重新登录');
+        return false;
+      }
+      return isKetangpaiSuccess(courseData);
     } catch (e) {
-      _logLoginEndpoint('KT', 'error', '/UserApi/getUserBasinInfo', error: e);
+      _logLoginEndpoint('KT', 'error', 'checkTokenStatus', error: e);
     }
     return false;
+  }
+
+  static Map<String, dynamic> _ketangpaiCurrentSemesterBody() {
+    final now = DateTime.now();
+    final currentYear = now.year;
+    final currentMonth = now.month;
+    final semester = currentMonth >= 9
+        ? '$currentYear-${currentYear + 1}'
+        : '${currentYear - 1}-$currentYear';
+    final term = currentMonth >= 9
+        ? '1'
+        : currentMonth >= 2
+        ? '2'
+        : '1';
+    return <String, dynamic>{
+      'isstudy': '1',
+      'search': '',
+      'semester': semester,
+      'term': term,
+      'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
+    };
   }
 }
 
@@ -1045,20 +1146,25 @@ class TCLoginApi {
 
   static String get lastLoginTrace => _loginTrace.join('\n');
 
-  static Map<String, String> _authQueryParams() {
+  static Map<String, String> _authQueryParams({String? redirectUriOverride}) {
+    final redirectUri = redirectUriOverride?.trim().isNotEmpty == true
+        ? redirectUriOverride!.trim()
+        : TronclassGuetConstants.redirectUri;
     return {
       'scope': 'openid',
       'response_type': 'code',
-      'redirect_uri': TronclassGuetConstants.redirectUri,
+      'redirect_uri': redirectUri,
       'client_id': TronclassGuetConstants.clientId,
       'autologin': 'true',
     };
   }
 
-  static Uri buildAuthUri() {
-    return Uri.parse(
-      _identityAuthUrl,
-    ).replace(queryParameters: _authQueryParams());
+  static Uri buildAuthUri({String? redirectUriOverride}) {
+    return Uri.parse(_identityAuthUrl).replace(
+      queryParameters: _authQueryParams(
+        redirectUriOverride: redirectUriOverride,
+      ),
+    );
   }
 
   static Uri buildPortalSessionBootstrapUri(String sessionId) {
@@ -1208,7 +1314,7 @@ class TCLoginApi {
         'reauthEntryUrl': resolvedReauthUrl,
         'mfaContextReady': ready && !returnedToLogin,
         'mfaSessionInvalid': sessionInvalid,
-        if (message != null) 'message': message,
+        ...?message == null ? null : {'message': message},
       };
     } catch (e) {
       _trace('[TC][MFA] reauth prime failed=$e');
@@ -2919,34 +3025,67 @@ class TCLoginApi {
   }
 
   static String _encryptPassword(String password, List<int> key) {
-    if (key.length != 16 && key.length != 24 && key.length != 32) {
-      throw ArgumentError('Key must be 16, 24, or 32 bytes long');
+    return encryptTronclassCasPasswordWithKey(password, key);
+  }
+
+  static Future<String> _getOrCreateCasBfp(String username) async {
+    final normalizedUsername = username.trim();
+    final prefs = await SharedPreferences.getInstance();
+    final key = '$_tronclassCasBfpPrefix$normalizedUsername';
+    final existing = prefs.getString(key);
+    if (existing != null && RegExp(r'^[0-9A-F]{32}$').hasMatch(existing)) {
+      return existing;
     }
 
-    final random = Random.secure();
-    final iv = Uint8List(16);
-    for (int i = 0; i < 16; i++) {
-      iv[i] = random.nextInt(256);
-    }
+    final bfp = List.generate(
+      16,
+      (_) => _tronclassCasCryptoRandom
+          .nextInt(256)
+          .toRadixString(16)
+          .padLeft(2, '0'),
+    ).join().toUpperCase();
+    await prefs.setString(key, bfp);
+    return bfp;
+  }
 
-    const chars =
-        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    final randomStr = List.generate(
-      64,
-      (_) => chars[random.nextInt(chars.length)],
-    ).join();
-
-    final plaintext = randomStr + password;
-    final encryptKey = encrypt_pkg.Key(Uint8List.fromList(key));
-    final ivKey = encrypt_pkg.IV(iv);
-    final encrypter = encrypt_pkg.Encrypter(
-      encrypt_pkg.AES(
-        encryptKey,
-        mode: encrypt_pkg.AESMode.cbc,
-        padding: 'PKCS7',
+  static Future<void> _reportCasBrowserFingerprint(
+    String username, {
+    required String service,
+    LoginContext? loginContext,
+  }) async {
+    final bfp = await _getOrCreateCasBfp(username);
+    await ApiService.sendRequest(
+      '${TronclassGuetConstants.casBaseUrl}/authserver/bfp/info',
+      params: {
+        'bfp': bfp,
+        '_': DateTime.now().millisecondsSinceEpoch.toString(),
+      },
+      headers: TronclassLoginHeaders.build(
+        stage: TronclassLoginRequestStage.casFingerprintReport,
+        service: service,
       ),
+      responseType: ResponseType.plain,
+      allowRedirects: false,
+      loginContext: loginContext,
     );
-    return encrypter.encrypt(plaintext, iv: ivKey).base64;
+  }
+
+  static Future<void> _clearStaleCasSessionCookies(
+    LoginContext? loginContext,
+  ) async {
+    if (loginContext == null) {
+      return;
+    }
+    try {
+      final removed = await TronclassCasLoginHttp(
+        loginContext: loginContext,
+      ).clearStaleCasSessionCookies();
+      if (removed > 0) {
+        _trace('[TC][CAS] cleared stale session cookies count=$removed');
+      }
+    } catch (e) {
+      _trace('[TC][CAS] clear stale session cookies failed=$e');
+    }
   }
 
   static Future<Map<String, dynamic>> _loginForAuthCode(
@@ -2969,6 +3108,9 @@ class TCLoginApi {
     final authProbe = await ApiService.sendRequest(
       _identityAuthUrl,
       params: _authQueryParams(),
+      headers: TronclassLoginHeaders.build(
+        stage: TronclassLoginRequestStage.identityAuth,
+      ),
       responseType: ResponseType.plain,
       allowRedirects: true,
       loginContext: loginContext,
@@ -2994,6 +3136,9 @@ class TCLoginApi {
       final authProbeNoFollow = await ApiService.sendRequest(
         _identityAuthUrl,
         params: _authQueryParams(),
+        headers: TronclassLoginHeaders.build(
+          stage: TronclassLoginRequestStage.identityAuth,
+        ),
         responseType: ResponseType.plain,
         allowRedirects: false,
         loginContext: loginContext,
@@ -3066,6 +3211,10 @@ class TCLoginApi {
             try {
               final chaseResp = await ApiService.sendRequest(
                 candidate,
+                headers: TronclassLoginHeaders.build(
+                  stage: TronclassLoginHeaders.stageForUrl(candidate),
+                  service: service,
+                ),
                 responseType: ResponseType.plain,
                 allowRedirects: true,
                 loginContext: loginContext,
@@ -3091,6 +3240,10 @@ class TCLoginApi {
     final loginPageResp = await ApiService.sendRequest(
       TronclassGuetConstants.casLoginUrl,
       params: {'service': service},
+      headers: TronclassLoginHeaders.build(
+        stage: TronclassLoginRequestStage.casLoginPage,
+        service: service,
+      ),
       responseType: ResponseType.plain,
       allowRedirects: false,
       loginContext: loginContext,
@@ -3104,6 +3257,18 @@ class TCLoginApi {
       return {'ok': false, 'message': 'CAS 页面参数解析失败', 'debug': lastLoginTrace};
     }
 
+    try {
+      _trace('[TC][bfp] report browser fingerprint');
+      await _reportCasBrowserFingerprint(
+        username,
+        service: service,
+        loginContext: loginContext,
+      );
+      _trace('[TC][bfp] report complete');
+    } catch (e) {
+      _trace('[TC][bfp] report failed=$e');
+    }
+
     String captcha = '';
     _trace('[TC] 步骤4: 检查账号密码页是否需要图形验证码');
     final checkNeedCaptchaResp = await ApiService.sendRequest(
@@ -3112,6 +3277,10 @@ class TCLoginApi {
         'username': username,
         '_': DateTime.now().millisecondsSinceEpoch.toString(),
       },
+      headers: TronclassLoginHeaders.build(
+        stage: TronclassLoginRequestStage.casCaptchaCheck,
+        service: service,
+      ),
       responseType: ResponseType.plain,
       allowRedirects: false,
       loginContext: loginContext,
@@ -3131,6 +3300,10 @@ class TCLoginApi {
       }
       final captchaImageResp = await ApiService.sendRequest(
         '${TronclassGuetConstants.casCaptchaUrl}?${DateTime.now().millisecondsSinceEpoch}',
+        headers: TronclassLoginHeaders.build(
+          stage: TronclassLoginRequestStage.casCaptchaImage,
+          service: service,
+        ),
         responseType: ResponseType.bytes,
         allowRedirects: false,
         loginContext: loginContext,
@@ -3165,7 +3338,10 @@ class TCLoginApi {
       TronclassGuetConstants.casLoginUrl,
       method: 'POST',
       params: {'service': service},
-      headers: {'content-type': 'application/x-www-form-urlencoded'},
+      headers: TronclassLoginHeaders.build(
+        stage: TronclassLoginRequestStage.casLoginSubmit,
+        service: service,
+      ),
       loginContext: loginContext,
       body: {
         'username': username,
@@ -3269,17 +3445,37 @@ class TCLoginApi {
     String password, {
     Future<String?> Function(Uint8List imageBytes)? captchaProvider,
     Future<String?> Function(String? mobileHint, String? tip)? mfaCodeProvider,
+    Future<String?> Function(TronclassMfaPromptContext context)?
+    mfaPromptProvider,
     LoginContext? loginContext,
   }) async {
     try {
       _resetTrace();
       CookieManager.isLoggingIn = true;
+      await _clearStaleCasSessionCookies(loginContext);
+      final effectiveMfaCodeProvider =
+          mfaCodeProvider ??
+          (mfaPromptProvider == null
+              ? null
+              : (String? mobileHint, String? tip) {
+                  return mfaPromptProvider(
+                    TronclassMfaPromptContext(
+                      mobileHint: mobileHint,
+                      tip: tip,
+                      codeTimeSeconds: 120,
+                      resendCode: () => _sendDynamicCodeWithContext(
+                        username,
+                        manualSendOnly: true,
+                      ),
+                    ),
+                  );
+                });
 
       final authCodeResult = await _loginForAuthCode(
         username,
         password,
         captchaProvider: captchaProvider,
-        mfaCodeProvider: mfaCodeProvider,
+        mfaCodeProvider: effectiveMfaCodeProvider,
         loginContext: loginContext,
       );
       if (authCodeResult['ok'] != true) {

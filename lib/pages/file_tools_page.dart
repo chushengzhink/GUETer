@@ -5,13 +5,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
-import 'package:share_plus/share_plus.dart';
 
 import '../l10n/app_localizations.dart';
+import '../materials/material_index_models.dart';
+import '../materials/material_library_store.dart';
 import '../models/file_tool_models.dart';
+import '../plugins/plugin_action_menu.dart';
+import '../plugins/plugin_context.dart';
+import '../plugins/plugin_manifest.dart';
+import '../services/file_output_share_service.dart';
+import '../services/file_tool_history_store.dart';
 import '../services/file_tool_service.dart';
+import '../services/duplicate_file_scanner.dart';
 import '../theme/components/app_card.dart';
 import '../theme/components/app_text_field.dart';
+import 'duplicate_cleanup_page.dart';
+import 'file_preview_page.dart';
 
 class FileToolsPage extends StatefulWidget {
   const FileToolsPage({super.key});
@@ -22,18 +31,26 @@ class FileToolsPage extends StatefulWidget {
 
 class _FileToolsPageState extends State<FileToolsPage> {
   final FileToolService _service = FileToolService();
+  final FileToolHistoryStore _historyStore = FileToolHistoryStore();
+  final FileOutputShareService _shareService = FileOutputShareService();
+  final MaterialLibraryStore _materialLibraryStore = MaterialLibraryStore();
   final TextEditingController _fileNameController = TextEditingController();
   final TextEditingController _extensionController = TextEditingController();
+  final TextEditingController _archiveNameController = TextEditingController();
 
   bool _busy = false;
   String _status = '';
   String? _customOutputDir;
+  String? _defaultOutputDir;
   String? _lastOutputPath;
   String? _fileNameError;
   String? _extensionError;
+  int _compressionLevel = 6;
 
   SelectedFileItem? _selectedZipFile;
   SelectedFileItem? _selectedRenameFile;
+  ZipPreview? _zipPreview;
+  Set<String> _selectedZipEntries = <String>{};
   List<SelectedFileItem> _archiveInputs = <SelectedFileItem>[];
   final List<FileToolTaskRecord> _recentTasks = <FileToolTaskRecord>[];
 
@@ -42,12 +59,15 @@ class _FileToolsPageState extends State<FileToolsPage> {
     super.initState();
     _fileNameController.addListener(_updateRenamePreviewErrors);
     _extensionController.addListener(_updateRenamePreviewErrors);
+    _refreshDefaultOutputDirectory();
+    _loadHistory();
   }
 
   @override
   void dispose() {
     _fileNameController.dispose();
     _extensionController.dispose();
+    _archiveNameController.dispose();
     super.dispose();
   }
 
@@ -78,15 +98,34 @@ class _FileToolsPageState extends State<FileToolsPage> {
   void _resetOutputDirectory() {
     setState(() {
       _customOutputDir = null;
-      _status = _tr(
-        '已恢复默认输出目录。',
-        'Output directory reset to default.',
-      );
+      _status = _tr('已恢复默认输出目录。', 'Output directory reset to default.');
     });
+    _refreshDefaultOutputDirectory();
   }
 
   Future<Directory> _outputDirectory() {
     return _service.ensureOutputDirectory(customOutputPath: _customOutputDir);
+  }
+
+  Future<void> _refreshDefaultOutputDirectory() async {
+    final dir = await _service.ensureOutputDirectory();
+    if (!mounted) return;
+    setState(() {
+      _defaultOutputDir = dir.path;
+    });
+  }
+
+  Future<void> _loadHistory() async {
+    final records = await _historyStore.load(scope: FileToolHistoryScope.file);
+    if (!mounted) return;
+    setState(() {
+      _recentTasks
+        ..clear()
+        ..addAll(records.map((record) => record.toTaskRecord()));
+      if (_recentTasks.isNotEmpty && _recentTasks.first.outputPath.isNotEmpty) {
+        _lastOutputPath = _recentTasks.first.outputPath;
+      }
+    });
   }
 
   Future<void> _pickZipFile() async {
@@ -104,8 +143,11 @@ class _FileToolsPageState extends State<FileToolsPage> {
     final item = await SelectedFileItem.fromEntity(File(path));
     setState(() {
       _selectedZipFile = item;
+      _zipPreview = null;
+      _selectedZipEntries = <String>{};
       _status = _tr('已选择 ZIP：${item.name}', 'ZIP selected: ${item.name}');
     });
+    await _loadZipPreview(File(path));
   }
 
   Future<void> _pickRenameFile() async {
@@ -155,6 +197,9 @@ class _FileToolsPageState extends State<FileToolsPage> {
     }
     setState(() {
       _archiveInputs = items;
+      _archiveNameController.text = items.length == 1
+          ? p.basenameWithoutExtension(items.first.path)
+          : 'archive_${DateTime.now().millisecondsSinceEpoch}';
       _status = _tr(
         '已选择 ${items.length} 个文件用于打包。',
         'Selected ${items.length} files for ZIP creation.',
@@ -172,6 +217,7 @@ class _FileToolsPageState extends State<FileToolsPage> {
     final item = await SelectedFileItem.fromEntity(Directory(path));
     setState(() {
       _archiveInputs = <SelectedFileItem>[item];
+      _archiveNameController.text = item.name;
       _status = _tr('已选择文件夹：${item.name}', 'Folder selected: ${item.name}');
     });
   }
@@ -179,8 +225,69 @@ class _FileToolsPageState extends State<FileToolsPage> {
   void _clearArchiveInputs() {
     setState(() {
       _archiveInputs = <SelectedFileItem>[];
+      _archiveNameController.clear();
       _status = _tr('已清空打包输入。', 'Archive inputs cleared.');
     });
+  }
+
+  Future<void> _loadZipPreview(File file) async {
+    try {
+      final preview = await _service.previewZip(zipFile: file);
+      if (!mounted) return;
+      setState(() {
+        _zipPreview = preview;
+        _selectedZipEntries = preview.entries
+            .where((entry) => entry.isSafe)
+            .map((entry) => entry.path)
+            .toSet();
+        _status = _tr(
+          'ZIP 预览完成：${preview.fileCount} 个文件，${preview.directoryCount} 个文件夹。',
+          'ZIP preview ready: ${preview.fileCount} files, ${preview.directoryCount} folders.',
+        );
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _zipPreview = null;
+        _selectedZipEntries = <String>{};
+        _status = error.toString();
+      });
+    }
+  }
+
+  void _toggleZipEntry(String path, bool selected) {
+    setState(() {
+      final next = Set<String>.from(_selectedZipEntries);
+      if (selected) {
+        next.add(path);
+      } else {
+        next.remove(path);
+      }
+      _selectedZipEntries = next;
+    });
+  }
+
+  void _selectAllZipEntries() {
+    final preview = _zipPreview;
+    if (preview == null) return;
+    setState(() {
+      _selectedZipEntries = preview.entries
+          .where((entry) => entry.isSafe)
+          .map((entry) => entry.path)
+          .toSet();
+    });
+  }
+
+  void _clearZipEntrySelection() {
+    setState(() {
+      _selectedZipEntries = <String>{};
+    });
+  }
+
+  void _trimRecentTasks() {
+    if (_recentTasks.length > 30) {
+      _recentTasks.removeRange(30, _recentTasks.length);
+    }
   }
 
   void _updateRenamePreviewErrors() {
@@ -229,18 +336,14 @@ class _FileToolsPageState extends State<FileToolsPage> {
         _busy = false;
         _lastOutputPath = outputPath;
         _status = successMessage;
-        _recentTasks.insert(
-          0,
-          FileToolTaskRecord(
-            toolName: toolName,
-            inputSummary: inputSummary,
-            outputPath: outputPath,
-            timestamp: DateTime.now(),
-            success: true,
-            message: successMessage,
-          ),
-        );
       });
+      await _recordHistory(
+        toolName: toolName,
+        inputSummary: inputSummary,
+        outputPath: outputPath,
+        success: true,
+        message: successMessage,
+      );
     } catch (error) {
       if (!mounted) {
         return;
@@ -249,22 +352,53 @@ class _FileToolsPageState extends State<FileToolsPage> {
       setState(() {
         _busy = false;
         _status = message;
-        _recentTasks.insert(
-          0,
-          FileToolTaskRecord(
-            toolName: toolName,
-            inputSummary: inputSummary,
-            outputPath: '',
-            timestamp: DateTime.now(),
-            success: false,
-            message: message,
-          ),
-        );
       });
+      await _recordHistory(
+        toolName: toolName,
+        inputSummary: inputSummary,
+        outputPath: '',
+        success: false,
+        message: message,
+      );
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     }
+  }
+
+  Future<void> _recordHistory({
+    required String toolName,
+    required String inputSummary,
+    required String outputPath,
+    required bool success,
+    required String message,
+  }) async {
+    final record = FileToolHistoryRecord(
+      scope: FileToolHistoryScope.file,
+      toolName: toolName,
+      inputSummary: inputSummary,
+      outputPath: outputPath,
+      timestamp: DateTime.now(),
+      success: success,
+      message: message,
+    );
+    await _historyStore.append(record);
+    if (success && outputPath.trim().isNotEmpty) {
+      await _materialLibraryStore.upsertItem(
+        path: outputPath,
+        name: p.basename(outputPath),
+        sourceType: MaterialSourceType.fileToolOutput,
+        sourceLabel: toolName,
+      );
+    }
+    if (!mounted) return;
+    setState(() {
+      _recentTasks.insert(0, record.toTaskRecord());
+      _trimRecentTasks();
+    });
   }
 
   Future<void> _extractZip() async {
@@ -281,10 +415,19 @@ class _FileToolsPageState extends State<FileToolsPage> {
       inputSummary: zip.name,
       successMessage: _tr('ZIP 解压完成。', 'ZIP extracted successfully.'),
       action: () async {
+        if (_zipPreview != null && _selectedZipEntries.isEmpty) {
+          throw FileToolException(
+            _tr(
+              '请至少选择一个安全条目再解压。',
+              'Choose at least one safe entry to extract.',
+            ),
+          );
+        }
         final outputDirectory = await _outputDirectory();
         final directory = await _service.extractZip(
           zipFile: File(zip.path),
           outputDirectory: outputDirectory,
+          selectedEntryPaths: _zipPreview == null ? null : _selectedZipEntries,
         );
         return directory.path;
       },
@@ -310,12 +453,15 @@ class _FileToolsPageState extends State<FileToolsPage> {
         final outputDirectory = await _outputDirectory();
         final entities = _archiveInputs
             .map<FileSystemEntity>(
-              (item) => item.isDirectory ? Directory(item.path) : File(item.path),
+              (item) =>
+                  item.isDirectory ? Directory(item.path) : File(item.path),
             )
             .toList();
         final file = await _service.createZip(
           sources: entities,
           outputDirectory: outputDirectory,
+          preferredName: _archiveNameController.text,
+          compressionLevel: _compressionLevel,
         );
         return file.path;
       },
@@ -326,10 +472,7 @@ class _FileToolsPageState extends State<FileToolsPage> {
     final file = _selectedRenameFile;
     if (file == null) {
       setState(() {
-        _status = _tr(
-          '请先选择要重命名的文件。',
-          'Choose a file to rename first.',
-        );
+        _status = _tr('请先选择要重命名的文件。', 'Choose a file to rename first.');
       });
       return;
     }
@@ -368,7 +511,7 @@ class _FileToolsPageState extends State<FileToolsPage> {
     if (path == null || path.isEmpty) {
       return;
     }
-    await OpenFilex.open(path);
+    await FilePreviewPage.open(context, path);
   }
 
   Future<void> _openContainingDirectory() async {
@@ -388,17 +531,50 @@ class _FileToolsPageState extends State<FileToolsPage> {
     if (path == null || path.isEmpty) {
       return;
     }
-    final type = await FileSystemEntity.type(path);
-    if (type != FileSystemEntityType.file) {
-      setState(() {
-        _status = _tr(
-          '当前输出是文件夹，暂不支持直接分享，请先打开目录。',
-          'Current output is a folder and cannot be shared directly.',
-        );
-      });
-      return;
+    await _shareOutputPath(path);
+  }
+
+  Future<void> _openDuplicateCleanup() async {
+    final outputDir = await _outputDirectory();
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DuplicateCleanupPage(
+          title: _tr('文件工具查重清理', 'File tools duplicate cleanup'),
+          roots: [
+            DuplicateScanRoot(
+              label: _tr('文件工具输出', 'File outputs'),
+              path: outputDir.path,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareOutputPath(String path) async {
+    try {
+      await _shareService.shareOutput(
+        path,
+        text: _tr('文件工具输出', 'File tool output'),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final message = error.toString();
+      setState(() => _status = message);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
-    await Share.shareXFiles([XFile(path)]);
+  }
+
+  Future<void> _clearHistory() async {
+    await _historyStore.clear(scope: FileToolHistoryScope.file);
+    if (!mounted) return;
+    setState(() {
+      _recentTasks.clear();
+      _status = _tr('文件工具历史已清空。', 'File tool history cleared.');
+    });
   }
 
   void _copyLastOutputPath() {
@@ -410,6 +586,32 @@ class _FileToolsPageState extends State<FileToolsPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(l10n.outputPathCopied)));
+  }
+
+  Future<void> _runFileOutputMod(
+    String path,
+    PluginActionMenuItem action,
+  ) async {
+    try {
+      final stat = await File(path).stat();
+      if (!mounted) return;
+      await PluginActionMenu.run(
+        context,
+        action,
+        PluginActionContext(
+          type: PluginContextType.file,
+          filePath: path,
+          fileName: p.basename(path),
+          fileSize: stat.size,
+          isDirectory: stat.type == FileSystemEntityType.directory,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Mod 执行失败：$error')));
+    }
   }
 
   String _formatBytes(int bytes) {
@@ -437,7 +639,9 @@ class _FileToolsPageState extends State<FileToolsPage> {
   }) {
     return AppCard(
       margin: const EdgeInsets.only(bottom: 12),
-      border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+      border: Border.all(
+        color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -445,7 +649,10 @@ class _FileToolsPageState extends State<FileToolsPage> {
             children: [
               Text(
                 title,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const Spacer(),
               TextButton.icon(
@@ -499,11 +706,16 @@ class _FileToolsPageState extends State<FileToolsPage> {
             children: [
               Text(
                 _tr('打包输入', 'Archive inputs'),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const Spacer(),
               TextButton(
-                onPressed: _archiveInputs.isEmpty || _busy ? null : _clearArchiveInputs,
+                onPressed: _archiveInputs.isEmpty || _busy
+                    ? null
+                    : _clearArchiveInputs,
                 child: Text(_tr('清空', 'Clear')),
               ),
             ],
@@ -526,44 +738,246 @@ class _FileToolsPageState extends State<FileToolsPage> {
             ],
           ),
           const SizedBox(height: 12),
+          if (_archiveInputs.isNotEmpty) ...[
+            AppTextField(
+              controller: _archiveNameController,
+              labelText: _tr('压缩包名称', 'Archive name'),
+              hintText: _tr('不需要填写 .zip', 'Do not include .zip'),
+              prefixIcon: Icons.drive_file_rename_outline,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _tr('压缩级别', 'Compression level'),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<int>(
+              segments: [
+                ButtonSegment(
+                  value: 0,
+                  label: Text(_tr('存储', 'Store')),
+                  icon: const Icon(Icons.speed_outlined),
+                ),
+                ButtonSegment(
+                  value: 6,
+                  label: Text(_tr('均衡', 'Balanced')),
+                  icon: const Icon(Icons.tune_outlined),
+                ),
+                ButtonSegment(
+                  value: 9,
+                  label: Text(_tr('最小', 'Smallest')),
+                  icon: const Icon(Icons.compress_outlined),
+                ),
+              ],
+              selected: <int>{_compressionLevel},
+              onSelectionChanged: _busy
+                  ? null
+                  : (selection) {
+                      setState(() => _compressionLevel = selection.first);
+                    },
+            ),
+            const SizedBox(height: 12),
+          ],
           if (_archiveInputs.isEmpty)
             Text(
               _tr('还没有要打包的内容。', 'No files or folders selected yet.'),
               style: TextStyle(color: Colors.grey[700]),
             )
           else
-            ..._archiveInputs.take(4).map(
-              (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      item.isDirectory
-                          ? Icons.folder_copy_outlined
-                          : Icons.insert_drive_file_outlined,
-                      size: 18,
-                      color: Colors.indigo,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(item.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                          Text(
-                            item.path,
-                            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+            ..._archiveInputs
+                .take(4)
+                .map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          item.isDirectory
+                              ? Icons.folder_copy_outlined
+                              : Icons.insert_drive_file_outlined,
+                          size: 18,
+                          color: Colors.indigo,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              Text(
+                                item.path,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[700],
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
+                ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildZipPreviewCard() {
+    final preview = _zipPreview;
+    final selectedCount = _selectedZipEntries.length;
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: 12),
+      border: Border.all(color: Colors.blue.withValues(alpha: 0.18)),
+      gradient: LinearGradient(
+        colors: [
+          Colors.blue.withValues(alpha: 0.10),
+          Colors.cyan.withValues(alpha: 0.04),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                _tr('ZIP 内容预览', 'ZIP preview'),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
+              const Spacer(),
+              if (preview != null)
+                Text(
+                  _tr('$selectedCount 已选', '$selectedCount selected'),
+                  style: TextStyle(
+                    color: Colors.blue[800],
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_selectedZipFile == null)
+            Text(
+              _tr('选择 ZIP 后会显示内容列表。', 'Choose a ZIP file to preview entries.'),
+              style: TextStyle(color: Colors.grey[700]),
+            )
+          else if (preview == null)
+            Text(
+              _tr('正在等待 ZIP 预览。', 'Waiting for ZIP preview.'),
+              style: TextStyle(color: Colors.grey[700]),
+            )
+          else ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _MiniStat(
+                  label: _tr('文件', 'Files'),
+                  value: preview.fileCount.toString(),
+                ),
+                _MiniStat(
+                  label: _tr('文件夹', 'Folders'),
+                  value: preview.directoryCount.toString(),
+                ),
+                _MiniStat(
+                  label: _tr('总大小', 'Total'),
+                  value: _formatBytes(preview.totalSizeBytes),
+                ),
+                if (preview.hasUnsafeEntries)
+                  _MiniStat(
+                    label: _tr('已拦截', 'Blocked'),
+                    value: preview.skippedUnsafeCount.toString(),
+                    color: Colors.red,
+                  ),
+              ],
             ),
+            const SizedBox(height: 10),
+            Text(
+              preview.hasUnsafeEntries
+                  ? _tr(
+                      '检测到不安全路径，已禁止选择，解压时会跳过。',
+                      'Unsafe paths were blocked and will be skipped.',
+                    )
+                  : _tr(
+                      '路径安全校验通过，可选择需要解压的条目。',
+                      'Path safety check passed. Pick entries to extract.',
+                    ),
+              style: TextStyle(
+                color: preview.hasUnsafeEntries
+                    ? Colors.red[700]
+                    : Colors.grey[700],
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: _busy ? null : _selectAllZipEntries,
+                  icon: const Icon(Icons.select_all_outlined),
+                  label: Text(_tr('全选', 'Select all')),
+                ),
+                TextButton.icon(
+                  onPressed: _busy ? null : _clearZipEntrySelection,
+                  icon: const Icon(Icons.deselect_outlined),
+                  label: Text(_tr('清空选择', 'Clear selection')),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ...preview.entries
+                .take(8)
+                .map(
+                  (entry) => CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value:
+                        entry.isSafe &&
+                        _selectedZipEntries.contains(entry.path),
+                    onChanged: !entry.isSafe || _busy
+                        ? null
+                        : (value) =>
+                              _toggleZipEntry(entry.path, value ?? false),
+                    secondary: Icon(
+                      entry.isDirectory
+                          ? Icons.folder_outlined
+                          : Icons.insert_drive_file_outlined,
+                      color: entry.isSafe ? Colors.blue : Colors.red,
+                    ),
+                    title: Text(
+                      entry.path,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      entry.isDirectory
+                          ? _tr('文件夹', 'Folder')
+                          : _formatBytes(entry.sizeBytes),
+                    ),
+                  ),
+                ),
+            if (preview.entries.length > 8)
+              Text(
+                _tr(
+                  '仅显示前 8 项，解压选择仍按当前勾选状态执行。',
+                  'Showing first 8 entries. Extraction uses current selection.',
+                ),
+                style: TextStyle(color: Colors.grey[700], fontSize: 12),
+              ),
+          ],
         ],
       ),
     );
@@ -586,7 +1000,10 @@ class _FileToolsPageState extends State<FileToolsPage> {
             children: [
               Text(
                 _tr('重命名预览', 'Rename preview'),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const Spacer(),
               Text(
@@ -620,8 +1037,7 @@ class _FileToolsPageState extends State<FileToolsPage> {
   }
 
   Widget _buildStatusCard() {
-    final outputDirectory = _customOutputDir ??
-        p.join(Directory.systemTemp.path, 'course_helper_file_tools_output');
+    final outputDirectory = _customOutputDir ?? _defaultOutputDir ?? '-';
     final outputType = _lastOutputPath == null
         ? FileSystemEntityType.notFound
         : FileSystemEntity.typeSync(_lastOutputPath!);
@@ -642,7 +1058,10 @@ class _FileToolsPageState extends State<FileToolsPage> {
             children: [
               Text(
                 _tr('文件工具状态', 'File tools status'),
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const Spacer(),
               if (_busy)
@@ -686,7 +1105,9 @@ class _FileToolsPageState extends State<FileToolsPage> {
                 label: Text(_tr('恢复默认', 'Reset')),
               ),
               OutlinedButton.icon(
-                onPressed: (_lastOutputPath == null || _busy) ? null : _openLastOutput,
+                onPressed: (_lastOutputPath == null || _busy)
+                    ? null
+                    : _openLastOutput,
                 icon: const Icon(Icons.open_in_new_outlined),
                 label: Text(
                   outputType == FileSystemEntityType.directory
@@ -702,7 +1123,9 @@ class _FileToolsPageState extends State<FileToolsPage> {
                 label: Text(_tr('所在目录', 'Containing folder')),
               ),
               OutlinedButton.icon(
-                onPressed: (_lastOutputPath == null || _busy) ? null : _shareLastOutput,
+                onPressed: (_lastOutputPath == null || _busy)
+                    ? null
+                    : _shareLastOutput,
                 icon: const Icon(Icons.share_outlined),
                 label: Text(_tr('分享', 'Share')),
               ),
@@ -712,6 +1135,11 @@ class _FileToolsPageState extends State<FileToolsPage> {
                     : _copyLastOutputPath,
                 icon: const Icon(Icons.copy_outlined),
                 label: Text(l10n.copyOutputPath),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _openDuplicateCleanup,
+                icon: const Icon(Icons.cleaning_services_outlined),
+                label: Text(_tr('查重清理', 'Deduplicate')),
               ),
             ],
           ),
@@ -733,7 +1161,7 @@ class _FileToolsPageState extends State<FileToolsPage> {
           color: Colors.blue,
           icon: Icons.unarchive_outlined,
           title: _tr('解压 ZIP', 'Extract ZIP'),
-          subtitle: _tr('选择 ZIP 后解压到输出目录', 'Extract into output directory'),
+          subtitle: _tr('可按预览勾选条目解压', 'Extract selected preview entries'),
           onTap: _busy ? null : _extractZip,
         ),
         _ActionCard(
@@ -747,7 +1175,10 @@ class _FileToolsPageState extends State<FileToolsPage> {
           color: Colors.orange,
           icon: Icons.drive_file_rename_outline,
           title: _tr('重命名文件', 'Rename file'),
-          subtitle: _tr('文件名与扩展名分开编辑', 'Edit file name and extension separately'),
+          subtitle: _tr(
+            '文件名与扩展名分开编辑',
+            'Edit file name and extension separately',
+          ),
           onTap: _busy ? null : _renameFile,
         ),
       ],
@@ -757,12 +1188,22 @@ class _FileToolsPageState extends State<FileToolsPage> {
   Widget _buildRecentTasksCard() {
     return AppCard(
       margin: const EdgeInsets.only(bottom: 24),
-      border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+      border: Border.all(
+        color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
+      ),
       child: ExpansionTile(
         tilePadding: EdgeInsets.zero,
         childrenPadding: EdgeInsets.zero,
         leading: const Icon(Icons.history),
-        title: Text(l10n.recentTasksTitle),
+        title: Row(
+          children: [
+            Expanded(child: Text(l10n.recentTasksTitle)),
+            TextButton(
+              onPressed: _recentTasks.isEmpty || _busy ? null : _clearHistory,
+              child: Text(_tr('清空', 'Clear')),
+            ),
+          ],
+        ),
         subtitle: Text(l10n.recentTasksCount(_recentTasks.length)),
         children: [
           if (_recentTasks.isEmpty)
@@ -774,32 +1215,82 @@ class _FileToolsPageState extends State<FileToolsPage> {
               ),
             )
           else
-            ..._recentTasks.take(6).map(
-              (task) => ListTile(
-                dense: true,
-                leading: Icon(
-                  task.success ? Icons.check_circle : Icons.error_outline,
-                  color: task.success ? Colors.green : Colors.red,
+            ..._recentTasks
+                .take(6)
+                .map(
+                  (task) => ListTile(
+                    dense: true,
+                    leading: Icon(
+                      task.success ? Icons.check_circle : Icons.error_outline,
+                      color: task.success ? Colors.green : Colors.red,
+                    ),
+                    title: Text(task.toolName),
+                    subtitle: Text(
+                      '${_formatTime(task.timestamp)}\n${task.inputSummary}\n${task.message}',
+                      style: const TextStyle(height: 1.35),
+                    ),
+                    trailing: task.outputPath.isEmpty
+                        ? null
+                        : Wrap(
+                            spacing: 2,
+                            children: [
+                              IconButton(
+                                tooltip: _tr('预览', 'Preview'),
+                                onPressed: () => FilePreviewPage.open(
+                                  context,
+                                  task.outputPath,
+                                ),
+                                icon: const Icon(Icons.visibility_outlined),
+                              ),
+                              IconButton(
+                                tooltip: _tr('分享输出', 'Share output'),
+                                onPressed: () =>
+                                    _shareOutputPath(task.outputPath),
+                                icon: const Icon(Icons.share_outlined),
+                              ),
+                              IconButton(
+                                tooltip: l10n.copyOutputPath,
+                                onPressed: () {
+                                  Clipboard.setData(
+                                    ClipboardData(text: task.outputPath),
+                                  );
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(l10n.outputPathCopied),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.copy_outlined),
+                              ),
+                              PopupMenuButton<PluginActionMenuItem>(
+                                tooltip: 'Mod 动作',
+                                icon: const Icon(Icons.extension_outlined),
+                                onSelected: (action) =>
+                                    _runFileOutputMod(task.outputPath, action),
+                                itemBuilder: (context) {
+                                  final items = PluginActionMenu.popupItems(
+                                    context,
+                                    PluginActionContext(
+                                      type: PluginContextType.file,
+                                      filePath: task.outputPath,
+                                      fileName: p.basename(task.outputPath),
+                                    ),
+                                  );
+                                  if (items.isEmpty) {
+                                    return const [
+                                      PopupMenuItem(
+                                        enabled: false,
+                                        child: Text('没有可用 Mod 动作'),
+                                      ),
+                                    ];
+                                  }
+                                  return items;
+                                },
+                              ),
+                            ],
+                          ),
+                  ),
                 ),
-                title: Text(task.toolName),
-                subtitle: Text(
-                  '${_formatTime(task.timestamp)}\n${task.inputSummary}\n${task.message}',
-                  style: const TextStyle(height: 1.35),
-                ),
-                trailing: task.outputPath.isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: l10n.copyOutputPath,
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: task.outputPath));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(l10n.outputPathCopied)),
-                          );
-                        },
-                        icon: const Icon(Icons.copy_outlined),
-                      ),
-              ),
-            ),
         ],
       ),
     );
@@ -812,9 +1303,7 @@ class _FileToolsPageState extends State<FileToolsPage> {
     final totalBottomPadding = bottomSafeArea + floatingNavBarHeight;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_tr('文件工具', 'File Tools')),
-      ),
+      appBar: AppBar(title: Text(_tr('文件工具', 'File Tools'))),
       body: ListView(
         padding: EdgeInsets.fromLTRB(16, 16, 16, totalBottomPadding + 16),
         children: [
@@ -825,6 +1314,7 @@ class _FileToolsPageState extends State<FileToolsPage> {
             onPick: _pickZipFile,
             actionLabel: _tr('选 ZIP', 'Pick ZIP'),
           ),
+          _buildZipPreviewCard(),
           _buildArchiveInputsCard(),
           _buildSelectionInfo(
             title: _tr('重命名源文件', 'Rename source'),
@@ -901,14 +1391,21 @@ class _ActionCard extends StatelessWidget {
                 const Spacer(),
                 Text(
                   title,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   subtitle,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[700], height: 1.35),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[700],
+                    height: 1.35,
+                  ),
                 ),
               ],
             ),
@@ -940,6 +1437,49 @@ class _InfoLine extends StatelessWidget {
             TextSpan(text: value),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({
+    required this.label,
+    required this.value,
+    this.color = Colors.blue,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.16)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: color,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+          ),
+        ],
       ),
     );
   }

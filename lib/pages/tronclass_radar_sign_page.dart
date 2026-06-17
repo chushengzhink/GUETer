@@ -3,10 +3,15 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_baidu_mapapi_base/flutter_baidu_mapapi_base.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:uuid/uuid.dart';
 
+import '../api/tronclass_batch_sign_executor.dart';
 import '../api/tronclass_sign_api.dart';
+import '../models/user.dart';
+import '../services/sign_platform_context.dart';
+import '../services/sign_run_console.dart';
 import '../utils/coord_transform.dart';
+import '../widgets/sign_run_console_panel.dart';
+import '../widgets/tronclass_account_selector.dart';
 import 'widget/baidu_map.dart';
 import 'widget/tronclass_liquid_glass.dart';
 
@@ -31,6 +36,10 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
   _RadarSignState _currentState = _RadarSignState.radar;
   bool _isScanning = false;
   String _errorMessage = '';
+  List<User> _selectedAccounts = <User>[];
+  final SignRunConsoleController _consoleController = SignRunConsoleController(
+    platformContext: SignPlatformContext.tronclass,
+  );
   late final AnimationController _radarAnimationController;
   late final Animation<double> _radarRotation;
 
@@ -49,10 +58,18 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
   @override
   void dispose() {
     _radarAnimationController.dispose();
+    _consoleController.dispose();
     super.dispose();
   }
 
   Future<void> _openLocationPicker() async {
+    if (_selectedAccounts.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请至少选择一个畅课账号')));
+      return;
+    }
+
     BMFCoordinate? selectedCoordinate;
     String? selectedAddress;
 
@@ -219,6 +236,12 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
     required double accuracy,
   }) async {
     if (_isScanning) return;
+    if (_selectedAccounts.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请至少选择一个畅课账号')));
+      return;
+    }
 
     setState(() {
       _isScanning = true;
@@ -226,22 +249,33 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
 
     try {
       final gcj02 = CoordTransform.bd09ToGcj02(latitude, longitude);
-      final response = await TronclassSignApi.signRadar(
-        rollcallId: widget.rollcallId,
-        deviceId: const Uuid().v4(),
-        latitude: gcj02[0],
-        longitude: gcj02[1],
-        accuracy: accuracy,
+      _consoleController.clear();
+      final result = await TronclassBatchSignExecutor().sign(
+        context: context,
+        courseName: widget.activityName?.trim().isNotEmpty == true
+            ? widget.activityName!.trim()
+            : '畅课雷达签到',
+        console: _consoleController,
+        users: _selectedAccounts,
+        isContextMounted: () => mounted,
+        action: (_, deviceId) => TronclassSignApi.signRadar(
+          rollcallId: widget.rollcallId,
+          deviceId: deviceId,
+          latitude: gcj02[0],
+          longitude: gcj02[1],
+          accuracy: accuracy,
+        ),
       );
 
       if (!mounted) return;
-      if (TronclassSignApi.isSignSuccess(response)) {
+      if (result.successCount > 0) {
         setState(() {
           _currentState = _RadarSignState.success;
         });
       } else {
         setState(() {
-          _errorMessage = TronclassSignApi.getSignMessage(response.data);
+          _errorMessage =
+              '批量签到完成，成功 ${result.successCount}/${result.totalCount}，跳过 ${result.skippedCount}';
           _currentState = _RadarSignState.failure;
         });
       }
@@ -576,6 +610,22 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
                 ),
                 const SizedBox(height: 16),
                 _buildBottomPanel(),
+                const SizedBox(height: 12),
+                TronclassAccountSelector(
+                  enabled:
+                      !_isScanning && _currentState == _RadarSignState.radar,
+                  initiallyExpanded: false,
+                  onSelectionChanged: (users) {
+                    setState(() {
+                      _selectedAccounts = users;
+                    });
+                  },
+                ),
+                const SizedBox(height: 12),
+                SignRunConsolePanel(
+                  controller: _consoleController,
+                  maxHeight: 180,
+                ),
               ],
             ),
           ),

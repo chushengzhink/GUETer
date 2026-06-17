@@ -3,43 +3,40 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/performance/app_performance.dart';
 import '../models/file_tool_models.dart';
+import 'gueter_storage_service.dart';
 
 class FileToolService {
+  FileToolService({BackgroundTaskRunner? backgroundTaskRunner})
+    : _backgroundTaskRunner =
+          backgroundTaskRunner ?? const BackgroundTaskRunner();
+
   static final RegExp _invalidNamePattern = RegExp(r'[\\/:*?"<>|\x00-\x1F]');
+  final BackgroundTaskRunner _backgroundTaskRunner;
 
   Future<Directory> ensureOutputDirectory({String? customOutputPath}) async {
-    final targetPath =
-        (customOutputPath != null && customOutputPath.trim().isNotEmpty)
-        ? customOutputPath.trim()
-        : p.join(
-            Directory.systemTemp.path,
-            'course_helper_file_tools_output',
-          );
-    final dir = Directory(targetPath);
-    if (!dir.existsSync()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
+    return GueterStorageService.instance.publicDirectory(
+      GueterPublicDirectory.fileTools,
+      customPath: customOutputPath,
+    );
   }
 
   Future<Directory> extractZip({
     required File zipFile,
     required Directory outputDirectory,
+    Set<String>? selectedEntryPaths,
+    AppPerformanceMode performanceMode = AppPerformanceMode.balanced,
+    CancellationToken? cancellationToken,
   }) async {
     if (p.extension(zipFile.path).toLowerCase() != '.zip') {
       throw const FileToolException('Selected file is not a ZIP archive.');
     }
 
-    final bytes = await zipFile.readAsBytes();
-    final Archive archive;
-    try {
-      archive = ZipDecoder().decodeBytes(bytes, verify: true);
-    } catch (_) {
-      throw const FileToolException(
-        'ZIP extraction failed. The archive may be corrupted.',
-      );
-    }
+    final archive = await _readZip(zipFile);
+    final yielder = CooperativeYield(
+      batchSize: performanceMode == AppPerformanceMode.lowPower ? 8 : 32,
+    );
 
     final rootName = p.basenameWithoutExtension(zipFile.path).trim().isEmpty
         ? 'unzipped'
@@ -52,48 +49,107 @@ class FileToolService {
     await extractRoot.create(recursive: true);
 
     for (final entry in archive) {
+      cancellationToken?.throwIfCancelled();
       final relativePath = _sanitizeArchiveEntryPath(entry.name);
       if (relativePath == null) {
         continue;
       }
-
-      final targetPath = p.join(extractRoot.path, relativePath);
-      if (entry.isFile) {
-        final uniqueTargetPath = await _resolveUniquePath(
-          targetPath,
-          isDirectory: false,
-        );
-        final outFile = File(uniqueTargetPath);
-        await outFile.parent.create(recursive: true);
-        await outFile.writeAsBytes(entry.content as List<int>, flush: true);
-      } else {
-        await Directory(targetPath).create(recursive: true);
+      if (selectedEntryPaths != null &&
+          !_entryMatchesSelection(relativePath, selectedEntryPaths)) {
+        continue;
       }
+
+      await _extractEntry(entry, extractRoot, relativePath);
+      await yielder.tick();
     }
 
     return extractRoot;
+  }
+
+  Future<ZipPreview> previewZip({
+    required File zipFile,
+    AppPerformanceMode performanceMode = AppPerformanceMode.balanced,
+  }) async {
+    final archive = await _readZip(zipFile);
+    final entries = <ZipEntryPreview>[];
+    var fileCount = 0;
+    var directoryCount = 0;
+    var totalSizeBytes = 0;
+    var skippedUnsafeCount = 0;
+
+    for (final entry in archive) {
+      final safePath = _sanitizeArchiveEntryPath(entry.name);
+      final isSafe = safePath != null;
+      if (!isSafe) {
+        skippedUnsafeCount += 1;
+      }
+      if (entry.isFile) {
+        fileCount += 1;
+        totalSizeBytes += entry.size;
+      } else {
+        directoryCount += 1;
+      }
+      entries.add(
+        ZipEntryPreview(
+          path: safePath ?? entry.name,
+          sizeBytes: entry.isFile ? entry.size : 0,
+          isDirectory: !entry.isFile,
+          isSafe: isSafe,
+        ),
+      );
+    }
+
+    entries.sort(
+      (a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()),
+    );
+    return ZipPreview(
+      entries: entries,
+      fileCount: fileCount,
+      directoryCount: directoryCount,
+      totalSizeBytes: totalSizeBytes,
+      skippedUnsafeCount: skippedUnsafeCount,
+    );
   }
 
   Future<File> createZip({
     required List<FileSystemEntity> sources,
     required Directory outputDirectory,
     String? preferredName,
+    int compressionLevel = 6,
+    AppPerformanceMode performanceMode = AppPerformanceMode.balanced,
+    CancellationToken? cancellationToken,
   }) async {
     if (sources.isEmpty) {
       throw const FileToolException('Choose at least one file or folder.');
     }
 
     final archive = Archive();
+    final yielder = CooperativeYield(
+      batchSize: performanceMode == AppPerformanceMode.lowPower ? 4 : 16,
+    );
     for (final source in sources) {
+      cancellationToken?.throwIfCancelled();
       if (source is File) {
         await _addFileToArchive(archive, source, p.basename(source.path));
       } else if (source is Directory) {
-        await _addDirectoryToArchive(archive, source, p.basename(source.path));
+        await _addDirectoryToArchive(
+          archive,
+          source,
+          p.basename(source.path),
+          yielder,
+          cancellationToken,
+        );
       }
+      await yielder.tick();
     }
 
-    final encoded = ZipEncoder().encode(archive);
     final desiredStem = _buildArchiveStem(sources, preferredName);
+    validateBaseName(desiredStem);
+
+    final level = _normalizeCompressionLevel(compressionLevel);
+    final encoded = await _backgroundTaskRunner.run(
+      () => ZipEncoder().encode(archive, level: level),
+    );
     final outputPath = await _resolveUniquePath(
       p.join(outputDirectory.path, '$desiredStem.zip'),
       isDirectory: false,
@@ -156,9 +212,7 @@ class FileToolService {
     }
     final normalized = value.startsWith('.') ? value.substring(1) : value;
     if (normalized.isEmpty) {
-      throw const FileToolValidationException(
-        'Extension format is invalid.',
-      );
+      throw const FileToolValidationException('Extension format is invalid.');
     }
     if (_invalidNamePattern.hasMatch(normalized)) {
       throw const FileToolValidationException(
@@ -167,12 +221,58 @@ class FileToolService {
     }
   }
 
+  Future<Archive> _readZip(File zipFile) async {
+    if (p.extension(zipFile.path).toLowerCase() != '.zip') {
+      throw const FileToolException('Selected file is not a ZIP archive.');
+    }
+
+    final bytes = await zipFile.readAsBytes();
+    try {
+      return _backgroundTaskRunner.run(
+        () => ZipDecoder().decodeBytes(bytes, verify: true),
+      );
+    } catch (_) {
+      throw const FileToolException(
+        'ZIP extraction failed. The archive may be corrupted.',
+      );
+    }
+  }
+
+  Future<void> _extractEntry(
+    ArchiveFile entry,
+    Directory extractRoot,
+    String relativePath,
+  ) async {
+    final targetPath = p.join(extractRoot.path, relativePath);
+    if (entry.isFile) {
+      final uniqueTargetPath = await _resolveUniquePath(
+        targetPath,
+        isDirectory: false,
+      );
+      final outFile = File(uniqueTargetPath);
+      await outFile.parent.create(recursive: true);
+      await outFile.writeAsBytes(entry.content as List<int>, flush: true);
+    } else {
+      await Directory(targetPath).create(recursive: true);
+    }
+  }
+
   Future<void> _addDirectoryToArchive(
     Archive archive,
     Directory directory,
     String rootPath,
+    CooperativeYield yielder,
+    CancellationToken? cancellationToken,
   ) async {
-    final entries = directory.listSync(recursive: false, followLinks: false);
+    final entries = <FileSystemEntity>[];
+    await for (final entry in directory.list(
+      recursive: false,
+      followLinks: false,
+    )) {
+      cancellationToken?.throwIfCancelled();
+      entries.add(entry);
+      await yielder.tick();
+    }
     if (entries.isEmpty) {
       archive.addFile(ArchiveFile('$rootPath/', 0, <int>[]));
       return;
@@ -184,8 +284,15 @@ class FileToolService {
       if (entry is File) {
         await _addFileToArchive(archive, entry, childPath);
       } else if (entry is Directory) {
-        await _addDirectoryToArchive(archive, entry, childPath);
+        await _addDirectoryToArchive(
+          archive,
+          entry,
+          childPath,
+          yielder,
+          cancellationToken,
+        );
       }
+      await yielder.tick();
     }
   }
 
@@ -210,6 +317,25 @@ class FileToolService {
       return p.basenameWithoutExtension(sources.first.path);
     }
     return 'archive_${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  bool _entryMatchesSelection(String relativePath, Set<String> selectedPaths) {
+    final normalized = relativePath.replaceAll('\\', '/');
+    for (final selected in selectedPaths) {
+      final selectedNormalized = selected.replaceAll('\\', '/');
+      if (normalized == selectedNormalized ||
+          normalized.startsWith('$selectedNormalized/')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  int _normalizeCompressionLevel(int level) {
+    if (level <= 0) return 0;
+    if (level <= 3) return 3;
+    if (level <= 6) return 6;
+    return 9;
   }
 
   String? _sanitizeArchiveEntryPath(String rawPath) {

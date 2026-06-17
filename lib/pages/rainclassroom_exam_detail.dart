@@ -21,17 +21,19 @@ class RainClassroomExamDetailPage extends StatefulWidget {
   const RainClassroomExamDetailPage({super.key, required this.exam});
 
   @override
-  State<RainClassroomExamDetailPage> createState() => _RainClassroomExamDetailPageState();
+  State<RainClassroomExamDetailPage> createState() =>
+      _RainClassroomExamDetailPageState();
 }
 
-class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPage> {
+class _RainClassroomExamDetailPageState
+    extends State<RainClassroomExamDetailPage> {
   bool _loading = true;
   String? _errorMessage;
 
   ExamToken? _examToken;
   Map<String, dynamic>? _examDetail; // 考试详情
   List<ExamProblem> _problems = [];
-  Map<int, ProblemResult> _answers = {}; // problemId -> ProblemResult
+  final Map<int, ProblemResult> _answers = {}; // problemId -> ProblemResult
   int _currentProblemIndex = 0;
 
   Timer? _refreshTimer;
@@ -263,9 +265,9 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
     );
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('答案已保存')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('答案已保存')));
     }
   }
 
@@ -304,14 +306,14 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
 
     if (mounted) {
       if (response != null && response['errcode'] == 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('提交成功')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('提交成功')));
         Navigator.pop(context);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('提交失败')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('提交失败')));
       }
     }
   }
@@ -387,10 +389,7 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
               ),
             ),
           if (_examStarted)
-            IconButton(
-              icon: const Icon(Icons.save),
-              onPressed: _saveAnswer,
-            ),
+            IconButton(icon: const Icon(Icons.save), onPressed: _saveAnswer),
         ],
       ),
       body: _buildBody(),
@@ -473,12 +472,24 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
             ),
           ),
           const SizedBox(height: 32),
-          _buildInfoRow(Icons.quiz_outlined, '题目数量', '${detail['problem_count'] ?? 0} 题'),
+          _buildInfoRow(
+            Icons.quiz_outlined,
+            '题目数量',
+            '${detail['problem_count'] ?? 0} 题',
+          ),
           const SizedBox(height: 16),
-          _buildInfoRow(Icons.score_outlined, '总分', '${detail['total_score'] ?? 0} 分'),
+          _buildInfoRow(
+            Icons.score_outlined,
+            '总分',
+            '${detail['total_score'] ?? 0} 分',
+          ),
           const SizedBox(height: 16),
           if (startTime != null)
-            _buildInfoRow(Icons.access_time, '开始时间', _formatDateTime(startTime)),
+            _buildInfoRow(
+              Icons.access_time,
+              '开始时间',
+              _formatDateTime(startTime),
+            ),
           if (startTime != null) const SizedBox(height: 16),
           if (deadline != null)
             _buildInfoRow(Icons.event, '截止时间', _formatDateTime(deadline)),
@@ -488,7 +499,8 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
           if (detail['show_answer'] == true) const SizedBox(height: 16),
           if (detail['show_score'] == true)
             _buildInfoRow(Icons.grade, '显示分数', '是'),
-          if (detail['description'] != null && detail['description'].toString().isNotEmpty) ...[
+          if (detail['description'] != null &&
+              detail['description'].toString().isNotEmpty) ...[
             const SizedBox(height: 24),
             const Text(
               '考试说明',
@@ -535,12 +547,7 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
           '$label: ',
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
         ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 16),
-          ),
-        ),
+        Expanded(child: Text(value, style: const TextStyle(fontSize: 16))),
       ],
     );
   }
@@ -556,7 +563,10 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
           ),
           child: Text(
             '第 ${problem.index + 1} 题',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -619,10 +629,7 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
         borderRadius: BorderRadius.circular(8),
       ),
       child: const Center(
-        child: Text(
-          '尚未作答',
-          style: TextStyle(color: Colors.grey),
-        ),
+        child: Text('尚未作答', style: TextStyle(color: Colors.grey)),
       ),
     );
   }
@@ -685,16 +692,16 @@ class _RainClassroomExamDetailPageState extends State<RainClassroomExamDetailPag
             child: Center(
               child: Text(
                 '${_currentProblemIndex + 1} / ${_problems.length}',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
           const SizedBox(width: 12),
           if (_currentProblemIndex < _problems.length - 1)
-            ElevatedButton(
-              onPressed: _nextProblem,
-              child: const Text('下一题'),
-            )
+            ElevatedButton(onPressed: _nextProblem, child: const Text('下一题'))
           else
             ElevatedButton(
               onPressed: _submitPaper,

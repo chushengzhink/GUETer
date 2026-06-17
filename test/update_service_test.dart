@@ -5,14 +5,22 @@ import 'dart:typed_data';
 import 'package:course_helper/services/update_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('UpdateInfo', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+    });
+
     test('parses update metadata json', () {
       final info = UpdateInfo.fromJson({
         'version': '1.0.3',
         'buildNumber': 4,
         'tag': '1.0.3+4',
+        'forceUpdate': true,
+        'forceFromVersions': ['1.0.2', '1.0.3'],
+        'minSupportedVersion': '1.0.2',
         'releaseNotes': '更新说明',
         'apk': {
           'abi': 'arm64-v8a',
@@ -20,15 +28,45 @@ void main() {
           'downloadUrl': 'https://example.com/app.apk',
         },
         'publishedAt': '2026-06-05T03:18:57Z',
+        'announcements': [
+          {
+            'version': '1.0.3',
+            'buildNumber': 4,
+            'tag': '1.0.3+4',
+            'publishedAt': '2026-06-05T03:18:57Z',
+            'title': 'GUETer 1.0.3 更新公告',
+            'notes': ['更新 A', '更新 B'],
+          },
+        ],
       });
 
       expect(info.version, '1.0.3');
       expect(info.buildNumber, 4);
       expect(info.tag, '1.0.3+4');
+      expect(info.forceUpdate, isTrue);
+      expect(info.forceFromVersions, ['1.0.2', '1.0.3']);
+      expect(info.minSupportedVersion, '1.0.2');
       expect(info.releaseNotes, '更新说明');
       expect(info.apk.abi, 'arm64-v8a');
       expect(info.apk.downloadUrl, 'https://example.com/app.apk');
       expect(info.publishedAt, DateTime.parse('2026-06-05T03:18:57Z'));
+      expect(info.announcements, hasLength(1));
+      expect(info.announcements.first.title, 'GUETer 1.0.3 更新公告');
+      expect(info.announcements.first.notes, ['更新 A', '更新 B']);
+    });
+
+    test('builds fallback announcement from release notes', () {
+      final info = UpdateInfo.fromJson({
+        'version': '1.0.6',
+        'buildNumber': 7,
+        'tag': '1.0.6+7',
+        'releaseNotes': '第一条\n第二条',
+        'apk': {'downloadUrl': 'https://example.com/app.apk'},
+      });
+
+      expect(info.announcements, hasLength(1));
+      expect(info.announcements.first.tag, '1.0.6+7');
+      expect(info.announcements.first.notes, ['第一条', '第二条']);
     });
 
     test('rejects metadata without version or download url', () {
@@ -53,31 +91,110 @@ void main() {
       expect(UpdateInfo.isNewerVersion('1.0.2', '1.0.2'), isFalse);
       expect(UpdateInfo.isNewerVersion('1.0.1', '1.0.2'), isFalse);
       expect(UpdateInfo.isNewerVersion('bad', '1.0.2'), isFalse);
+      expect(UpdateInfo.isNewerVersion('1.0.6', '1.0.5'), isTrue);
+      expect(UpdateInfo.isNewerVersion('1.0.6', '1.0.6'), isFalse);
     });
+
+    test('stores and restores update check status cache', () async {
+      final store = UpdateCheckStatusStore();
+      final status = UpdateCheckStatus(
+        currentVersion: '1.0.5',
+        latestVersion: '1.0.6',
+        hasUpdate: true,
+        downloadUrl: 'https://example.com/app.apk',
+        releaseNotes: '更新说明',
+        checkedAt: DateTime.parse('2026-06-08T00:00:00+08:00'),
+      );
+
+      await store.save(status);
+      final restored = await store.load();
+
+      expect(restored, isNotNull);
+      expect(restored!.currentVersion, '1.0.5');
+      expect(restored.latestVersion, '1.0.6');
+      expect(restored.hasUpdate, isTrue);
+      expect(restored.downloadUrl, 'https://example.com/app.apk');
+      expect(restored.releaseNotes, '更新说明');
+    });
+
+    test('uses metadata warning as update card summary when present', () {
+      final info = UpdateInfo.fromJson({
+        'version': '1.0.7',
+        'buildNumber': 8,
+        'releaseNotes': 'remote notes',
+        'metadataWarning': 'missing update metadata',
+        'apk': {'downloadUrl': 'https://example.com/app.apk'},
+      });
+
+      final status = UpdateCheckStatus.fromInfo(
+        currentVersion: '1.0.6',
+        info: info,
+      );
+
+      expect(status.hasUpdate, isTrue);
+      expect(status.releaseNotes, 'missing update metadata');
+    });
+
+    test(
+      'only forces update when remote metadata explicitly targets version',
+      () {
+        final forced = UpdateInfo.fromJson({
+          'version': '1.0.4',
+          'buildNumber': 5,
+          'forceUpdate': true,
+          'forceFromVersions': ['1.0.3'],
+          'apk': {'downloadUrl': 'https://example.com/app.apk'},
+        });
+        expect(forced.isForcedFor('1.0.3'), isTrue);
+        expect(forced.isForcedFor('1.0.3+4'), isTrue);
+        expect(forced.isForcedFor('1.0.2'), isFalse);
+        expect(forced.isForcedFor('1.0.4'), isFalse);
+
+        final optional = UpdateInfo.fromJson({
+          'version': '1.0.4',
+          'buildNumber': 5,
+          'forceFromVersions': ['1.0.3'],
+          'minSupportedVersion': '1.0.4',
+          'apk': {'downloadUrl': 'https://example.com/app.apk'},
+        });
+        expect(optional.forceUpdate, isFalse);
+        expect(optional.isForcedFor('1.0.3'), isFalse);
+
+        final minimum = UpdateInfo.fromJson({
+          'version': '1.0.4',
+          'buildNumber': 5,
+          'forceUpdate': true,
+          'minSupportedVersion': '1.0.4',
+          'apk': {'downloadUrl': 'https://example.com/app.apk'},
+        });
+        expect(minimum.isForcedFor('1.0.3'), isTrue);
+        expect(minimum.isForcedFor('1.0.4'), isFalse);
+      },
+    );
   });
 
   group('LanzouFolderParams', () {
     test('extracts fid uid t and k from folder page html', () {
       final params = LanzouFolderParams.parse(
         _folderHtml(),
-        Uri.parse('https://wwbix.lanzouu.com/b0188dwqsd'),
+        Uri.parse('https://updates.example.test/share-folder'),
       );
 
-      expect(params.origin, 'https://wwbix.lanzouu.com');
+      expect(params.origin, 'https://updates.example.test');
       expect(params.fid, '13573753');
       expect(params.uid, '4981610');
       expect(params.t, '1780631275');
       expect(params.k, '53ebc445780f61f05fea715118abc286');
       expect(
         params.listUrl,
-        'https://wwbix.lanzouu.com/filemoreajax.php?file=13573753',
+        'https://updates.example.test/filemoreajax.php?file=13573753',
       );
     });
 
     test('extracts randomized t and k variable names from ajax data', () {
       final params = LanzouFolderParams.parse(
         _folderHtml(tVariable: 'iblgwh', kVariable: '_hjsya'),
-        Uri.parse('https://wwbix.lanzouu.com/b0188dwqsd'),
+        Uri.parse('https://updates.example.test/share-folder'),
       );
 
       expect(params.t, '1780631275');
@@ -93,23 +210,25 @@ void main() {
       );
       final service = UpdateService(
         dio: _dioWith(adapter),
-        folderUrl: 'https://wwbix.lanzouu.com/b0188dwqsd',
-        folderPassword: '7ls6',
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'test-password',
       );
 
       final info = await service.fetchLatest();
 
-      expect(info.version, '1.0.3');
-      expect(info.buildNumber, 4);
-      expect(info.tag, '1.0.3+4');
+      expect(info.version, '1.0.4');
+      expect(info.buildNumber, 5);
+      expect(info.tag, '1.0.4+5');
+      expect(info.forceUpdate, isTrue);
+      expect(info.forceFromVersions, ['1.0.3']);
       expect(info.releaseNotes, '发现 GUETer 新版本，点击前往蓝奏云下载。');
       expect(info.apk.abi, 'arm64-v8a');
-      expect(info.apk.fileName, 'GUETer_1.0.3+4_arm64-v8a.apk');
+      expect(info.apk.fileName, 'GUETer_1.0.4+5_arm64-v8a.apk');
       expect(
         info.apk.downloadUrl,
-        'https://wwbix.lanzouu.com/ianQi3r5tfoj?webpage=BzZUNF47',
+        'https://updates.example.test/i1043r5tfoj?webpage=BzZUNF47',
       );
-      expect(adapter.lastForm?['pwd'], '7ls6');
+      expect(adapter.lastForm?['pwd'], 'test-password');
       expect(adapter.lastHeaders?['Cookie'], contains('ylogin=abc'));
     });
 
@@ -120,22 +239,25 @@ void main() {
           folderHtml: _folderHtml(),
           listJson: _folderListJson(),
           filePages: {
-            'https://wwbix.lanzouu.com/iVlkZ3r5tkte':
-                '\uFEFF{"version":"1.0.3","buildNumber":4,"releaseNotes":"正式发布","apk":{"downloadUrl":"https://expired.example/app.apk"}}',
+            'https://updates.example.test/iVlkZ3r5tkte':
+                '\uFEFF{"version":"1.0.4","buildNumber":5,"forceUpdate":true,"forceFromVersions":["1.0.3"],"releaseNotes":"正式发布","apk":{"downloadUrl":"https://expired.example/app.apk"}}',
           },
         );
         final service = UpdateService(
           dio: _dioWith(adapter),
-          folderUrl: 'https://wwbix.lanzouu.com/b0188dwqsd',
-          folderPassword: '7ls6',
+          folderUrl: 'https://updates.example.test/share-folder',
+          folderPassword: 'test-password',
         );
 
         final info = await service.fetchLatest();
 
         expect(info.releaseNotes, '正式发布');
+        expect(info.announcements.first.notes, ['正式发布']);
+        expect(info.forceUpdate, isTrue);
+        expect(info.forceFromVersions, ['1.0.3']);
         expect(
           info.apk.downloadUrl,
-          'https://wwbix.lanzouu.com/ianQi3r5tfoj?webpage=BzZUNF47',
+          'https://updates.example.test/i1043r5tfoj?webpage=BzZUNF47',
         );
       },
     );
@@ -147,21 +269,90 @@ void main() {
           folderHtml: _folderHtml(),
           listJson: _folderListJson(),
           filePages: {
-            'https://wwbix.lanzouu.com/iVlkZ3r5tkte': '<html></html>',
+            'https://updates.example.test/iVlkZ3r5tkte': '<html></html>',
           },
         );
         final service = UpdateService(
           dio: _dioWith(adapter),
-          folderUrl: 'https://wwbix.lanzouu.com/b0188dwqsd',
-          folderPassword: '7ls6',
+          folderUrl: 'https://updates.example.test/share-folder',
+          folderPassword: 'test-password',
         );
 
         final info = await service.fetchLatest();
 
-        expect(info.version, '1.0.3');
-        expect(info.apk.fileName, 'GUETer_1.0.3+4_arm64-v8a.apk');
+        expect(info.version, '1.0.4');
+        expect(info.forceUpdate, isTrue);
+        expect(info.forceFromVersions, ['1.0.3']);
+        expect(info.apk.fileName, 'GUETer_1.0.4+5_arm64-v8a.apk');
       },
     );
+
+    test('falls back to apk metadata when update.txt is missing', () async {
+      final adapter = _LanzouAdapter(
+        folderHtml: _folderHtml(),
+        listJson: _folderListJsonWithoutUpdateText(),
+      );
+      final service = UpdateService(
+        dio: _dioWith(adapter),
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'test-password',
+      );
+
+      final info = await service.fetchLatest();
+
+      expect(info.version, '1.0.4');
+      expect(info.metadataSource, 'apk');
+      expect(info.metadataWarning, contains('update.txt'));
+      expect(info.announcements, isNotEmpty);
+    });
+
+    test('selects newest duplicate update.txt by relative time', () async {
+      final listJson = _folderListJson();
+      final files = (listJson['text'] as List).cast<Map<String, Object>>();
+      files[0]['time'] = '20 minutes ago';
+      files[1]['time'] = '1 minutes ago';
+      final adapter = _LanzouAdapter(
+        folderHtml: _folderHtml(),
+        listJson: listJson,
+        filePages: {
+          'https://updates.example.test/iA8nE3r5thkh':
+              '{"version":"1.0.4","buildNumber":5,"releaseNotes":"new metadata","apk":{"downloadUrl":"https://expired.example/app.apk"}}',
+        },
+      );
+      final service = UpdateService(
+        dio: _dioWith(adapter),
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'test-password',
+      );
+
+      final info = await service.fetchLatest();
+
+      expect(info.metadataSource, 'update.txt');
+      expect(info.releaseNotes, 'new metadata');
+    });
+
+    test('extracts update metadata from a lanzou landing page', () async {
+      final adapter = _LanzouAdapter(
+        folderHtml: _folderHtml(),
+        listJson: _folderListJson(),
+        filePages: {
+          'https://updates.example.test/iVlkZ3r5tkte':
+              '<html><a href="/raw/update.txt">download</a></html>',
+          'https://updates.example.test/raw/update.txt':
+              '{"version":"1.0.4","buildNumber":5,"releaseNotes":"landing metadata","apk":{"downloadUrl":"https://expired.example/app.apk"}}',
+        },
+      );
+      final service = UpdateService(
+        dio: _dioWith(adapter),
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'test-password',
+      );
+
+      final info = await service.fetchLatest();
+
+      expect(info.metadataSource, 'update.txt');
+      expect(info.releaseNotes, 'landing metadata');
+    });
 
     test('throws when folder password or list request fails', () {
       final adapter = _LanzouAdapter(
@@ -170,8 +361,8 @@ void main() {
       );
       final service = UpdateService(
         dio: _dioWith(adapter),
-        folderUrl: 'https://wwbix.lanzouu.com/b0188dwqsd',
-        folderPassword: 'bad',
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'bad-password',
       );
 
       expect(service.fetchLatest(), throwsFormatException);
@@ -185,8 +376,8 @@ void main() {
       );
       final service = UpdateService(
         dio: _dioWith(adapter),
-        folderUrl: 'https://wwbix.lanzouu.com/b0188dwqsd',
-        folderPassword: '7ls6',
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'test-password',
       );
 
       expect(service.fetchLatest(), throwsA(isA<DioException>()));
@@ -247,14 +438,37 @@ Map<String, dynamic> _folderListJson() {
         'time': '18 分钟前',
       },
       {
+        'icon': 'txt',
+        'id': 'iforce3r6ifxx',
+        'name_all': 'force_1.0.4_from_1.0.3.txt',
+        'size': '1.0 B',
+        'time': '1 分钟前',
+      },
+      {
         'icon': 'apk',
         'id': 'ianQi3r5tfoj?webpage=BzZUNF47',
         'name_all': 'GUETer_1.0.3+4_arm64-v8a.apk',
         'size': '69.5 M',
         'time': '18 分钟前',
       },
+      {
+        'icon': 'apk',
+        'id': 'i1043r5tfoj?webpage=BzZUNF47',
+        'name_all': 'GUETer_1.0.4+5_arm64-v8a.apk',
+        'size': '69.5 M',
+        'time': '1 分钟前',
+      },
     ],
   };
+}
+
+Map<String, dynamic> _folderListJsonWithoutUpdateText() {
+  final copy = json.decode(json.encode(_folderListJson()));
+  final files = (copy['text'] as List).cast<Map<String, dynamic>>();
+  copy['text'] = files
+      .where((entry) => entry['name_all']?.toString() != 'update.txt')
+      .toList(growable: false);
+  return copy;
 }
 
 class _LanzouAdapter implements HttpClientAdapter {
@@ -287,7 +501,7 @@ class _LanzouAdapter implements HttpClientAdapter {
     final uri = options.uri.toString();
 
     if (options.method == 'GET' &&
-        uri == 'https://wwbix.lanzouu.com/b0188dwqsd') {
+        uri == 'https://updates.example.test/share-folder') {
       return ResponseBody.fromString(
         folderHtml,
         folderStatusCode,
@@ -299,7 +513,7 @@ class _LanzouAdapter implements HttpClientAdapter {
     }
 
     if (options.method == 'POST' &&
-        uri == 'https://wwbix.lanzouu.com/filemoreajax.php?file=13573753') {
+        uri == 'https://updates.example.test/filemoreajax.php?file=13573753') {
       lastForm = Uri.splitQueryString(requestBody);
       lastHeaders = options.headers;
       return ResponseBody.fromString(

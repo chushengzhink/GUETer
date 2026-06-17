@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../api/weizhuojiao.dart';
+import '../models/user.dart';
+import '../platform.dart';
+import '../services/sign_network_gate.dart';
+import '../services/sign_platform_context.dart';
+import '../services/sign_run_console.dart';
+import '../session/sign_record_store.dart';
+import '../widgets/platform_sign_log_card.dart';
+import '../widgets/sign_run_console_panel.dart';
 
 class WeizhuojiaoPage extends StatefulWidget {
   const WeizhuojiaoPage({super.key});
@@ -13,6 +21,9 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
   final TextEditingController _openidController = TextEditingController();
   final TextEditingController _longitudeController = TextEditingController();
   final TextEditingController _latitudeController = TextEditingController();
+  final SignRunConsoleController _consoleController = SignRunConsoleController(
+    platformContext: SignPlatformContext.weizhuojiao,
+  );
 
   WZJSignData? _signData;
   bool _loading = false;
@@ -23,6 +34,7 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
     _openidController.dispose();
     _longitudeController.dispose();
     _latitudeController.dispose();
+    _consoleController.dispose();
     super.dispose();
   }
 
@@ -46,7 +58,9 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
     setState(() {
       _loading = false;
       _signData = signData;
-      _message = signData == null ? '加载失败，请确认链接或 openid 是否正确' : '已加载签到页，可直接提交签到';
+      _message = signData == null
+          ? '加载失败，请确认链接或 openid 是否正确'
+          : '已加载签到页，可直接提交签到';
       if (signData != null) {
         _openidController.text = signData.openid;
       }
@@ -79,23 +93,75 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
       _loading = true;
       _message = '正在提交签到...';
     });
+    _consoleController.resetForPlatform(SignPlatformContext.weizhuojiao);
 
-    final result = await WZJApi.submitSign(
-      signData,
-      longitude: longitude,
-      latitude: latitude,
+    final user = User(
+      name: signData.openid,
+      avatar: '',
+      phone: '',
+      uid: signData.openid,
+      school: '',
+      platform: 'weizhuojiao',
+    );
+
+    final gateResult = await SignNetworkGate().run<Map<String, dynamic>>(
+      context: context,
+      platformLabel: '微助教',
+      user: user,
+      console: _consoleController,
+      action: () =>
+          WZJApi.submitSign(signData, longitude: longitude, latitude: latitude),
     );
 
     if (!mounted) return;
+    if (gateResult.skipped) {
+      final reason = gateResult.reason ?? '用户跳过';
+      await SignRecordStore().append(
+        platform: '微助教',
+        platformType: PlatformType.weizhuojiao,
+        courseName: signData.courseId ?? '微助教签到',
+        account: signData.openid,
+        status: '失败',
+        detail: reason,
+      );
+      setState(() {
+        _loading = false;
+        _message = reason;
+      });
+      return;
+    }
+
+    final result = gateResult.value ?? const <String, dynamic>{};
+    final message = (result['message'] ?? '签到完成').toString();
+    final success =
+        result['success'] == true ||
+        result['code'] == 0 ||
+        message.contains('成功');
+    _consoleController.add(
+      platform: '微助教',
+      accountName: user.name,
+      accountId: user.uid,
+      stage: success ? SignRunStage.signSuccess : SignRunStage.signFailure,
+      message: message,
+    );
+    await SignRecordStore().append(
+      platform: '微助教',
+      platformType: PlatformType.weizhuojiao,
+      courseName: signData.courseId ?? '微助教签到',
+      account: signData.openid,
+      status: success ? '成功' : '失败',
+      detail: message,
+    );
+
     setState(() {
       _loading = false;
-      _message = (result['message'] ?? '签到完成').toString();
+      _message = message;
     });
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_message)));
     }
   }
 
@@ -151,7 +217,11 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
                 children: [
                   Text(
                     '微助教轻量工具',
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   SizedBox(height: 8),
                   Text(
@@ -167,7 +237,9 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
               decoration: InputDecoration(
                 labelText: 'openid / 签到链接',
                 hintText: '粘贴微助教签到页面链接或 openid',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               minLines: 1,
               maxLines: 3,
@@ -178,10 +250,14 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
                 Expanded(
                   child: TextField(
                     controller: _longitudeController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     decoration: InputDecoration(
                       labelText: '经度',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
@@ -189,10 +265,14 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
                 Expanded(
                   child: TextField(
                     controller: _latitudeController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     decoration: InputDecoration(
                       labelText: '纬度',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
@@ -219,8 +299,22 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
               ],
             ),
             const SizedBox(height: 16),
+            const PlatformSignLogCard(
+              platform: '微助教',
+              platformType: PlatformType.weizhuojiao,
+              title: '微助教签到日志',
+              subtitle: '查看微助教签到结果和失败原因',
+            ),
+            const SizedBox(height: 16),
+            SignRunConsolePanel(controller: _consoleController),
+            const SizedBox(height: 16),
             if (_loading)
-              const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: CircularProgressIndicator(),
+                ),
+              )
             else
               Text(
                 _message,
@@ -234,13 +328,23 @@ class _WeizhuojiaoPageState extends State<WeizhuojiaoPage> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: const [
-                    BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(0, 6)),
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 12,
+                      offset: Offset(0, 6),
+                    ),
                   ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('签到信息', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const Text(
+                      '签到信息',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     const SizedBox(height: 10),
                     Wrap(
                       children: [

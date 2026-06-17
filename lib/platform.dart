@@ -12,7 +12,7 @@ enum PlatformType {
   rainClassroom, // 雨课堂
   tronclass, // 畅课
   ketangpai, // 课堂派
-  weizhuojiao // 微助教
+  weizhuojiao, // 微助教
 }
 
 /// 雨课堂服务器类型枚举
@@ -20,7 +20,7 @@ enum RainClassroomServerType {
   yuketang, // 雨课堂
   pro, // 荷塘雨课堂
   changjiang, // 长江雨课堂
-  huanghe // 黄河雨课堂
+  huanghe, // 黄河雨课堂
 }
 
 /// 平台状态管理器
@@ -38,9 +38,10 @@ class PlatformManager {
   RainClassroomServerType _currentServer = RainClassroomServerType.yuketang;
   String _tronclassBaseUrl = 'https://courses.guet.edu.cn';
   String _ketangpaiBaseUrl = 'https://openapiv5.ketangpai.com';
-  
+
   // 平台变化通知流
-  final StreamController<PlatformType> _platformChangeController = StreamController<PlatformType>.broadcast();
+  final StreamController<PlatformType> _platformChangeController =
+      StreamController<PlatformType>.broadcast();
   Stream<PlatformType> get platformChanges => _platformChangeController.stream;
 
   /// 获取当前平台
@@ -58,10 +59,32 @@ class PlatformManager {
   void setPlatformSync(PlatformType platform) {
     _currentPlatform = platform;
   }
-  
+
+  Future<void> activatePlatformForLoginCompletion(PlatformType platform) async {
+    final oldPlatform = _currentPlatform;
+    _currentPlatform = platform;
+    try {
+      await _prefs.setString(_platformKey, currentPlatformName);
+    } catch (e) {
+      debugPrint('[Platform] Failed to persist login-completion platform: $e');
+    }
+
+    await AccountManager.switchToPlatformAccount();
+    await AccountManager.refreshAccounts();
+    await CookieManager.loadAllCookies(refreshOnlineState: false);
+    ApiService.onPlatformChange?.call();
+
+    if (oldPlatform != platform) {
+      debugPrint(
+        '[Platform] Login completion activated platform: $oldPlatform -> $platform',
+      );
+      _platformChangeController.add(platform);
+    }
+  }
+
   /// 获取当前雨课堂服务器
   RainClassroomServerType get currentServer => _currentServer;
-  
+
   /// 获取雨课堂服务器名称
   String get serverName {
     switch (_currentServer) {
@@ -96,9 +119,9 @@ class PlatformManager {
           case 'ketangpai':
             _currentPlatform = PlatformType.ketangpai;
             break;
-            case 'weizhuojiao':
-              _currentPlatform = PlatformType.weizhuojiao;
-              break;
+          case 'weizhuojiao':
+            _currentPlatform = PlatformType.weizhuojiao;
+            break;
         }
       }
 
@@ -111,7 +134,7 @@ class PlatformManager {
       if (ketangpaiBaseUrl != null && ketangpaiBaseUrl.trim().isNotEmpty) {
         _ketangpaiBaseUrl = _normalizeBaseUrl(ketangpaiBaseUrl);
       }
-      
+
       // 加载雨课堂服务器设置
       final serverStr = _prefs.getString(_serverKey);
       if (serverStr != null && serverStr.isNotEmpty) {
@@ -130,7 +153,7 @@ class PlatformManager {
             break;
         }
       }
-      
+
       // 触发平台变化回调，初始化 headers
       ApiService.onPlatformChange!();
       debugPrint(
@@ -142,19 +165,26 @@ class PlatformManager {
   }
 
   /// 设置平台（唯一写入口，仅由用户主动操作触发）
-  Future<void> setPlatform(PlatformType platform, {bool userInitiated = true}) async {
+  Future<void> setPlatform(
+    PlatformType platform, {
+    bool userInitiated = true,
+  }) async {
     final oldPlatform = _currentPlatform;
 
     if (oldPlatform != platform) {
       // 记录平台切换日志和调用堆栈
-      debugPrint('[Platform] Switch: $oldPlatform -> $platform (userInitiated: $userInitiated)');
+      debugPrint(
+        '[Platform] Switch: $oldPlatform -> $platform (userInitiated: $userInitiated)',
+      );
       if (kDebugMode) {
         debugPrint('[Platform] Stack trace:\n${StackTrace.current}');
       }
 
       // 非用户主动触发的切换一律拒绝
       if (!userInitiated) {
-        debugPrint('[Platform] REJECTED: Non-user-initiated platform switch blocked');
+        debugPrint(
+          '[Platform] REJECTED: Non-user-initiated platform switch blocked',
+        );
         return;
       }
 
@@ -183,7 +213,7 @@ class PlatformManager {
       unawaited(CookieManager.refreshAccountsInBackground());
     }
   }
-  
+
   /// 设置雨课堂服务器
   Future<void> setServer(RainClassroomServerType server) async {
     if (_currentServer != server) {
@@ -195,7 +225,9 @@ class PlatformManager {
         debugPrint('保存服务器失败：$e');
       }
       ApiService.onPlatformChange?.call();
-      debugPrint('[Platform] rainclassroom server switched $oldServer -> $_currentServer');
+      debugPrint(
+        '[Platform] rainclassroom server switched $oldServer -> $_currentServer',
+      );
       // Reuse platform change stream to force page-level refresh after server switch.
       _platformChangeController.add(_currentPlatform);
     }
@@ -256,7 +288,7 @@ class PlatformManager {
         return 'weizhuojiao';
     }
   }
-  
+
   void dispose() {
     _platformChangeController.close();
   }

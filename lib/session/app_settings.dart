@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/performance/app_performance.dart';
+import '../layout/layout_preferences.dart';
+import '../plugins/plugin_store.dart';
+
 class AppSettings {
   static const String autoCheckUpdateKey = 'app_auto_check_update';
   static const String autoCloseWebLoginKey = 'app_auto_close_web_login';
@@ -22,6 +26,7 @@ class AppSettings {
   static const String readingNightModeKey = 'app_reading_night_mode';
   static const String academicApiEmailKey = 'app_academic_api_email';
   static const String appLocaleKey = 'app_locale';
+  static const String smartOrganizerEnabledKey = 'app_smart_organizer_enabled';
 
   static const String portalOpenModeExternalPreferred = 'external_preferred';
   static const String portalOpenModeEmbeddedPreferred = 'embedded_preferred';
@@ -64,7 +69,15 @@ class AppSettings {
   static final ValueNotifier<String> themeStyleNotifier = ValueNotifier<String>(
     themeStyleModern,
   );
+  static final PerformanceSettingsStore performanceSettingsStore =
+      PerformanceSettingsStore();
+  static final ValueNotifier<PerformanceSettings> performanceSettingsNotifier =
+      ValueNotifier<PerformanceSettings>(const PerformanceSettings());
+  static final FrameJankMonitor frameJankMonitor = FrameJankMonitor();
   static Locale _currentLocale = const Locale(localeCodeZh);
+  static final LayoutPreferencesStore layoutPreferencesStore =
+      LayoutPreferencesStore();
+  static final PluginStore pluginStore = PluginStore();
 
   static Future<void> initialize() async {
     globalColorSchemeNotifier.value = await getGlobalColorScheme();
@@ -74,7 +87,11 @@ class AppSettings {
       false,
     );
     themeStyleNotifier.value = await getThemeStyle();
+    performanceSettingsNotifier.value = await performanceSettingsStore.load();
+    _syncFrameJankMonitor(performanceSettingsNotifier.value);
     _currentLocale = await getLocale();
+    await layoutPreferencesStore.load();
+    await pluginStore.scan();
   }
 
   static Locale get currentLocale => _currentLocale;
@@ -178,5 +195,36 @@ class AppSettings {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(appLocaleKey, normalized);
     _currentLocale = Locale(normalized);
+  }
+
+  static PerformanceSettings get performanceSettings =>
+      performanceSettingsNotifier.value;
+
+  static AppPerformanceMode get performanceMode =>
+      performanceSettingsNotifier.value.mode;
+
+  static bool get lowPowerMode =>
+      performanceMode == AppPerformanceMode.lowPower;
+
+  static Future<void> setPerformanceSettings(
+    PerformanceSettings settings,
+  ) async {
+    await performanceSettingsStore.save(settings);
+    performanceSettingsNotifier.value = settings;
+    _syncFrameJankMonitor(settings);
+  }
+
+  static Future<void> setPerformanceMode(AppPerformanceMode mode) async {
+    await performanceSettingsStore.setMode(mode);
+    performanceSettingsNotifier.value = await performanceSettingsStore.load();
+    _syncFrameJankMonitor(performanceSettingsNotifier.value);
+  }
+
+  static void _syncFrameJankMonitor(PerformanceSettings settings) {
+    if (settings.showDiagnostics) {
+      frameJankMonitor.start();
+    } else {
+      frameJankMonitor.stop();
+    }
   }
 }

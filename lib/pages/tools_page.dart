@@ -1,5 +1,6 @@
 // ignore_for_file: unused_element, unused_element_parameter
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -9,23 +10,48 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/performance/app_performance.dart';
 import '../modules/local_transfer/ui/local_transfer_page.dart';
+import '../app_entries/app_entry.dart';
 import '../l10n/app_localizations.dart';
+import '../layout/layout_preferences.dart';
+import '../models/file_output_manager_models.dart';
+import '../models/file_tool_models.dart';
+import '../models/tool_workflow_models.dart';
+import '../features/openlist/openlist_cloud_page.dart';
+import '../features/unipus/unipus_assist_page.dart';
+import '../plugins/plugin_runtime.dart';
+import '../services/file_output_manager_service.dart';
+import '../services/file_output_share_service.dart';
+import '../services/file_tool_history_store.dart';
+import '../services/gueter_storage_service.dart';
+import '../services/lightweight_pdf_conversion_service.dart';
 import '../services/nasa_api.dart';
+import '../session/app_settings.dart';
+import '../smart/smart_models.dart';
 import '../theme/components/app_card.dart';
 import '../theme/components/dashboard_components.dart';
+import '../widgets/context_help.dart';
+import '../widgets/smart_inline_panel.dart';
 import 'apod_detail_page.dart';
 import 'academic_search_page.dart';
+import 'file_output_manager_page.dart';
 import 'file_tools_page.dart';
+import 'material_ocr_page.dart';
+import 'material_search_page.dart';
+import 'material_sync_status_page.dart';
 import 'computer_help_manual_page.dart';
 import 'guet_email_apply_page.dart';
+import 'pdf_arrange_page.dart';
 import 'reading.dart';
+import 'smart_organizer_page.dart';
+import 'study_center_page.dart';
+import 'user_manual_page.dart';
+import 'web_archive_page.dart';
 
 const Color _dashboardPrimary = Color(0xFF0D9488);
 const Color _dashboardSecondary = Color(0xFF14B8A6);
@@ -48,28 +74,55 @@ class _ToolTaskRecord {
     required this.success,
     required this.message,
   });
+
+  factory _ToolTaskRecord.fromHistory(FileToolHistoryRecord record) {
+    return _ToolTaskRecord(
+      toolName: record.toolName,
+      inputSummary: record.inputSummary,
+      outputPath: record.outputPath,
+      timestamp: record.timestamp,
+      success: record.success,
+      message: record.message,
+    );
+  }
 }
 
 class _ToolActionSpec {
   const _ToolActionSpec({
+    required this.id,
     required this.title,
     required this.subtitle,
     required this.icon,
     required this.color,
     required this.onTap,
+    this.tags = const <String>[],
     this.badge,
+    this.priority = 0,
   });
 
+  final String id;
   final String title;
   final String subtitle;
   final IconData icon;
   final Color color;
   final VoidCallback? onTap;
+  final List<String> tags;
   final String? badge;
+  final int priority;
+
+  bool matches(String query) {
+    final normalized = query.trim().toLowerCase();
+    if (normalized.isEmpty) return true;
+    return title.toLowerCase().contains(normalized) ||
+        subtitle.toLowerCase().contains(normalized) ||
+        (badge ?? '').toLowerCase().contains(normalized) ||
+        tags.any((tag) => tag.toLowerCase().contains(normalized));
+  }
 }
 
 class _ToolCategorySpec {
   const _ToolCategorySpec({
+    required this.id,
     required this.label,
     required this.subtitle,
     required this.icon,
@@ -77,6 +130,7 @@ class _ToolCategorySpec {
     required this.actions,
   });
 
+  final String id;
   final String label;
   final String subtitle;
   final IconData icon;
@@ -96,6 +150,7 @@ class _ToolsPageState extends State<ToolsPage>
   bool _busy = false;
   String _status = '';
   String? _customOutputDir;
+  String? _defaultOutputDirPath;
   String? _lastOutputPath;
   int _selectedToolCategory = 1;
   String _toolSearchQuery = '';
@@ -107,9 +162,17 @@ class _ToolsPageState extends State<ToolsPage>
   double _wheelRotation = 0;
 
   final NasaApiService _nasaApiService = NasaApiService();
+  final FileToolHistoryStore _historyStore = FileToolHistoryStore();
+  final FileOutputShareService _shareService = FileOutputShareService();
+  final FileOutputManagerService _outputManagerService =
+      FileOutputManagerService();
+  final LightweightPdfConversionService _pdfConversionService =
+      LightweightPdfConversionService();
   NasaApodData? _apodData;
   bool _apodLoading = false;
   String? _apodError;
+  FileOutputManagerSummary? _outputSummary;
+  bool _outputSummaryLoading = false;
 
   static final List<Map<String, dynamic>> _watermarkColorOptions = [
     {'name': 'deep-red', 'color': PdfColor(170, 30, 30)},
@@ -124,15 +187,127 @@ class _ToolsPageState extends State<ToolsPage>
 
   String _tr(String zh, String en) => _isEnglish ? en : zh;
 
+  AppPerformanceMode get _performanceMode => AppSettings.performanceMode;
+
+  CooperativeYield _toolYielder() {
+    return CooperativeYield(
+      batchSize: _performanceMode == AppPerformanceMode.lowPower ? 2 : 8,
+    );
+  }
+
+  String get _effectivePdfOutputDirectory =>
+      _customOutputDir?.trim().isNotEmpty == true
+      ? _customOutputDir!
+      : (_defaultOutputDirPath ??
+            _tr('正在读取默认输出目录', 'Loading default output directory'));
+
+  _ToolActionSpec _fromToolEntry(ToolEntry entry) {
+    final locale = Localizations.localeOf(context);
+    return _ToolActionSpec(
+      id: entry.id,
+      title: entry.titleFor(locale),
+      subtitle: entry.subtitleFor(locale),
+      icon: entry.icon,
+      color: entry.color,
+      onTap: entry.onTap,
+      tags: entry.tags,
+      badge: entry.badge,
+      priority: entry.priority,
+    );
+  }
+
+  List<_ToolCategorySpec> _withToolLayout(List<_ToolCategorySpec> categories) {
+    final pluginEntries = PluginRuntime.buildToolEntries(
+      AppSettings.pluginStore.enabledPluginsNotifier.value,
+      context,
+    );
+    if (pluginEntries.isNotEmpty) {
+      final locale = Localizations.localeOf(context);
+      final groupedPluginEntries = <String, List<ToolEntry>>{};
+      for (final entry in pluginEntries) {
+        groupedPluginEntries
+            .putIfAbsent(entry.categoryId, () => <ToolEntry>[])
+            .add(entry);
+      }
+      categories = <_ToolCategorySpec>[
+        ...categories,
+        ...groupedPluginEntries.entries.map((group) {
+          final first = group.value.first;
+          return _ToolCategorySpec(
+            id: first.categoryId,
+            label: first.categoryFor(locale),
+            subtitle: first.categorySubtitleFor(locale),
+            icon: first.categoryIcon,
+            color: first.categoryColor,
+            actions: group.value.map(_fromToolEntry).toList()
+              ..sort((a, b) => b.priority.compareTo(a.priority)),
+          );
+        }),
+      ];
+    }
+
+    final preferences = AppSettings.layoutPreferencesStore.notifier.value;
+    final categoryIds = categories.map((category) => category.id).toList();
+    final actionIds = categories
+        .expand((category) => category.actions)
+        .map((action) => action.id)
+        .toList();
+    final normalized = preferences.normalized(
+      navIds: LayoutPreferences.defaultNavOrder,
+      toolCategoryIds: categoryIds,
+      toolActionIds: actionIds,
+    );
+    final orderedCategoryIds = normalized.toolCategoryOrder.isEmpty
+        ? categoryIds
+        : normalized.toolCategoryOrder;
+    final actionOrder = normalized.visibleToolActionOrder(actionIds);
+    final actionIndex = <String, int>{
+      for (var i = 0; i < actionOrder.length; i++) actionOrder[i]: i,
+    };
+    final categoryById = {
+      for (final category in categories) category.id: category,
+    };
+
+    return orderedCategoryIds
+        .map((id) => categoryById[id])
+        .whereType<_ToolCategorySpec>()
+        .map((category) {
+          final actions =
+              category.actions
+                  .where(
+                    (action) =>
+                        !normalized.hiddenToolActionIds.contains(action.id),
+                  )
+                  .toList()
+                ..sort(
+                  (a, b) => (actionIndex[a.id] ?? 9999).compareTo(
+                    actionIndex[b.id] ?? 9999,
+                  ),
+                );
+          return _ToolCategorySpec(
+            id: category.id,
+            label: category.label,
+            subtitle: category.subtitle,
+            icon: category.icon,
+            color: category.color,
+            actions: actions,
+          );
+        })
+        .where((category) => category.actions.isNotEmpty)
+        .toList();
+  }
+
   List<_ToolCategorySpec> _toolCategories() {
-    return [
+    return _withToolLayout([
       _ToolCategorySpec(
+        id: 'transfer',
         label: _tr('传输', 'Transfer'),
         subtitle: _tr('近场配对、局域网互传', 'Nearby pairing and LAN transfer'),
         icon: Icons.swap_horiz_rounded,
         color: const Color(0xFF06B6D4),
         actions: [
           _ToolActionSpec(
+            id: 'nearby-room',
             title: _tr('附近房间', 'Nearby Room'),
             subtitle: _tr('发现附近房间，进入面对面配对。', 'Discover nearby rooms.'),
             icon: Icons.meeting_room_outlined,
@@ -141,6 +316,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: _tr('近场', 'Nearby'),
           ),
           _ToolActionSpec(
+            id: 'local-transfer',
             title: l10n.localTransferTitle,
             subtitle: l10n.localTransferSubtitle,
             icon: Icons.swap_horiz_rounded,
@@ -156,12 +332,44 @@ class _ToolsPageState extends State<ToolsPage>
         ],
       ),
       _ToolCategorySpec(
+        id: 'pdf',
         label: 'PDF',
         subtitle: _tr('转换、压缩、提取、水印', 'Convert, compress, extract, watermark'),
         icon: Icons.picture_as_pdf_outlined,
         color: const Color(0xFFF97316),
         actions: [
           _ToolActionSpec(
+            id: 'arrange-pdf',
+            title: _tr('PDF 页面编排', 'PDF Arrange'),
+            subtitle: _tr(
+              '拖拽排序、删除恢复、旋转页面并导出',
+              'Reorder, remove, rotate, and export pages',
+            ),
+            icon: Icons.dashboard_customize_outlined,
+            color: const Color(0xFFF97316),
+            onTap: _busy
+                ? null
+                : () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const PdfArrangePage()),
+                    );
+                  },
+            badge: _tr('编排', 'Arrange'),
+          ),
+          _ToolActionSpec(
+            id: 'lightweight-to-pdf',
+            title: _tr('轻量转 PDF', 'Files to PDF'),
+            subtitle: _tr(
+              '图片、TXT、Markdown、HTML、CSV 转 PDF',
+              'Images, TXT, Markdown, HTML, and CSV',
+            ),
+            icon: Icons.post_add_outlined,
+            color: const Color(0xFFEA580C),
+            onTap: _busy ? null : () => _runTool(_lightweightFilesToPdf),
+            badge: _tr('本地', 'Local'),
+          ),
+          _ToolActionSpec(
+            id: 'pdf-to-images',
             title: l10n.pdfToImagesTitle,
             subtitle: l10n.pdfToImagesSubtitle,
             icon: Icons.image_outlined,
@@ -170,6 +378,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: 'PNG',
           ),
           _ToolActionSpec(
+            id: 'images-to-pdf',
             title: l10n.imagesToPdfTitle,
             subtitle: l10n.imagesToPdfSubtitle,
             icon: Icons.collections_outlined,
@@ -178,6 +387,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: 'PDF',
           ),
           _ToolActionSpec(
+            id: 'compress-pdf',
             title: l10n.compressPdfTitle,
             subtitle: l10n.compressPdfSubtitle,
             icon: Icons.compress_outlined,
@@ -186,6 +396,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: _tr('压缩', 'Zip'),
           ),
           _ToolActionSpec(
+            id: 'extract-pages',
             title: l10n.extractPagesTitle,
             subtitle: l10n.extractPagesSubtitle,
             icon: Icons.snippet_folder_outlined,
@@ -194,6 +405,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: _tr('页码', 'Pages'),
           ),
           _ToolActionSpec(
+            id: 'watermark-pdf',
             title: l10n.watermarkTitle,
             subtitle: l10n.watermarkSubtitle,
             icon: Icons.verified_user_outlined,
@@ -204,12 +416,14 @@ class _ToolsPageState extends State<ToolsPage>
         ],
       ),
       _ToolCategorySpec(
+        id: 'files',
         label: _tr('文件', 'Files'),
         subtitle: _tr('压缩包、批量整理', 'Archive and batch cleanup'),
         icon: Icons.folder_zip_outlined,
         color: const Color(0xFF22C55E),
         actions: [
           _ToolActionSpec(
+            id: 'file-tools',
             title: _tr('文件工具', 'File Tools'),
             subtitle: _tr(
               'ZIP、批量重命名和扩展名修整。',
@@ -225,15 +439,73 @@ class _ToolsPageState extends State<ToolsPage>
             },
             badge: 'ZIP',
           ),
+          _ToolActionSpec(
+            id: 'file-output-manager',
+            title: _tr('输出文件管家', 'Output Manager'),
+            subtitle: _tr(
+              '集中管理 PDF、文件、OCR、下载和分享输出。',
+              'Manage PDF, file, OCR, download, and share outputs.',
+            ),
+            icon: Icons.inventory_2_outlined,
+            color: const Color(0xFF0F766E),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const FileOutputManagerPage(),
+                ),
+              );
+            },
+            tags: const ['output', 'history', 'cleanup', 'share', 'files'],
+            badge: _tr('输出', 'Output'),
+          ),
+          _ToolActionSpec(
+            id: 'material-ocr',
+            title: _tr('资料扫描 OCR', 'Material OCR'),
+            subtitle: _tr(
+              '图片识别文字，保存 TXT 或生成复习卡片。',
+              'Recognize image text, save TXT, or create study cards.',
+            ),
+            icon: Icons.document_scanner_outlined,
+            color: const Color(0xFF16A34A),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const MaterialOcrPage()),
+              );
+            },
+            tags: const ['ocr', 'scan', 'text', 'study card'],
+            badge: 'OCR',
+          ),
+          _ToolActionSpec(
+            id: 'web-archive',
+            title: _tr('网页归档箱', 'Web Archive'),
+            subtitle: _tr(
+              '保存链接、网页摘要和文本快照，并接入资料搜索。',
+              'Save links, page summaries, and searchable text snapshots.',
+            ),
+            icon: Icons.bookmark_add_outlined,
+            color: const Color(0xFF0891B2),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const WebArchivePage()),
+              );
+            },
+            tags: const ['web', 'archive', 'bookmark', 'materials', 'search'],
+            badge: _tr('归档', 'Archive'),
+          ),
         ],
       ),
       _ToolCategorySpec(
+        id: 'network',
         label: _tr('网络', 'Network'),
         subtitle: _tr('虚拟局域网与连接状态', 'Virtual LAN and connection state'),
         icon: Icons.vpn_lock_outlined,
         color: const Color(0xFF6366F1),
         actions: [
           _ToolActionSpec(
+            id: 'virtual-lan',
             title: _tr('虚拟局域网', 'Virtual LAN'),
             subtitle: _tr(
               '加入 ZeroTier 网络，查看虚拟 IP。',
@@ -247,12 +519,101 @@ class _ToolsPageState extends State<ToolsPage>
         ],
       ),
       _ToolCategorySpec(
+        id: 'study',
         label: _tr('学习', 'Study'),
         subtitle: _tr('阅读、检索、天文图', 'Reading, search, APOD'),
         icon: Icons.auto_stories_outlined,
         color: const Color(0xFF8B5CF6),
         actions: [
           _ToolActionSpec(
+            id: 'smart-organizer',
+            title: _tr('智能整理', 'Smart Organizer'),
+            subtitle: _tr(
+              '本地规则汇总待办、资料、复习、输出和诊断建议。',
+              'Local suggestions for todos, materials, reviews, outputs, and diagnostics.',
+            ),
+            icon: Icons.tips_and_updates_outlined,
+            color: const Color(0xFF0D9488),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SmartOrganizerPage()),
+              );
+            },
+            tags: const [
+              'smart',
+              'organizer',
+              'insight',
+              'materials',
+              'review',
+              'todo',
+              '智能',
+              '整理',
+            ],
+            badge: _tr('本地', 'Local'),
+          ),
+          _ToolActionSpec(
+            id: 'material-search',
+            title: _tr('资料搜索', 'Material Search'),
+            subtitle: _tr(
+              '搜索本地资料、网页归档和索引片段，并生成复习卡。',
+              'Search local materials and web archives, then create study cards.',
+            ),
+            icon: Icons.manage_search_outlined,
+            color: const Color(0xFF2563EB),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const MaterialSearchPage()),
+              );
+            },
+            tags: const [
+              'materials',
+              'search',
+              'index',
+              'study card',
+              '资料',
+              '搜索',
+            ],
+            badge: _tr('资料', 'Materials'),
+          ),
+          _ToolActionSpec(
+            id: 'user-manual',
+            title: _tr('使用说明书', 'User Manual'),
+            subtitle: _tr(
+              '查看应用使用说明、资料流程、复习卡和排障入口。',
+              'Read app usage, material workflow, review cards, and troubleshooting.',
+            ),
+            icon: Icons.menu_book_outlined,
+            color: const Color(0xFF7C3AED),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const UserManualPage()),
+              );
+            },
+            tags: const ['manual', 'help', 'guide', '说明书', '帮助'],
+            badge: _tr('说明', 'Manual'),
+          ),
+          _ToolActionSpec(
+            id: 'study-cards',
+            title: _tr('复习中心', 'Review Center'),
+            subtitle: _tr(
+              '本地复习卡片、今日待复习和间隔重复。',
+              'Local study cards, due review, and spaced repetition.',
+            ),
+            icon: Icons.style_outlined,
+            color: const Color(0xFFDB2777),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const StudyCenterPage()),
+              );
+            },
+            badge: _tr('复习', 'Review'),
+          ),
+          _ToolActionSpec(
+            id: 'reading',
             title: l10n.readingTitle,
             subtitle: l10n.readingSubtitle,
             icon: Icons.menu_book_outlined,
@@ -266,6 +627,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: _tr('阅读', 'Read'),
           ),
           _ToolActionSpec(
+            id: 'academic-search',
             title: l10n.academicSearchTitle,
             subtitle: l10n.academicSearchSubtitle,
             icon: Icons.auto_stories_outlined,
@@ -279,6 +641,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: _tr('检索', 'Search'),
           ),
           _ToolActionSpec(
+            id: 'apod',
             title: l10n.apodCardTitle,
             subtitle: _apodData?.title ?? l10n.apodLoadingSubtitle,
             icon: Icons.nights_stay_rounded,
@@ -298,12 +661,79 @@ class _ToolsPageState extends State<ToolsPage>
         ],
       ),
       _ToolCategorySpec(
+        id: 'cloud',
+        label: _tr('云盘', 'Cloud'),
+        subtitle: _tr(
+          'OpenList 共享文件、上传与下载',
+          'OpenList shared files, uploads, and downloads',
+        ),
+        icon: Icons.cloud_queue_outlined,
+        color: const Color(0xFF2563EB),
+        actions: [
+          _ToolActionSpec(
+            id: 'openlist-cloud',
+            title: _tr('云盘共享', 'Cloud Share'),
+            subtitle: _tr(
+              '浏览 OpenList 共享文件，登录畅课后可上传。',
+              'Browse OpenList shares and upload after Tronclass login.',
+            ),
+            icon: Icons.cloud_queue_outlined,
+            color: const Color(0xFF2563EB),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const OpenListCloudPage()),
+              );
+            },
+            tags: const ['OpenList', 'cloud', 'share', 'upload', 'download'],
+            badge: _tr('云盘', 'Cloud'),
+          ),
+          _ToolActionSpec(
+            id: 'material-sync-status',
+            title: _tr('资料状态', 'Material Status'),
+            subtitle: _tr(
+              '查看下载、离线包、索引、重复文件和本地缺失。',
+              'Inspect downloads, offline packages, index, duplicates, and missing files.',
+            ),
+            icon: Icons.sync_alt_outlined,
+            color: const Color(0xFF0F766E),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const MaterialSyncStatusPage(),
+                ),
+              );
+            },
+            tags: const ['sync', 'offline', 'duplicate', 'index', 'status'],
+            badge: _tr('状态', 'Status'),
+          ),
+        ],
+      ),
+      _ToolCategorySpec(
+        id: 'campus',
         label: _tr('校园', 'Campus'),
         subtitle: _tr('桂电入口与支持', 'GUET entries and support'),
         icon: Icons.school_outlined,
         color: const Color(0xFF10B981),
         actions: [
           _ToolActionSpec(
+            id: 'unipus-assist',
+            title: 'U 校园辅助',
+            subtitle: '自动扫描课程树，生成确认式学习辅助队列。',
+            icon: Icons.assistant_direction_outlined,
+            color: const Color(0xFF2563EB),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const UnipusAssistPage()),
+              );
+            },
+            tags: const ['unipus', 'u-campus', 'assist', 'accessibility'],
+            badge: 'Unipus',
+          ),
+          _ToolActionSpec(
+            id: 'guet-email',
             title: l10n.guetEmailTitle,
             subtitle: l10n.guetEmailSubtitle,
             icon: Icons.email_outlined,
@@ -316,6 +746,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: _tr('邮箱', 'Mail'),
           ),
           _ToolActionSpec(
+            id: 'guet-official',
             title: l10n.guetOfficialTitle,
             subtitle: l10n.guetOfficialSubtitle,
             icon: Icons.public_outlined,
@@ -324,6 +755,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: _tr('官网', 'Web'),
           ),
           _ToolActionSpec(
+            id: 'ai-figure',
             title: l10n.aiFigureTitle,
             subtitle: l10n.aiFigureSubtitle,
             icon: Icons.science_outlined,
@@ -332,6 +764,7 @@ class _ToolsPageState extends State<ToolsPage>
             badge: 'AI',
           ),
           _ToolActionSpec(
+            id: 'computer-help',
             title: l10n.computerHelpTitle,
             subtitle: l10n.computerHelpSubtitle,
             icon: Icons.computer_outlined,
@@ -348,7 +781,7 @@ class _ToolsPageState extends State<ToolsPage>
           ),
         ],
       ),
-    ];
+    ]);
   }
 
   void _selectToolCategory(int index) {
@@ -404,7 +837,33 @@ class _ToolsPageState extends State<ToolsPage>
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => _ToolCategoryDetailPage(category: selectedCategory),
+        builder: (_) => _ToolCategoryDetailPage(
+          category: selectedCategory,
+          pdfOutputDirectory: selectedCategory.id == 'pdf'
+              ? _effectivePdfOutputDirectory
+              : null,
+          pdfLastOutputPath: selectedCategory.id == 'pdf'
+              ? _lastOutputPath
+              : null,
+          onOpenPdfOutput:
+              selectedCategory.id == 'pdf' &&
+                  _lastOutputPath != null &&
+                  _lastOutputPath!.isNotEmpty
+              ? _openOutputFile
+              : null,
+          onSharePdfOutput:
+              selectedCategory.id == 'pdf' &&
+                  _lastOutputPath != null &&
+                  _lastOutputPath!.isNotEmpty
+              ? _shareOutputFile
+              : null,
+          onCopyPdfOutput:
+              selectedCategory.id == 'pdf' &&
+                  _lastOutputPath != null &&
+                  _lastOutputPath!.isNotEmpty
+              ? () => _copyOutputPath(_lastOutputPath!)
+              : null,
+        ),
       ),
     );
   }
@@ -419,7 +878,7 @@ class _ToolsPageState extends State<ToolsPage>
       builder: (context) {
         return _ToolSearchSheet(
           title: _tr('搜索工具', 'Search tools'),
-          emptyText: _tr('没有找到匹配工具', 'No matching tools'),
+          emptyText: _tr('没有找到匹配工具', '没有找到匹配工具'),
           initialQuery: _toolSearchQuery,
           actions: actions,
           onQueryChanged: (value) {
@@ -435,12 +894,7 @@ class _ToolsPageState extends State<ToolsPage>
     if (query.isEmpty) return categories[_selectedToolCategory].actions;
     return categories
         .expand((category) => category.actions)
-        .where(
-          (action) =>
-              action.title.toLowerCase().contains(query) ||
-              action.subtitle.toLowerCase().contains(query) ||
-              (action.badge ?? '').toLowerCase().contains(query),
-        )
+        .where((action) => action.matches(query))
         .toList();
   }
 
@@ -456,11 +910,85 @@ class _ToolsPageState extends State<ToolsPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _initializeApod();
+      _loadPdfHistory();
+      _refreshDefaultOutputDirectory();
+    });
+    AppSettings.layoutPreferencesStore.notifier.addListener(_onRegistryChanged);
+    AppSettings.pluginStore.enabledPluginsNotifier.addListener(
+      _onRegistryChanged,
+    );
+  }
+
+  void _onRegistryChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _loadPdfHistory() async {
+    final records = await _historyStore.load(scope: FileToolHistoryScope.pdf);
+    if (!mounted) return;
+    setState(() {
+      _recentTasks
+        ..clear()
+        ..addAll(records.map(_ToolTaskRecord.fromHistory));
+      if (_recentTasks.isNotEmpty && _recentTasks.first.outputPath.isNotEmpty) {
+        _lastOutputPath = _recentTasks.first.outputPath;
+      }
+    });
+    unawaited(_refreshOutputSummary());
+  }
+
+  Future<void> _refreshOutputSummary() async {
+    if (_outputSummaryLoading) return;
+    _outputSummaryLoading = true;
+    try {
+      final summary = await _outputManagerService.loadSummary(
+        performanceMode: _performanceMode,
+      );
+      if (!mounted) return;
+      setState(() {
+        _outputSummary = summary;
+      });
+    } finally {
+      _outputSummaryLoading = false;
+    }
+  }
+
+  Future<void> _refreshDefaultOutputDirectory() async {
+    if (_customOutputDir != null && _customOutputDir!.trim().isNotEmpty) {
+      return;
+    }
+    final dir = await _outputDir();
+    if (!mounted) return;
+    setState(() {
+      _defaultOutputDirPath = dir.path;
     });
   }
 
   Widget _buildDashboard(double totalBottomPadding) {
     final categories = _toolCategories();
+    if (categories.isEmpty) {
+      return CustomScrollView(
+        controller: _dashboardScrollController,
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.all(16),
+            sliver: SliverToBoxAdapter(
+              child: DashboardEmptyState(
+                title: _tr('暂无可见工具', '暂无可见工具'),
+                subtitle: _tr('请在设置的界面布局中恢复工具卡片。', '请在设置的界面布局中恢复工具卡片。'),
+                icon: Icons.visibility_off_outlined,
+                color: _dashboardPrimary,
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(child: SizedBox(height: totalBottomPadding + 20)),
+        ],
+      );
+    }
+    if (_selectedToolCategory >= categories.length) {
+      _selectedToolCategory = categories.isEmpty ? 0 : categories.length - 1;
+    }
     final selectedCategory = categories[_selectedToolCategory];
     final statusText = _status.isEmpty ? l10n.statusSelectTool : _status;
 
@@ -480,8 +1008,8 @@ class _ToolsPageState extends State<ToolsPage>
               busy: _busy,
               statusText: statusText,
               searchHint: _tr(
-                '搜索工具、PDF、传输、校园...',
-                'Search tools, PDF, transfer, campus...',
+                '搜索工具、PDF、传输、云盘...',
+                'Search tools, PDF, transfer, cloud...',
               ),
               searchController: _toolSearchController,
               onSearchChanged: (value) {
@@ -489,6 +1017,34 @@ class _ToolsPageState extends State<ToolsPage>
                 _openToolSearch();
               },
               onSearchTap: _openToolSearch,
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          sliver: const SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SmartInlinePanel(
+                  title: '工具智能建议',
+                  types: {
+                    SmartInsightType.output,
+                    SmartInsightType.material,
+                    SmartInsightType.pluginSystem,
+                  },
+                ),
+                SizedBox(height: 8),
+                ContextHelpHint(
+                  title: '工具页帮助',
+                  tips: [
+                    'PDF、文件、OCR、网页归档和输出管理都在工具页按分类进入。',
+                    '工具产物默认写入公共输出目录，可在输出文件管家集中查看。',
+                    '资料搜索、复习中心和说明入口保留在工具页，不再占用主导航。',
+                    '大文件处理和缩略图渲染会遵守低算力模式设置。',
+                  ],
+                ),
+              ],
             ),
           ),
         ),
@@ -501,15 +1057,53 @@ class _ToolsPageState extends State<ToolsPage>
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
           sliver: SliverToBoxAdapter(
-            child: _ToolWheelPanel(
-              categories: categories,
-              selectedIndex: _selectedToolCategory,
-              selectedCategory: selectedCategory,
-              rotationAnimation: _wheelAnimation,
-              onSelected: _selectToolCategory,
-              onRotationChanged: _setWheelDragRotation,
-              onRotationEnd: _selectToolCategoryByRotation,
-              onCenterTap: _openSelectedToolCategory,
+            child: _ToolEfficiencyOverview(
+              busy: _busy,
+              outputSummary: _outputSummary,
+              recentTasks: _recentTasks,
+              lastOutputPath: _lastOutputPath,
+              onOpenOutputManager: _openOutputManager,
+              onOpenLastOutput:
+                  _lastOutputPath == null || _lastOutputPath!.isEmpty
+                  ? null
+                  : _openOutputFile,
+              onShareLastOutput:
+                  _lastOutputPath == null || _lastOutputPath!.isEmpty
+                  ? null
+                  : _shareOutputFile,
+              onRefresh: _refreshOutputSummary,
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          sliver: SliverToBoxAdapter(
+            child: _RecommendedWorkflowPanel(
+              recipes: _recommendedRecipes(categories),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          sliver: SliverToBoxAdapter(
+            child: Column(
+              children: [
+                _ToolWheelPanel(
+                  categories: categories,
+                  selectedIndex: _selectedToolCategory,
+                  selectedCategory: selectedCategory,
+                  rotationAnimation: _wheelAnimation,
+                  onSelected: _selectToolCategory,
+                  onRotationChanged: _setWheelDragRotation,
+                  onRotationEnd: _selectToolCategoryByRotation,
+                  onCenterTap: _openSelectedToolCategory,
+                ),
+                const SizedBox(height: 12),
+                _CurrentCategoryPreview(
+                  category: selectedCategory,
+                  onOpenCategory: _openSelectedToolCategory,
+                ),
+              ],
             ),
           ),
         ),
@@ -587,6 +1181,78 @@ class _ToolsPageState extends State<ToolsPage>
           ],
         );
       },
+    );
+  }
+
+  List<ToolWorkflowRecipe> _recommendedRecipes(
+    List<_ToolCategorySpec> categories,
+  ) {
+    final byId = <String, _ToolActionSpec>{
+      for (final category in categories)
+        for (final action in category.actions) action.id: action,
+    };
+    final recipes = <ToolWorkflowRecipe>[
+      ToolWorkflowRecipe(
+        id: 'pdf-inbox',
+        name: _tr('PDF 收件箱整理', 'PDF inbox cleanup'),
+        description: _tr(
+          '转换、压缩或编排 PDF 后，集中进入输出管家再加入资料库。',
+          'Convert or arrange PDFs, then review outputs and add them to materials.',
+        ),
+        steps: const <ToolWorkflowStep>[
+          ToolWorkflowStep(id: 'lightweight-to-pdf', label: 'Files to PDF'),
+          ToolWorkflowStep(id: 'compress-pdf', label: 'Compress'),
+          ToolWorkflowStep(id: 'file-output-manager', label: 'Inbox'),
+        ],
+        inputKinds: const <String>['image', 'text', 'pdf'],
+        outputPolicy: _tr('确认后写入资料库', 'Confirm before adding to library'),
+        enabled:
+            byId.containsKey('lightweight-to-pdf') &&
+            byId.containsKey('file-output-manager'),
+      ),
+      ToolWorkflowRecipe(
+        id: 'transfer-package',
+        name: _tr('局域网资料交付', 'LAN handoff package'),
+        description: _tr(
+          '先整理输出文件，再用本地传输发送给同学或另一台设备。',
+          'Prepare output files, then send them over local transfer.',
+        ),
+        steps: const <ToolWorkflowStep>[
+          ToolWorkflowStep(id: 'file-output-manager', label: 'Output'),
+          ToolWorkflowStep(id: 'local-transfer', label: 'Transfer'),
+        ],
+        inputKinds: const <String>['file', 'folder'],
+        outputPolicy: _tr('仅本地与局域网', 'Local and LAN only'),
+        enabled:
+            byId.containsKey('file-output-manager') &&
+            byId.containsKey('local-transfer'),
+      ),
+      ToolWorkflowRecipe(
+        id: 'archive-search',
+        name: _tr('资料快照检索', 'Material snapshot search'),
+        description: _tr(
+          '网页归档或 OCR 后进入资料搜索，适合整理课程资料线索。',
+          'Archive pages or OCR text, then search them as course materials.',
+        ),
+        steps: const <ToolWorkflowStep>[
+          ToolWorkflowStep(id: 'web-archive', label: 'Archive'),
+          ToolWorkflowStep(id: 'material-ocr', label: 'OCR'),
+          ToolWorkflowStep(id: 'material-search', label: 'Search'),
+        ],
+        inputKinds: const <String>['url', 'image', 'text'],
+        outputPolicy: _tr('本地索引优先', 'Local index first'),
+        enabled:
+            byId.containsKey('web-archive') &&
+            byId.containsKey('material-search'),
+      ),
+    ];
+    return recipes.where((recipe) => recipe.enabled).toList(growable: false);
+  }
+
+  void _openOutputManager() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const FileOutputManagerPage()),
     );
   }
 
@@ -736,7 +1402,7 @@ class _ToolsPageState extends State<ToolsPage>
                             }
                           : null,
                       icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                      label: Text(_tr('查看详情', 'Open detail')),
+                      label: Text(_tr('查看详情', '查看详情')),
                     ),
                     OutlinedButton.icon(
                       onPressed: _apodLoading ? null : _refreshApod,
@@ -769,6 +1435,12 @@ class _ToolsPageState extends State<ToolsPage>
 
   @override
   void dispose() {
+    AppSettings.layoutPreferencesStore.notifier.removeListener(
+      _onRegistryChanged,
+    );
+    AppSettings.pluginStore.enabledPluginsNotifier.removeListener(
+      _onRegistryChanged,
+    );
     _toolSearchController.dispose();
     _wheelController.dispose();
     _dashboardScrollController.dispose();
@@ -852,12 +1524,9 @@ class _ToolsPageState extends State<ToolsPage>
       return out;
     }
 
-    final dir = await getTemporaryDirectory();
-    final out = Directory(p.join(dir.path, 'pdf_tools_output'));
-    if (!out.existsSync()) {
-      out.createSync(recursive: true);
-    }
-    return out;
+    return GueterStorageService.instance.publicDirectory(
+      GueterPublicDirectory.pdfTools,
+    );
   }
 
   Future<File?> _pickSinglePdf() async {
@@ -881,6 +1550,36 @@ class _ToolsPageState extends State<ToolsPage>
       type: FileType.image,
       allowMultiple: true,
       withData: false,
+    );
+    if (result == null) {
+      return <File>[];
+    }
+    return result.files
+        .map((item) => item.path)
+        .whereType<String>()
+        .where((item) => item.isNotEmpty)
+        .map(File.new)
+        .toList();
+  }
+
+  Future<List<File>> _pickLightweightPdfSources() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowMultiple: true,
+      withData: false,
+      allowedExtensions: const [
+        'jpg',
+        'jpeg',
+        'png',
+        'bmp',
+        'gif',
+        'txt',
+        'md',
+        'markdown',
+        'html',
+        'htm',
+        'csv',
+      ],
     );
     if (result == null) {
       return <File>[];
@@ -924,13 +1623,14 @@ class _ToolsPageState extends State<ToolsPage>
     required bool success,
     required String message,
   }) {
+    final timestamp = DateTime.now();
     _recentTasks.insert(
       0,
       _ToolTaskRecord(
         toolName: toolName,
         inputSummary: inputSummary,
         outputPath: outputPath,
-        timestamp: DateTime.now(),
+        timestamp: timestamp,
         success: success,
         message: message,
       ),
@@ -938,6 +1638,20 @@ class _ToolsPageState extends State<ToolsPage>
     if (_recentTasks.length > 30) {
       _recentTasks.removeRange(30, _recentTasks.length);
     }
+    unawaited(
+      _historyStore.append(
+        FileToolHistoryRecord(
+          scope: FileToolHistoryScope.pdf,
+          toolName: toolName,
+          inputSummary: inputSummary,
+          outputPath: outputPath,
+          timestamp: timestamp,
+          success: success,
+          message: message,
+        ),
+      ),
+    );
+    unawaited(_refreshOutputSummary());
   }
 
   String _formatTime(DateTime t) {
@@ -967,7 +1681,18 @@ class _ToolsPageState extends State<ToolsPage>
     final path = _lastOutputPath;
     if (path == null || path.isEmpty) return;
 
-    await Share.shareXFiles([XFile(path)], text: l10n.pdfOutputShareText);
+    await _shareOutputPath(path);
+  }
+
+  Future<void> _shareOutputPath(String path) async {
+    try {
+      await _shareService.shareOutput(path, text: l10n.pdfOutputShareText);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.openFailedMessage(error.toString()))),
+      );
+    }
   }
 
   Future<void> _openExternalUrl(String url) async {
@@ -987,6 +1712,7 @@ class _ToolsPageState extends State<ToolsPage>
     final outDir = await _outputDir();
     final bytes = await file.readAsBytes();
     final stream = Printing.raster(bytes, dpi: 160);
+    final yielder = _toolYielder();
 
     int index = 0;
     await for (final page in stream) {
@@ -999,6 +1725,7 @@ class _ToolsPageState extends State<ToolsPage>
         ),
       );
       await out.writeAsBytes(png, flush: true);
+      await yielder.tick();
     }
 
     if (!mounted) return;
@@ -1019,11 +1746,45 @@ class _ToolsPageState extends State<ToolsPage>
     ).showSnackBar(SnackBar(content: Text(l10n.pdfToImagesComplete(index))));
   }
 
+  Future<void> _lightweightFilesToPdf() async {
+    final files = await _pickLightweightPdfSources();
+    if (files.isEmpty) return;
+
+    final outDir = await _outputDir();
+    final result = await _pdfConversionService.convertFilesToPdf(
+      files: files,
+      outputDirectory: outDir,
+      performanceMode: _performanceMode,
+    );
+
+    if (!mounted) return;
+    final outputPath = result.primaryOutputPath;
+    setState(() {
+      _status =
+          '${_tr('轻量格式转 PDF 完成', 'Files converted to PDF')}\n${_tr('输出', 'Output')}: $outputPath';
+      _lastOutputPath = outputPath;
+      _recordTask(
+        toolName: _tr('轻量转 PDF', 'Files to PDF'),
+        inputSummary: files.map((file) => p.basename(file.path)).join(', '),
+        outputPath: outputPath,
+        success: true,
+        message: _tr(
+          '已转换 ${result.outputPaths.length} 个文件',
+          'Converted ${result.outputPaths.length} files',
+        ),
+      );
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_tr('轻量格式转 PDF 完成', 'Files converted to PDF'))),
+    );
+  }
+
   Future<void> _imagesToPdf() async {
     final images = await _pickImages();
     if (images.isEmpty) return;
 
     final document = PdfDocument();
+    final yielder = _toolYielder();
     for (final imageFile in images) {
       final imageBytes = await imageFile.readAsBytes();
       final bitmap = PdfBitmap(imageBytes);
@@ -1033,6 +1794,7 @@ class _ToolsPageState extends State<ToolsPage>
         bitmap,
         Rect.fromLTWH(0, 0, size.width, size.height),
       );
+      await yielder.tick();
     }
 
     final outDir = await _outputDir();
@@ -1172,6 +1934,7 @@ class _ToolsPageState extends State<ToolsPage>
     }
 
     final target = PdfDocument();
+    final yielder = _toolYielder();
     for (final pageNumber in pages) {
       final template = source.pages[pageNumber - 1].createTemplate();
       final page = target.pages.add();
@@ -1181,6 +1944,7 @@ class _ToolsPageState extends State<ToolsPage>
         Offset.zero,
         Size(size.width, size.height),
       );
+      await yielder.tick();
     }
 
     final outDir = await _outputDir();
@@ -1341,6 +2105,7 @@ class _ToolsPageState extends State<ToolsPage>
       style: PdfFontStyle.bold,
     );
     final brush = PdfSolidBrush(color);
+    final yielder = _toolYielder();
 
     for (int i = 0; i < document.pages.count; i++) {
       final page = document.pages[i];
@@ -1364,6 +2129,7 @@ class _ToolsPageState extends State<ToolsPage>
         ),
       );
       page.graphics.restore();
+      await yielder.tick();
     }
 
     final outDir = await _outputDir();
@@ -1674,9 +2440,7 @@ class _ToolsPageState extends State<ToolsPage>
   }
 
   Widget _buildPdfTab(double totalBottomPadding) {
-    final outputWorkspace = _customOutputDir?.trim().isNotEmpty == true
-        ? _customOutputDir!
-        : _tr('默认临时目录', 'Default temp directory');
+    final outputWorkspace = _effectivePdfOutputDirectory;
     final statusText = _status.isEmpty ? l10n.statusSelectTool : _status;
 
     return _buildTabScrollView(
@@ -1712,7 +2476,7 @@ class _ToolsPageState extends State<ToolsPage>
           lastOutputValue: _lastOutputPath,
           pickOutputLabel: _tr('选择输出目录', 'Choose Output Directory'),
           resetOutputLabel: _tr('恢复默认目录', 'Reset Directory'),
-          openOutputLabel: _tr('打开输出', 'Open Output'),
+          openOutputLabel: _tr('打开输出', '打开输出'),
           shareOutputLabel: _tr('分享输出', 'Share Output'),
           busy: _busy,
           onPickOutputDirectory: _busy ? null : _pickOutputDirectory,
@@ -1755,13 +2519,39 @@ class _ToolsPageState extends State<ToolsPage>
         const SizedBox(height: 24),
         _SectionHeader(
           eyebrow: _tr('动作区', 'Actions'),
-          title: _tr('PDF 操作', 'PDF Actions'),
+          title: _tr('PDF 操作', 'PDF 操作'),
           subtitle: _tr(
             '转换、压缩、提取和加水印统一为一组动作卡，窄屏会自动退化成更舒适的单列。',
             'Conversion, compression, extraction, and watermarking share one responsive action grid.',
           ),
         ),
         _buildEditorialActionGrid([
+          _ActionToolCard(
+            onTap: _busy
+                ? null
+                : () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const PdfArrangePage()),
+                    );
+                  },
+            icon: Icons.dashboard_customize_outlined,
+            title: _tr('PDF 页面编排', 'PDF Arrange'),
+            subtitle: _tr(
+              '拖拽排序、删除恢复、旋转页面并导出',
+              'Reorder, remove, rotate, and export pages',
+            ),
+            color: Colors.deepOrange,
+          ),
+          _ActionToolCard(
+            onTap: _busy ? null : () => _runTool(_lightweightFilesToPdf),
+            icon: Icons.post_add_outlined,
+            title: _tr('轻量转 PDF', 'Files to PDF'),
+            subtitle: _tr(
+              '图片、TXT、Markdown、HTML、CSV 转 PDF',
+              'Images, TXT, Markdown, HTML, and CSV',
+            ),
+            color: Colors.deepOrange,
+          ),
           _ActionToolCard(
             onTap: _busy ? null : () => _runTool(_pdfToImages),
             icon: Icons.image_outlined,
@@ -1806,6 +2596,7 @@ class _ToolsPageState extends State<ToolsPage>
           copyTooltip: l10n.copyOutputPath,
           tasks: _recentTasks,
           onCopyPath: _copyOutputPath,
+          onSharePath: _shareOutputPath,
           formatTime: _formatTime,
         ),
         const SizedBox(height: 12),
@@ -1881,9 +2672,7 @@ class _ToolsPageState extends State<ToolsPage>
   }
 
   Widget _buildDashboardLegacy(double totalBottomPadding) {
-    final outputWorkspace = _customOutputDir?.trim().isNotEmpty == true
-        ? _customOutputDir!
-        : _tr('默认临时目录', 'Default temp directory');
+    final outputWorkspace = _effectivePdfOutputDirectory;
     final statusText = _status.isEmpty ? l10n.statusSelectTool : _status;
     return _buildTabScrollView(
       totalBottomPadding: totalBottomPadding,
@@ -1907,7 +2696,7 @@ class _ToolsPageState extends State<ToolsPage>
         const SizedBox(height: 24),
         _SectionHeader(
           eyebrow: _tr('Quick Access', 'Quick Access'),
-          title: _tr('高频入口', 'Core Actions'),
+          title: _tr('高频入口', '高频入口'),
           subtitle: _tr(
             '把最常用的入口直接放在第一屏，减少跨标签切换。',
             'Put the most-used actions on the first screen and remove tab hopping.',
@@ -1985,7 +2774,7 @@ class _ToolsPageState extends State<ToolsPage>
           lastOutputValue: _lastOutputPath,
           pickOutputLabel: _tr('选择输出目录', 'Choose Output Directory'),
           resetOutputLabel: _tr('恢复默认目录', 'Reset Directory'),
-          openOutputLabel: _tr('打开输出', 'Open Output'),
+          openOutputLabel: _tr('打开输出', '打开输出'),
           shareOutputLabel: _tr('分享输出', 'Share Output'),
           busy: _busy,
           onPickOutputDirectory: _busy ? null : _pickOutputDirectory,
@@ -2019,6 +2808,32 @@ class _ToolsPageState extends State<ToolsPage>
         ),
         const SizedBox(height: 24),
         _buildEditorialActionGrid([
+          _ActionToolCard(
+            onTap: _busy
+                ? null
+                : () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const PdfArrangePage()),
+                    );
+                  },
+            icon: Icons.dashboard_customize_outlined,
+            title: _tr('PDF 页面编排', 'PDF Arrange'),
+            subtitle: _tr(
+              '拖拽排序、删除恢复、旋转页面并导出',
+              'Reorder, remove, rotate, and export pages',
+            ),
+            color: Colors.deepOrange,
+          ),
+          _ActionToolCard(
+            onTap: _busy ? null : () => _runTool(_lightweightFilesToPdf),
+            icon: Icons.post_add_outlined,
+            title: _tr('轻量转 PDF', 'Files to PDF'),
+            subtitle: _tr(
+              '图片、TXT、Markdown、HTML、CSV 转 PDF',
+              'Images, TXT, Markdown, HTML, and CSV',
+            ),
+            color: Colors.deepOrange,
+          ),
           _ActionToolCard(
             onTap: _busy ? null : () => _runTool(_pdfToImages),
             icon: Icons.image_outlined,
@@ -2063,6 +2878,7 @@ class _ToolsPageState extends State<ToolsPage>
           copyTooltip: l10n.copyOutputPath,
           tasks: _recentTasks,
           onCopyPath: _copyOutputPath,
+          onSharePath: _shareOutputPath,
           formatTime: _formatTime,
         ),
         const SizedBox(height: 24),
@@ -2396,11 +3212,13 @@ class _ToolWheelPanel extends StatelessWidget {
                                         ?.copyWith(fontWeight: FontWeight.w900),
                                   ),
                                   Text(
-                                    '进入',
+                                    '进入${selectedCategory.label}',
                                     style: theme.textTheme.labelSmall?.copyWith(
                                       color: colorScheme.onSurfaceVariant,
                                       fontWeight: FontWeight.w700,
                                     ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ],
                               ),
@@ -2415,6 +3233,503 @@ class _ToolWheelPanel extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _ToolEfficiencyOverview extends StatelessWidget {
+  const _ToolEfficiencyOverview({
+    required this.busy,
+    required this.outputSummary,
+    required this.recentTasks,
+    required this.lastOutputPath,
+    required this.onOpenOutputManager,
+    required this.onOpenLastOutput,
+    required this.onShareLastOutput,
+    required this.onRefresh,
+  });
+
+  final bool busy;
+  final FileOutputManagerSummary? outputSummary;
+  final List<_ToolTaskRecord> recentTasks;
+  final String? lastOutputPath;
+  final VoidCallback onOpenOutputManager;
+  final VoidCallback? onOpenLastOutput;
+  final VoidCallback? onShareLastOutput;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final summary = outputSummary;
+    final latestName = lastOutputPath == null || lastOutputPath!.trim().isEmpty
+        ? _localizedLabel(context, '暂无输出', 'No output')
+        : p.basename(lastOutputPath!);
+
+    return AppCard(
+      elevation: 0,
+      radius: 22,
+      border: Border.all(color: _dashboardPrimary.withValues(alpha: 0.14)),
+      color: _dashboardSurface(context, _dashboardPrimary),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const _ToolIconBox(
+                icon: Icons.space_dashboard_outlined,
+                color: _dashboardPrimary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _localizedLabel(context, '效率工作台', 'Efficiency workbench'),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _localizedLabel(
+                        context,
+                        '最近任务、输出收件箱和当前运行状态集中查看。',
+                        'Recent tasks, output inbox, and current state in one place.',
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: _localizedLabel(context, '刷新', 'Refresh'),
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh_rounded),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 680;
+              final metrics = <Widget>[
+                _EfficiencyMetricTile(
+                  label: _localizedLabel(context, '运行状态', 'Running'),
+                  value: busy
+                      ? _localizedLabel(context, '处理中', 'Busy')
+                      : _localizedLabel(context, '待命', 'Ready'),
+                  icon: busy
+                      ? Icons.hourglass_top_rounded
+                      : Icons.check_circle_outline,
+                  color: busy ? _dashboardAction : _dashboardPrimary,
+                ),
+                _EfficiencyMetricTile(
+                  label: _localizedLabel(context, '输出收件箱', 'Output inbox'),
+                  value: summary == null
+                      ? _localizedLabel(context, '读取中', 'Loading')
+                      : '${summary.availableCount}/${summary.totalCount}',
+                  icon: Icons.inventory_2_outlined,
+                  color: const Color(0xFF0F766E),
+                ),
+                _EfficiencyMetricTile(
+                  label: _localizedLabel(context, '待处理', 'Attention'),
+                  value: summary == null
+                      ? '-'
+                      : '${summary.missingCount + summary.duplicateCandidateCount}',
+                  icon: Icons.rule_folder_outlined,
+                  color: _dashboardAction,
+                ),
+                _EfficiencyMetricTile(
+                  label: _localizedLabel(context, '最近任务', 'Recent tasks'),
+                  value: '${recentTasks.length}',
+                  icon: Icons.history_rounded,
+                  color: const Color(0xFF2563EB),
+                ),
+              ];
+
+              if (wide) {
+                return Row(
+                  children: [
+                    for (var i = 0; i < metrics.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 10),
+                      Expanded(child: metrics[i]),
+                    ],
+                  ],
+                );
+              }
+
+              return GridView.count(
+                crossAxisCount: 2,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 2.25,
+                physics: const NeverScrollableScrollPhysics(),
+                shrinkWrap: true,
+                children: metrics,
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${_localizedLabel(context, '最近输出', 'Latest output')}: $latestName',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.tonalIcon(
+                onPressed: onOpenOutputManager,
+                icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                label: Text(_localizedLabel(context, '收件箱', 'Inbox')),
+              ),
+              const SizedBox(width: 8),
+              IconButton.outlined(
+                tooltip: _localizedLabel(context, '打开最近输出', 'Open latest'),
+                onPressed: onOpenLastOutput,
+                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+              ),
+              IconButton.outlined(
+                tooltip: _localizedLabel(context, '分享最近输出', 'Share latest'),
+                onPressed: onShareLastOutput,
+                icon: const Icon(Icons.share_outlined, size: 18),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EfficiencyMetricTile extends StatelessWidget {
+  const _EfficiencyMetricTile({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 21),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecommendedWorkflowPanel extends StatelessWidget {
+  const _RecommendedWorkflowPanel({required this.recipes});
+
+  final List<ToolWorkflowRecipe> recipes;
+
+  @override
+  Widget build(BuildContext context) {
+    if (recipes.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return AppCard(
+      elevation: 0,
+      radius: 22,
+      border: Border.all(color: _dashboardAction.withValues(alpha: 0.15)),
+      color: _dashboardSurface(context, _dashboardAction),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const _ToolIconBox(
+                icon: Icons.account_tree_outlined,
+                color: _dashboardAction,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _localizedLabel(context, '推荐工作流', 'Recommended flows'),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _localizedLabel(
+                        context,
+                        '把常用工具组合成可确认的步骤，先做入口聚合，不自动执行危险操作。',
+                        'Common tool combinations as confirmable steps, without risky automation.',
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 760;
+              final cards = recipes
+                  .take(3)
+                  .map((recipe) => _WorkflowRecipeCard(recipe: recipe))
+                  .toList();
+              if (wide) {
+                return Row(
+                  children: [
+                    for (var i = 0; i < cards.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 10),
+                      Expanded(child: cards[i]),
+                    ],
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  for (var i = 0; i < cards.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 10),
+                    cards[i],
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkflowRecipeCard extends StatelessWidget {
+  const _WorkflowRecipeCard({required this.recipe});
+
+  final ToolWorkflowRecipe recipe;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.surface.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _dashboardAction.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            recipe.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            recipe.description,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: recipe.steps
+                .map(
+                  (step) => _DashboardPill(
+                    label: step.label,
+                    color: _dashboardAction,
+                  ),
+                )
+                .toList(),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            recipe.outputPolicy,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CurrentCategoryPreview extends StatelessWidget {
+  const _CurrentCategoryPreview({
+    required this.category,
+    required this.onOpenCategory,
+  });
+
+  final _ToolCategorySpec category;
+  final VoidCallback onOpenCategory;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final visibleActions = category.actions.take(6).toList();
+
+    return AppCard(
+      elevation: 0,
+      radius: 22,
+      border: Border.all(color: category.color.withValues(alpha: 0.16)),
+      color: Color.alphaBlend(
+        category.color.withValues(alpha: 0.052),
+        colorScheme.surface,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${category.label} · ${category.actions.length} 个工具',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: onOpenCategory,
+                icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                label: const Text('查看全部'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 86,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: visibleActions.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              itemBuilder: (context, index) {
+                final action = visibleActions[index];
+                return _CompactPreviewToolTile(action: action);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactPreviewToolTile extends StatelessWidget {
+  const _CompactPreviewToolTile({required this.action});
+
+  final _ToolActionSpec action;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final enabled = action.onTap != null;
+
+    return Opacity(
+      opacity: enabled ? 1 : 0.55,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: action.onTap,
+        child: Container(
+          width: 116,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: action.color.withValues(alpha: 0.09),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: action.color.withValues(alpha: 0.14)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(action.icon, color: action.color, size: 25),
+              const Spacer(),
+              Text(
+                action.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  height: 1.08,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2877,9 +4192,21 @@ class _ToolCategoryShortcutCard extends StatelessWidget {
 }
 
 class _ToolCategoryDetailPage extends StatelessWidget {
-  const _ToolCategoryDetailPage({required this.category});
+  const _ToolCategoryDetailPage({
+    required this.category,
+    this.pdfOutputDirectory,
+    this.pdfLastOutputPath,
+    this.onOpenPdfOutput,
+    this.onSharePdfOutput,
+    this.onCopyPdfOutput,
+  });
 
   final _ToolCategorySpec category;
+  final String? pdfOutputDirectory;
+  final String? pdfLastOutputPath;
+  final VoidCallback? onOpenPdfOutput;
+  final VoidCallback? onSharePdfOutput;
+  final VoidCallback? onCopyPdfOutput;
 
   @override
   Widget build(BuildContext context) {
@@ -2889,11 +4216,12 @@ class _ToolCategoryDetailPage extends StatelessWidget {
       body: CustomScrollView(
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
             sliver: SliverToBoxAdapter(
               child: AppCard(
                 elevation: 0,
-                radius: 22,
+                radius: 18,
+                padding: const EdgeInsets.all(14),
                 border: Border.all(
                   color: category.color.withValues(alpha: 0.16),
                 ),
@@ -2903,7 +4231,12 @@ class _ToolCategoryDetailPage extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    _ToolIconBox(icon: category.icon, color: category.color),
+                    _ToolIconBox(
+                      icon: category.icon,
+                      color: category.color,
+                      size: 44,
+                      iconSize: 22,
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -2911,46 +4244,356 @@ class _ToolCategoryDetailPage extends StatelessWidget {
                         children: [
                           Text(
                             category.label,
-                            style: theme.textTheme.headlineSmall?.copyWith(
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.w900,
                             ),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 3),
                           Text(
-                            category.subtitle,
-                            style: theme.textTheme.bodyMedium?.copyWith(
+                            '${category.actions.length} 个工具 · ${category.subtitle}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
                         ],
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    _DashboardPill(label: '可视化', color: category.color),
                   ],
                 ),
               ),
             ),
           ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             sliver: SliverLayoutBuilder(
               builder: (context, constraints) {
-                final columns = constraints.crossAxisExtent >= 720 ? 3 : 1;
+                final width = constraints.crossAxisExtent;
+                final columns = width >= 1100
+                    ? 4
+                    : width >= 720
+                    ? 3
+                    : 2;
                 return SliverGrid(
                   delegate: SliverChildBuilderDelegate((context, index) {
-                    return _ToolActionCard(action: category.actions[index]);
+                    return _VisualToolTile(action: category.actions[index]);
                   }, childCount: category.actions.length),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: columns,
                     mainAxisSpacing: 12,
                     crossAxisSpacing: 12,
-                    childAspectRatio: columns == 1 ? 2.45 : 1.35,
+                    childAspectRatio: width < 380 ? 0.96 : 1.08,
                   ),
                 );
               },
             ),
           ),
+          if (category.id == 'pdf')
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              sliver: SliverToBoxAdapter(
+                child: _PdfOutputHelpPanel(
+                  accentColor: category.color,
+                  outputDirectory: pdfOutputDirectory,
+                  lastOutputPath: pdfLastOutputPath,
+                  onOpenOutput: onOpenPdfOutput,
+                  onShareOutput: onSharePdfOutput,
+                  onCopyOutput: onCopyPdfOutput,
+                ),
+              ),
+            )
+          else
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
+    );
+  }
+}
+
+class _VisualToolTile extends StatelessWidget {
+  const _VisualToolTile({required this.action});
+
+  final _ToolActionSpec action;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final enabled = action.onTap != null;
+
+    return Opacity(
+      opacity: enabled ? 1 : 0.54,
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        label: '${action.title}, ${action.subtitle}',
+        child: AppCard(
+          elevation: 0,
+          radius: 18,
+          padding: const EdgeInsets.all(12),
+          onTap: action.onTap,
+          border: Border.all(color: action.color.withValues(alpha: 0.15)),
+          color: _dashboardSurface(context, action.color),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _ToolIconBox(
+                    icon: action.icon,
+                    color: action.color,
+                    size: 46,
+                    iconSize: 25,
+                  ),
+                  const Spacer(),
+                  if (action.badge != null)
+                    _DashboardPill(label: action.badge!, color: action.color)
+                  else
+                    Icon(
+                      enabled ? Icons.arrow_outward_rounded : Icons.block,
+                      size: 17,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                ],
+              ),
+              const Spacer(),
+              Text(
+                action.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  height: 1.08,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                action.subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  height: 1.25,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactPdfHelpPanel extends StatelessWidget {
+  const _CompactPdfHelpPanel({required this.accentColor});
+
+  final Color accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return AppCard(
+      elevation: 0,
+      padding: EdgeInsets.zero,
+      radius: 18,
+      border: Border.all(color: accentColor.withValues(alpha: 0.14)),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        leading: _ToolIconBox(
+          icon: Icons.tune_rounded,
+          color: accentColor,
+          size: 40,
+          iconSize: 20,
+        ),
+        title: Text(
+          '输出与最近任务',
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        subtitle: Text(
+          '处理完成后可在工具页顶部状态和最近任务中打开、分享或复制输出路径',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        children: [
+          Text(
+            'PDF 操作现在优先显示功能按钮。输出目录、最近输出和历史记录仍保留在工具首页状态区，不再占用详情页第一屏。',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PdfOutputHelpPanel extends StatelessWidget {
+  const _PdfOutputHelpPanel({
+    required this.accentColor,
+    required this.outputDirectory,
+    required this.lastOutputPath,
+    required this.onOpenOutput,
+    required this.onShareOutput,
+    required this.onCopyOutput,
+  });
+
+  final Color accentColor;
+  final String? outputDirectory;
+  final String? lastOutputPath;
+  final VoidCallback? onOpenOutput;
+  final VoidCallback? onShareOutput;
+  final VoidCallback? onCopyOutput;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final directoryLabel =
+        outputDirectory ??
+        _localizedLabel(
+          context,
+          '正在读取默认输出目录',
+          'Loading default output directory',
+        );
+    final latestOutput = lastOutputPath?.isNotEmpty == true
+        ? lastOutputPath!
+        : _localizedLabel(context, '暂无输出记录', 'No output yet');
+
+    return AppCard(
+      elevation: 0,
+      padding: EdgeInsets.zero,
+      radius: 18,
+      border: Border.all(color: accentColor.withValues(alpha: 0.14)),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        leading: _ToolIconBox(
+          icon: Icons.folder_open_rounded,
+          color: accentColor,
+          size: 40,
+          iconSize: 20,
+        ),
+        title: Text(
+          _localizedLabel(context, '输出目录与最近输出', 'Output and latest file'),
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        subtitle: Text(
+          directoryLabel,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        children: [
+          _PathSummaryRow(
+            icon: Icons.folder_outlined,
+            label: _localizedLabel(
+              context,
+              '当前输出目录',
+              'Current output directory',
+            ),
+            value: directoryLabel,
+          ),
+          const SizedBox(height: 10),
+          _PathSummaryRow(
+            icon: Icons.description_outlined,
+            label: _localizedLabel(context, '最近输出', 'Latest output'),
+            value: latestOutput,
+          ),
+          if (lastOutputPath?.isNotEmpty == true) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: onOpenOutput,
+                    icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                    label: Text(_localizedLabel(context, '打开输出', 'Open')),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: onShareOutput,
+                    icon: const Icon(Icons.share_outlined, size: 18),
+                    label: Text(_localizedLabel(context, '分享输出', 'Share')),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: onCopyOutput,
+                    icon: const Icon(Icons.copy_outlined, size: 18),
+                    label: Text(_localizedLabel(context, '复制路径', 'Copy path')),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PathSummaryRow extends StatelessWidget {
+  const _PathSummaryRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: colorScheme.onSurfaceVariant),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2994,14 +4637,7 @@ class _ToolSearchSheetState extends State<_ToolSearchSheet> {
   List<_ToolActionSpec> get _filteredActions {
     final query = _query.trim().toLowerCase();
     if (query.isEmpty) return widget.actions;
-    return widget.actions
-        .where(
-          (action) =>
-              action.title.toLowerCase().contains(query) ||
-              action.subtitle.toLowerCase().contains(query) ||
-              (action.badge ?? '').toLowerCase().contains(query),
-        )
-        .toList();
+    return widget.actions.where((action) => action.matches(query)).toList();
   }
 
   @override
@@ -3105,6 +4741,7 @@ class _ToolQuickControls extends StatelessWidget {
     required this.onPickOutputDirectory,
     required this.onResetOutputDirectory,
     required this.onCopyPath,
+    required this.onSharePath,
     required this.formatTime,
   });
 
@@ -3122,6 +4759,7 @@ class _ToolQuickControls extends StatelessWidget {
   final VoidCallback? onPickOutputDirectory;
   final VoidCallback? onResetOutputDirectory;
   final ValueChanged<String> onCopyPath;
+  final ValueChanged<String> onSharePath;
   final String Function(DateTime time) formatTime;
 
   @override
@@ -3201,6 +4839,7 @@ class _ToolQuickControls extends StatelessWidget {
             copyTooltip: copyTooltip,
             tasks: tasks,
             onCopyPath: onCopyPath,
+            onSharePath: onSharePath,
             formatTime: formatTime,
           ),
         ],
@@ -3217,6 +4856,7 @@ class _DashboardTaskHistoryPanel extends StatelessWidget {
     required this.copyTooltip,
     required this.tasks,
     required this.onCopyPath,
+    required this.onSharePath,
     required this.formatTime,
   });
 
@@ -3226,6 +4866,7 @@ class _DashboardTaskHistoryPanel extends StatelessWidget {
   final String copyTooltip;
   final List<_ToolTaskRecord> tasks;
   final ValueChanged<String> onCopyPath;
+  final ValueChanged<String> onSharePath;
   final String Function(DateTime time) formatTime;
 
   @override
@@ -3303,10 +4944,24 @@ class _DashboardTaskHistoryPanel extends StatelessWidget {
                 ),
                 trailing: task.outputPath.isEmpty
                     ? null
-                    : IconButton(
-                        tooltip: copyTooltip,
-                        icon: const Icon(Icons.copy_outlined, size: 18),
-                        onPressed: () => onCopyPath(task.outputPath),
+                    : Wrap(
+                        spacing: 2,
+                        children: [
+                          IconButton(
+                            tooltip: _localizedLabel(
+                              context,
+                              '分享输出',
+                              'Share output',
+                            ),
+                            icon: const Icon(Icons.share_outlined, size: 18),
+                            onPressed: () => onSharePath(task.outputPath),
+                          ),
+                          IconButton(
+                            tooltip: copyTooltip,
+                            icon: const Icon(Icons.copy_outlined, size: 18),
+                            onPressed: () => onCopyPath(task.outputPath),
+                          ),
+                        ],
                       ),
               ),
             ),
@@ -4045,6 +5700,7 @@ class _RecentTasksPanel extends StatelessWidget {
     required this.copyTooltip,
     required this.tasks,
     required this.onCopyPath,
+    required this.onSharePath,
     required this.formatTime,
   });
 
@@ -4054,6 +5710,7 @@ class _RecentTasksPanel extends StatelessWidget {
   final String copyTooltip;
   final List<_ToolTaskRecord> tasks;
   final ValueChanged<String> onCopyPath;
+  final ValueChanged<String> onSharePath;
   final String Function(DateTime time) formatTime;
 
   @override
@@ -4123,10 +5780,24 @@ class _RecentTasksPanel extends StatelessWidget {
                 ),
                 trailing: task.outputPath.isEmpty
                     ? null
-                    : IconButton(
-                        tooltip: copyTooltip,
-                        icon: const Icon(Icons.copy_outlined, size: 18),
-                        onPressed: () => onCopyPath(task.outputPath),
+                    : Wrap(
+                        spacing: 2,
+                        children: [
+                          IconButton(
+                            tooltip: _localizedLabel(
+                              context,
+                              '分享输出',
+                              'Share output',
+                            ),
+                            icon: const Icon(Icons.share_outlined, size: 18),
+                            onPressed: () => onSharePath(task.outputPath),
+                          ),
+                          IconButton(
+                            tooltip: copyTooltip,
+                            icon: const Icon(Icons.copy_outlined, size: 18),
+                            onPressed: () => onCopyPath(task.outputPath),
+                          ),
+                        ],
                       ),
               ),
             ),

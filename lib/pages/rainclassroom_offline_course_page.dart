@@ -2,11 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import '../api/api_service.dart';
+import '../api/platform_request_stability.dart';
 import '../api/rainclassroom_exam.dart';
 import '../models/course.dart';
 import '../utils/global_palette.dart';
 import '../platform.dart';
 import '../session/app_settings.dart';
+
+PlatformRequestOptions _offlineCourseStableOptions(String operationId) {
+  return PlatformRequestOptions(
+    operationId: operationId,
+    cachePolicy: PlatformRequestCachePolicy.staleIfError,
+  );
+}
 
 class RainClassroomOfflineCoursePage extends StatefulWidget {
   final Course course;
@@ -39,7 +47,7 @@ class _RainClassroomOfflineCoursePageState
     });
 
     try {
-      final classroomId = widget.course.classId ?? '';
+      final classroomId = widget.course.classId;
       if (classroomId.isEmpty) {
         throw Exception('课程ID为空');
       }
@@ -68,11 +76,16 @@ class _RainClassroomOfflineCoursePageState
     }
   }
 
-  Future<Map<String, dynamic>?> _fetchClassroomDetail(String classroomId) async {
+  Future<Map<String, dynamic>?> _fetchClassroomDetail(
+    String classroomId,
+  ) async {
     try {
       final response = await ApiService.sendRequest(
         '/v2/api/web/classrooms/$classroomId',
         params: {'role': '5'},
+        platformOptions: _offlineCourseStableOptions(
+          'rainclassroom.offline.classroom_detail',
+        ),
       );
 
       if (response.data is Map<String, dynamic>) {
@@ -92,12 +105,10 @@ class _RainClassroomOfflineCoursePageState
     try {
       final response = await ApiService.sendRequest(
         '/v2/api/web/logs/learn/$classroomId',
-        params: {
-          'actype': '-1',
-          'page': '0',
-          'offset': '20',
-          'sort': '-1',
-        },
+        params: {'actype': '-1', 'page': '0', 'offset': '20', 'sort': '-1'},
+        platformOptions: _offlineCourseStableOptions(
+          'rainclassroom.offline.learn_logs',
+        ),
       );
 
       if (response.data is Map<String, dynamic>) {
@@ -121,6 +132,9 @@ class _RainClassroomOfflineCoursePageState
       // 获取即将到来的考试
       final upcomingResponse = await ApiService.sendRequest(
         '/api/v3/classroom/on-lesson-upcoming-exam',
+        platformOptions: _offlineCourseStableOptions(
+          'rainclassroom.offline.upcoming_exam',
+        ),
       );
 
       List<dynamic> exams = [];
@@ -140,12 +154,14 @@ class _RainClassroomOfflineCoursePageState
         if (data['code'] == 0 && data['data'] != null) {
           final upcomingExam = data['data']['upcomingExam'];
           if (upcomingExam is List) {
-            exams.addAll(upcomingExam.where((exam) {
-              if (exam is Map) {
-                return exam['classroom_id'].toString() == classroomId;
-              }
-              return false;
-            }));
+            exams.addAll(
+              upcomingExam.where((exam) {
+                if (exam is Map) {
+                  return exam['classroom_id'].toString() == classroomId;
+                }
+                return false;
+              }),
+            );
           }
         }
       }
@@ -160,6 +176,9 @@ class _RainClassroomOfflineCoursePageState
             'offset': '50',
             'sort': '-1',
           },
+          platformOptions: _offlineCourseStableOptions(
+            'rainclassroom.offline.exam_logs',
+          ),
         );
 
         if (logsResponse.data is Map<String, dynamic>) {
@@ -171,7 +190,8 @@ class _RainClassroomOfflineCoursePageState
                 if (activity is Map && activity['type'] == 5) {
                   // 避免重复添加
                   final examId = activity['id']?.toString() ?? '';
-                  if (examId.isNotEmpty && !exams.any((e) => e['id']?.toString() == examId)) {
+                  if (examId.isNotEmpty &&
+                      !exams.any((e) => e['id']?.toString() == examId)) {
                     exams.add(activity);
                   }
                 }
@@ -195,7 +215,9 @@ class _RainClassroomOfflineCoursePageState
   Widget build(BuildContext context) {
     final palette = resolvePlatformPalette(
       PlatformManager().currentPlatform,
-      fallback: resolveGlobalPalette(AppSettings.globalColorSchemeNotifier.value),
+      fallback: resolveGlobalPalette(
+        AppSettings.globalColorSchemeNotifier.value,
+      ),
     );
 
     return Scaffold(
@@ -219,9 +241,7 @@ class _RainClassroomOfflineCoursePageState
 
   Widget _buildBody(GlobalPaletteData palette) {
     if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
 
     if (_errorMessage != null) {
@@ -269,7 +289,6 @@ class _RainClassroomOfflineCoursePageState
     final detail = _classroomDetail!;
     final courseName = detail['course_name']?.toString() ?? '未知课程';
     final teacherName = detail['teacher_name']?.toString() ?? '未知教师';
-    final teacherAvatar = detail['teacher_avatar']?.toString() ?? '';
     final studentsCount = detail['students_count']?.toString() ?? '0';
     final courseSign = detail['course_sign']?.toString() ?? '';
 
@@ -290,11 +309,7 @@ class _RainClassroomOfflineCoursePageState
                     color: palette.primary.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
-                    Icons.school,
-                    color: palette.primary,
-                    size: 28,
-                  ),
+                  child: Icon(Icons.school, color: palette.primary, size: 28),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -311,10 +326,7 @@ class _RainClassroomOfflineCoursePageState
                       const SizedBox(height: 4),
                       Text(
                         '课程代码: $courseSign',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ],
                   ),
@@ -338,17 +350,11 @@ class _RainClassroomOfflineCoursePageState
         const SizedBox(width: 8),
         Text(
           '$label: ',
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.grey[600],
-          ),
+          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
         ),
         Text(
           value,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
         ),
       ],
     );
@@ -376,10 +382,7 @@ class _RainClassroomOfflineCoursePageState
                   children: [
                     Icon(Icons.history, size: 48, color: Colors.grey[400]),
                     const SizedBox(height: 8),
-                    Text(
-                      '暂无学习记录',
-                      style: TextStyle(color: Colors.grey[600]),
-                    ),
+                    Text('暂无学习记录', style: TextStyle(color: Colors.grey[600])),
                   ],
                 ),
               ),
@@ -413,10 +416,7 @@ class _RainClassroomOfflineCoursePageState
                   children: [
                     Icon(Icons.quiz, size: 48, color: Colors.grey[400]),
                     const SizedBox(height: 8),
-                    Text(
-                      '暂无考试',
-                      style: TextStyle(color: Colors.grey[600]),
-                    ),
+                    Text('暂无考试', style: TextStyle(color: Colors.grey[600])),
                   ],
                 ),
               ),
@@ -447,7 +447,8 @@ class _RainClassroomOfflineCoursePageState
         final now = DateTime.now();
 
         final dateFormat = DateFormat('MM-dd HH:mm');
-        timeRangeText = '${dateFormat.format(start)} - ${dateFormat.format(end)}';
+        timeRangeText =
+            '${dateFormat.format(start)} - ${dateFormat.format(end)}';
 
         if (now.isBefore(start)) {
           statusText = '未开始';
@@ -506,7 +507,11 @@ class _RainClassroomOfflineCoursePageState
                 ),
                 child: Text(
                   statusText,
-                  style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w500),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: statusColor,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],
@@ -515,9 +520,9 @@ class _RainClassroomOfflineCoursePageState
         trailing: const Icon(Icons.chevron_right),
         onTap: () async {
           if (examId.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('考试ID无效')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('考试ID无效')));
             return;
           }
 
@@ -526,7 +531,7 @@ class _RainClassroomOfflineCoursePageState
             // 1. 生成考试 token
             final tokenResponse = await RainClassroomExamApi.generateExamToken(
               examId,
-              widget.course.classId ?? '',
+              widget.course.classId,
             );
 
             if (tokenResponse == null || tokenResponse['status'] != 200) {
@@ -534,33 +539,35 @@ class _RainClassroomOfflineCoursePageState
             }
 
             final tokenData = tokenResponse['data'];
-            if (tokenData == null) {
+            if (tokenData is! Map) {
               throw Exception('考试token数据为空');
             }
 
-            final token = tokenData['token'];
-            final examHost = tokenData['exam_host'] ?? 'https://examination.xuetangx.com';
+            final token = tokenData['token']?.toString() ?? '';
+            final examHost =
+                tokenData['exam_host']?.toString() ??
+                'https://examination.xuetangx.com';
             final userId = tokenData['user_id']?.toString() ?? '';
 
             // 2. 构造考试登录 URL（移动端）
-            final nextUrl = Uri.encodeComponent('$examHost/exam/$examId?isFrom=2&platform=mobile');
-            final examUrl = '$examHost/login?exam_id=$examId&user_id=$userId&crypt=${Uri.encodeComponent(token)}&next=$nextUrl&language=zh&platform=mobile';
+            final nextUrl = Uri.encodeComponent(
+              '$examHost/exam/$examId?isFrom=2&platform=mobile',
+            );
+            final examUrl =
+                '$examHost/login?exam_id=$examId&user_id=$userId&crypt=${Uri.encodeComponent(token)}&next=$nextUrl&language=zh&platform=mobile';
 
             // 3. 使用系统浏览器打开考试链接（Chrome Custom Tabs）
             final uri = Uri.parse(examUrl);
             if (await canLaunchUrl(uri)) {
-              await launchUrl(
-                uri,
-                mode: LaunchMode.externalApplication,
-              );
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
             } else {
               throw Exception('无法打开考试链接');
             }
           } catch (e) {
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('打开考试失败: $e')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('打开考试失败: $e')));
             }
           }
         },
@@ -608,31 +615,29 @@ class _RainClassroomOfflineCoursePageState
         onTap: () async {
           final activityId = log['id']?.toString() ?? '';
           if (activityId.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('活动ID无效')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('活动ID无效')));
             return;
           }
 
           try {
             // 直接构造移动端学习内容URL（雨课堂会自动使用当前浏览器的登录态）
             // 使用 m.yuketang.cn 移动端域名确保加载移动版界面
-            final contentUrl = 'https://m.yuketang.cn/v2/web/studentCourse/${widget.course.classId}/activity/$activityId';
+            final contentUrl =
+                'https://m.yuketang.cn/v2/web/studentCourse/${widget.course.classId}/activity/$activityId';
             final uri = Uri.parse(contentUrl);
 
             if (await canLaunchUrl(uri)) {
-              await launchUrl(
-                uri,
-                mode: LaunchMode.externalApplication,
-              );
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
             } else {
               throw Exception('无法打开学习内容');
             }
           } catch (e) {
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('打开学习内容失败: $e')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('打开学习内容失败: $e')));
             }
           }
         },

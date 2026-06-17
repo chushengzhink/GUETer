@@ -27,9 +27,11 @@ import '../modules/local_transfer/ui/local_transfer_page.dart';
 import '../modules/local_transfer/ui/local_transfer_send_page.dart';
 import '../pages/file_tools_page.dart';
 import '../pages/request_console_page.dart';
+import '../pages/study_center_page.dart';
 import '../services/file_output_share_service.dart';
 import '../services/file_tool_service.dart';
 import '../session/app_settings.dart';
+import '../study/study_card_store.dart';
 import 'plugin_context.dart';
 import 'plugin_manifest.dart';
 
@@ -648,6 +650,7 @@ class PluginRuntime {
       'localTransfer' => const LocalTransferPage(),
       'cloud' => const OpenListCloudPage(),
       'health' => const RequestConsolePage(),
+      'studyCards' => const StudyCenterPage(),
       _ => throw StateError('不支持的内置工具: $id'),
     };
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
@@ -698,6 +701,18 @@ class PluginRuntime {
             ),
           ),
         );
+        return;
+      case 'studyCard':
+        await StudyCardStore().addCard(
+          front: p.basename(path),
+          back: '来自本地文件：${p.basename(path)}',
+          sourceFileName: p.basename(path),
+          sourcePath: path,
+        );
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已生成复习卡片')));
         return;
       default:
         throw StateError('不支持的文件工具动作: $mode');

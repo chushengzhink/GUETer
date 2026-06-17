@@ -31,7 +31,45 @@ void main() {
 
       expect(endpoint.hostUserId, 'user-2');
       expect(endpoint.roomType, 'nearby_pairing');
-      expect(endpoint.roomName, 'Bob 的近场房间');
+      expect(endpoint.roomName, 'Bob 的附近房间');
+    });
+
+    test('parses BLE hotspot fallback metadata', () {
+      final endpoint = NearbyRoomEndpoint.fromMap(<String, dynamic>{
+        'id': 'host-ble',
+        'name': 'Host',
+        'transportMode': 'ble_hotspot',
+        'hotspotSsid': 'RoomHotspot',
+        'hotspotPassword': '12345678',
+        'requiresManualHotspotStep': true,
+      });
+
+      expect(endpoint.transportMode, NearbyTransportMode.bleHotspot);
+      expect(endpoint.requiresManualHotspotStep, isTrue);
+      expect(endpoint.hasHotspotCredentials, isTrue);
+      expect(endpoint.roomName, 'Host 的附近房间');
+    });
+  });
+
+  group('NearbyEnvironmentStatus', () {
+    test('parses BLE hotspot fallback availability', () {
+      final status = NearbyEnvironmentStatus.fromMap(<String, dynamic>{
+        'sdkInt': 34,
+        'locationServicesEnabled': true,
+        'bluetoothEnabled': true,
+        'wifiEnabled': true,
+        'playServicesAvailable': false,
+        'nearbySupported': true,
+        'transportMode': 'ble_hotspot',
+        'bleAvailable': true,
+        'hotspotCapable': true,
+        'requiresManualHotspotStep': true,
+      });
+
+      expect(status.transportMode, NearbyTransportMode.bleHotspot);
+      expect(status.requiresManualHotspotStep, isTrue);
+      expect(status.hasFallbackPath, isTrue);
+      expect(status.playServicesAvailable, isFalse);
     });
   });
 

@@ -7,7 +7,6 @@ enum ActiveType {
   pick(11, '选人'),
   questionnaire(14, '问卷'),
   live(17, '直播'),
-  // work(19, '作业'),
   evaluation(23, '评分'),
   groupTask(35, '分组任务'),
   pptClass(40, 'PPT课堂'),
@@ -40,26 +39,19 @@ enum ActiveType {
   }
 }
 
-enum SignType {
-  normal,
-  qrCode,
-  pattern,
-  location,
-  code
-}
+enum SignType { normal, qrCode, pattern, location, code }
 
 const Map<int, SignType> signTypeIndexMap = {
   0: SignType.normal,
   2: SignType.qrCode,
   3: SignType.pattern,
   4: SignType.location,
-  5: SignType.code
+  5: SignType.code,
 };
 
 SignType getSignTypeFromIndex(int index) {
   return signTypeIndexMap[index] ?? SignType.normal;
 }
-
 
 class Active {
   final int type;
@@ -82,28 +74,42 @@ class Active {
     required this.url,
     required this.status,
     required this.extras,
-    this.signType
+    this.signType,
   }) : activeType = ActiveType.fromValue(type) ?? ActiveType.signIn;
 
   factory Active.fromJson(Map<String, dynamic> json) {
-    int activeType = json['activeType'] is int ?
-    json['activeType'] : int.tryParse(json['activeType']?.toString() ?? '0') ?? 0;
-    // 接口不稳定
-    return Active(
-      type: activeType,
-      id: json['id'].toString(),
-      name: json['nameOne'] ?? '',
-      description: json['nameTwo'] ?? '',
-      startTime: json['startTime'] ?? 0,
-      url: json['url'] ?? '',
-      status: json['status'] == 1,
-      extras: json['extraInfo'] ?? {}
+    final type = int.tryParse(json['activeType']?.toString() ?? '') ?? 0;
+    final extraInfo = json['extraInfo'];
+    final extras = extraInfo is Map
+        ? extraInfo.map((key, value) => MapEntry(key.toString(), value))
+        : <String, dynamic>{};
+    final nameTwo = json['nameTwo']?.toString() ?? '';
+    final nameFour = json['nameFour']?.toString() ?? '';
+    final active = Active(
+      type: type,
+      id: json['id']?.toString() ?? '',
+      name: (json['nameOne'] ?? json['name'] ?? '').toString(),
+      description: nameTwo.isNotEmpty ? nameTwo : nameFour,
+      startTime: int.tryParse(json['startTime']?.toString() ?? '') ?? 0,
+      url: (json['url'] ?? '').toString(),
+      status: json['status'] == 1 || json['status']?.toString() == '1',
+      extras: extras,
     );
+
+    final otherId = int.tryParse(
+      (json['otherId'] ?? extras['otherId'] ?? '').toString(),
+    );
+    if (otherId != null &&
+        (active.activeType == ActiveType.signIn ||
+            active.activeType == ActiveType.signOut ||
+            active.activeType == ActiveType.scheduledSignIn)) {
+      active.signType = getSignTypeFromIndex(otherId);
+    }
+    return active;
   }
 
   IconData getIcon() {
     const Map<ActiveType, IconData> iconMap = {
-      // ActiveType.work: Icons.assignment,
       ActiveType.quiz: Icons.edit_note,
       ActiveType.groupTask: Icons.group,
       ActiveType.topicDiscuss: Icons.comment,
@@ -126,10 +132,9 @@ class Active {
       ActiveType.pptClass: Icons.slideshow,
     };
 
-    if (activeType == ActiveType.signIn || 
-        activeType == ActiveType.signOut || 
+    if (activeType == ActiveType.signIn ||
+        activeType == ActiveType.signOut ||
         activeType == ActiveType.scheduledSignIn) {
-      
       const Map<SignType, IconData> signIconMap = {
         SignType.normal: Icons.check_circle_outline,
         SignType.pattern: Icons.pattern,
@@ -137,7 +142,7 @@ class Active {
         SignType.qrCode: Icons.qr_code,
         SignType.code: Icons.pin,
       };
-      
+
       return signIconMap[signType] ?? Icons.check_circle_outline;
     }
 

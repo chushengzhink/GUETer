@@ -198,7 +198,26 @@ class _KetangpaiCourseStructPageState extends State<KetangpaiCourseStructPage> {
   }
 
   Widget _buildExamPage() {
-    return KetangpaiExamPage(course: widget.course);
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () {
+                Navigator.of(
+                  context,
+                ).pushNamed('/exam_v2', arguments: widget.course);
+              },
+              icon: const Icon(Icons.assignment_outlined),
+              label: const Text('考试 V2'),
+            ),
+          ),
+        ),
+        Expanded(child: KetangpaiExamPage(course: widget.course)),
+      ],
+    );
   }
 
   Widget _buildHeroInfoTag(String label) {

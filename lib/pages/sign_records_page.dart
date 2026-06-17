@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../services/sign_platform_context.dart';
 import '../session/sign_record_store.dart';
 
 class SignRecordsPage extends StatefulWidget {
-  const SignRecordsPage({super.key});
+  const SignRecordsPage({super.key, this.initialPlatform = '全部'});
+
+  final String initialPlatform;
 
   @override
   State<SignRecordsPage> createState() => _SignRecordsPageState();
@@ -16,13 +19,16 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
   final TextEditingController _courseFilterController = TextEditingController();
 
   List<Map<String, dynamic>> _allRecords = <Map<String, dynamic>>[];
-  String _platformFilter = '全部';
+  late String _platformFilter;
   DateTimeRange? _dateRange;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
+    _platformFilter =
+        SignPlatformContext.tryParse(widget.initialPlatform)?.platformKey ??
+        widget.initialPlatform;
     _loadRecords();
   }
 
@@ -33,13 +39,9 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
   }
 
   Future<void> _loadRecords() async {
-    setState(() {
-      _loading = true;
-    });
+    setState(() => _loading = true);
     final records = await _store.loadRaw();
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     setState(() {
       _allRecords = records;
       _loading = false;
@@ -48,13 +50,23 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
 
   List<Map<String, dynamic>> get _filteredRecords {
     final courseKeyword = _courseFilterController.text.trim().toLowerCase();
+    final platformContext = SignPlatformContext.tryParse(_platformFilter);
     return _allRecords.where((record) {
       final platform = (record['platform'] ?? '').toString();
+      final platformKey = (record['platformKey'] ?? '').toString();
+      final platformType = (record['platformType'] ?? '').toString();
       final courseName = (record['courseName'] ?? '').toString();
       final ts = int.tryParse((record['timestamp'] ?? '0').toString()) ?? 0;
       final signAt = DateTime.fromMillisecondsSinceEpoch(ts);
 
-      if (_platformFilter != '全部' && platform != _platformFilter) {
+      if (!SignPlatformContext.isAllFilter(_platformFilter) &&
+          !_matchesPlatformFilter(
+            platform: platform,
+            platformKey: platformKey,
+            platformType: platformType,
+            filter: _platformFilter,
+            context: platformContext,
+          )) {
         return false;
       }
       if (courseKeyword.isNotEmpty &&
@@ -81,6 +93,27 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
       }
       return true;
     }).toList();
+  }
+
+  bool _matchesPlatformFilter({
+    required String platform,
+    required String platformKey,
+    required String platformType,
+    required String filter,
+    required SignPlatformContext? context,
+  }) {
+    if (context == null) {
+      return platform == filter ||
+          platformKey == filter ||
+          platformType == filter;
+    }
+    if (platformKey.isNotEmpty) {
+      return platformKey == context.platformKey;
+    }
+    if (platformType.isNotEmpty) {
+      return platformType == context.platformType.name;
+    }
+    return platform == context.platformLabel;
   }
 
   String _recordLine(Map<String, dynamic> record) {
@@ -147,9 +180,7 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
       initialDateRange: _dateRange,
     );
     if (result == null) return;
-    setState(() {
-      _dateRange = result;
-    });
+    setState(() => _dateRange = result);
   }
 
   Future<void> _clearAll() async {
@@ -171,9 +202,7 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
       ),
     );
 
-    if (confirm != true) {
-      return;
-    }
+    if (confirm != true) return;
     await _store.clear();
     await _loadRecords();
   }
@@ -231,14 +260,30 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
                         ),
                         items: const [
                           DropdownMenuItem(value: '全部', child: Text('全部')),
-                          DropdownMenuItem(value: '雨课堂', child: Text('雨课堂')),
-                          DropdownMenuItem(value: '课堂派', child: Text('课堂派')),
+                          DropdownMenuItem(
+                            value: 'chaoxing',
+                            child: Text('学习通'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'rainclassroom',
+                            child: Text('雨课堂'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'tronclass',
+                            child: Text('畅课'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'ketangpai',
+                            child: Text('课堂派'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'weizhuojiao',
+                            child: Text('微助教'),
+                          ),
                         ],
                         onChanged: (v) {
                           if (v == null) return;
-                          setState(() {
-                            _platformFilter = v;
-                          });
+                          setState(() => _platformFilter = v);
                         },
                       ),
                     ),
@@ -258,11 +303,7 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
                     if (_dateRange != null)
                       IconButton(
                         tooltip: '清除时间筛选',
-                        onPressed: () {
-                          setState(() {
-                            _dateRange = null;
-                          });
-                        },
+                        onPressed: () => setState(() => _dateRange = null),
                         icon: const Icon(Icons.clear),
                       ),
                   ],
@@ -282,7 +323,8 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
                   )
                 : ListView.separated(
                     itemCount: filtered.length,
-                    separatorBuilder: (context, index) => const Divider(height: 1),
+                    separatorBuilder: (context, index) =>
+                        const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final record = filtered[index];
                       final platform = (record['platform'] ?? '未知平台')
@@ -300,11 +342,7 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
                       final signAt = DateTime.fromMillisecondsSinceEpoch(ts);
 
                       return ListTile(
-                        leading: Icon(
-                          platform == '雨课堂'
-                              ? Icons.cloud_outlined
-                              : Icons.class_outlined,
-                        ),
+                        leading: Icon(_iconForPlatform(platform)),
                         title: Text(courseName),
                         subtitle: Text(
                           '${_fmt(signAt)}\n账号: $account\n状态: $status${detail.isEmpty ? '' : '\n备注: $detail'}',
@@ -314,11 +352,12 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
                           tooltip: '复制该条日志',
                           icon: const Icon(Icons.copy_outlined),
                           onPressed: () async {
+                            final messenger = ScaffoldMessenger.of(context);
                             await Clipboard.setData(
                               ClipboardData(text: _recordLine(record)),
                             );
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            if (!context.mounted) return;
+                            messenger.showSnackBar(
                               const SnackBar(content: Text('已复制该条日志')),
                             );
                           },
@@ -330,5 +369,16 @@ class _SignRecordsPageState extends State<SignRecordsPage> {
         ],
       ),
     );
+  }
+
+  IconData _iconForPlatform(String platform) {
+    return switch (platform) {
+      '学习通' => Icons.local_fire_department_outlined,
+      '雨课堂' => Icons.water_drop_outlined,
+      '畅课' => Icons.school_outlined,
+      '课堂派' => Icons.class_outlined,
+      '微助教' => Icons.wechat,
+      _ => Icons.assignment_outlined,
+    };
   }
 }

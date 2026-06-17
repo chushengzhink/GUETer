@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 
 import '../plugins/plugin_manifest.dart';
+import '../plugins/plugin_template.dart';
 import '../session/app_settings.dart';
 
 class PluginManagementPage extends StatefulWidget {
@@ -111,6 +112,13 @@ class _PluginManagementPageState extends State<PluginManagementPage> {
     }
   }
 
+  Future<void> _openTemplateLibrary() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const _PluginTemplateLibraryPage()),
+    );
+    await _refresh();
+  }
+
   Future<void> _openPluginDetail(PluginManifest manifest) async {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => _PluginDetailPage(manifest: manifest)),
@@ -127,6 +135,11 @@ class _PluginManagementPageState extends State<PluginManagementPage> {
       appBar: AppBar(
         title: const Text('插件管理'),
         actions: [
+          IconButton(
+            tooltip: '模板库',
+            onPressed: _busy ? null : _openTemplateLibrary,
+            icon: const Icon(Icons.dashboard_customize_outlined),
+          ),
           IconButton(
             tooltip: '生成示例',
             onPressed: _busy ? null : _createExampleMod,
@@ -243,6 +256,96 @@ class _PluginManagementPageState extends State<PluginManagementPage> {
                     ),
                   ),
                 ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _PluginTemplateLibraryPage extends StatefulWidget {
+  const _PluginTemplateLibraryPage();
+
+  @override
+  State<_PluginTemplateLibraryPage> createState() =>
+      _PluginTemplateLibraryPageState();
+}
+
+class _PluginTemplateLibraryPageState
+    extends State<_PluginTemplateLibraryPage> {
+  final PluginTemplateLibrary _library = const PluginTemplateLibrary();
+  String _category = '全部';
+  bool _busy = false;
+
+  Future<void> _generate(PluginTemplate template) async {
+    setState(() => _busy = true);
+    try {
+      final manifest = await AppSettings.pluginStore.createFromTemplate(
+        template,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已生成模板：${manifest.name.zh}，默认未启用')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('生成失败：$error')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final templates = _library.all();
+    final categories = <String>{
+      '全部',
+      ...templates.map((template) => template.category),
+    }.toList();
+    final visible = templates
+        .where(
+          (template) => _category == '全部' || template.category == _category,
+        )
+        .toList();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Mod 模板库')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(14),
+              child: Text('模板只生成本地 plugin.json，不会自动启用。生成后可进入插件详情检查权限和入口。'),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: categories.map((category) {
+              return FilterChip(
+                label: Text(category),
+                selected: _category == category,
+                onSelected: (_) => setState(() => _category = category),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          ...visible.map((template) {
+            return Card(
+              child: ListTile(
+                leading: const Icon(Icons.extension_outlined),
+                title: Text(template.title),
+                subtitle: Text('${template.category}\n${template.description}'),
+                isThreeLine: true,
+                trailing: FilledButton.tonal(
+                  onPressed: _busy ? null : () => _generate(template),
+                  child: const Text('生成'),
+                ),
               ),
             );
           }),

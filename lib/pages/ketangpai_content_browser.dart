@@ -1,9 +1,17 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api/course.dart';
+import '../api/ketangpai_content_utils.dart';
+import '../materials/material_index_models.dart';
+import '../materials/material_library_store.dart';
 import '../models/course.dart';
+import '../services/gueter_storage_service.dart';
 
 enum KetangpaiContentKind {
   announcement,
@@ -32,6 +40,7 @@ class KetangpaiContentBrowser extends StatefulWidget {
 
 class _KetangpaiContentBrowserState extends State<KetangpaiContentBrowser> {
   bool _loading = true;
+  bool _downloading = false;
   String? _errorMessage;
   List<Map<String, dynamic>> _items = const [];
 
@@ -85,39 +94,71 @@ class _KetangpaiContentBrowserState extends State<KetangpaiContentBrowser> {
   }
 
   int _contentTypeOf(Map<String, dynamic> item) {
-    return int.tryParse(
-          item['contenttype']?.toString() ??
-              item['contentType']?.toString() ??
-              '',
-        ) ??
-        -1;
+    return ketangpaiContentTypeOf(item);
   }
 
   String _titleOf(Map<String, dynamic> item) {
-    return item['title']?.toString().trim().isNotEmpty == true
-        ? item['title'].toString().trim()
-        : (item['name']?.toString().trim().isNotEmpty == true
-              ? item['name'].toString().trim()
-              : widget.title);
+    return ketangpaiTitleOf(item, fallback: widget.title);
   }
 
   String _subtitleOf(Map<String, dynamic> item) {
-    final fields = <String>[
-      item['activitylabel']?.toString() ?? '',
-      item['begintime']?.toString() ?? '',
-      item['endtime']?.toString() ?? '',
-      item['createtime']?.toString() ?? '',
-      item['updatetime']?.toString() ?? '',
-    ].where((value) => value.trim().isNotEmpty).toList();
-
-    if (fields.isEmpty) {
-      return '内容类型 ${_contentTypeOf(item)}';
+    final subtitle = ketangpaiSubtitleOf(item);
+    if (subtitle.isEmpty) {
+      return '???? ${_contentTypeOf(item)}';
     }
+    return subtitle;
+  }
 
-    return fields.take(2).join('  |  ');
+  Future<void> _openResource(KetangpaiResourceLink link) async {
+    final uri = Uri.tryParse(link.url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _downloadResource(KetangpaiResourceLink link) async {
+    if (_downloading) return;
+    setState(() {
+      _downloading = true;
+    });
+    try {
+      final dir = await GueterStorageService.instance.publicDirectory(
+        GueterPublicDirectory.cloudDownloads,
+      );
+      final safeName = _sanitizeFileName(link.name);
+      final savePath = p.join(dir.path, safeName);
+      await Dio().download(link.url, savePath);
+      await MaterialLibraryStore().upsertItem(
+        path: savePath,
+        name: safeName,
+        sourceType: MaterialSourceType.openListDownload,
+        sourceLabel: '?????',
+        tags: const <String>['ketangpai'],
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('???? $savePath')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('????: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _downloading = false;
+        });
+      }
+    }
+  }
+
+  String _sanitizeFileName(String fileName) {
+    final cleaned = fileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+    return cleaned.isEmpty ? 'ketangpai_file' : cleaned;
   }
 
   Future<void> _showDetail(Map<String, dynamic> item) async {
+    final links = extractKetangpaiResourceLinks(item);
     final prettyJson = const JsonEncoder.withIndent('  ').convert(item);
     await showDialog<void>(
       context: context,
@@ -126,12 +167,59 @@ class _KetangpaiContentBrowserState extends State<KetangpaiContentBrowser> {
           title: Text(_titleOf(item)),
           content: SizedBox(
             width: double.maxFinite,
-            child: SingleChildScrollView(child: SelectableText(prettyJson)),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_subtitleOf(item)),
+                  if (links.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      '?????',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 8),
+                    for (final link in links)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.attach_file),
+                        title: Text(link.name),
+                        subtitle: Text(link.url),
+                        trailing: Wrap(
+                          spacing: 4,
+                          children: [
+                            IconButton(
+                              tooltip: '??',
+                              onPressed: () => _openResource(link),
+                              icon: const Icon(Icons.open_in_new),
+                            ),
+                            IconButton(
+                              tooltip: '??',
+                              onPressed: _downloading
+                                  ? null
+                                  : () => _downloadResource(link),
+                              icon: const Icon(Icons.download),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                  const SizedBox(height: 16),
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text('????'),
+                    children: [SelectableText(prettyJson)],
+                  ),
+                ],
+              ),
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('关闭'),
+              child: const Text('??'),
             ),
           ],
         );

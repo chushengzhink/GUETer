@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:cookie_jar/cookie_jar.dart';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../platform.dart';
@@ -67,7 +68,7 @@ class LoginContextManager {
     // 启动自动清理定时器（如果尚未启动）
     _ensureCleanupTimer();
 
-    print('[LoginContext] 创建上下文: $context');
+    debugPrint('[LoginContext] 创建上下文: $context');
     return context;
   }
 
@@ -80,7 +81,7 @@ class LoginContextManager {
   void removeContext(String contextId) {
     final context = _activeContexts.remove(contextId);
     if (context != null) {
-      print('[LoginContext] 删除上下文: $context');
+      debugPrint('[LoginContext] 删除上下文: $context');
     }
 
     // 如果没有活跃上下文，停止清理定时器
@@ -112,7 +113,7 @@ class LoginContextManager {
     }
 
     for (final id in expiredIds) {
-      print('[LoginContext] 自动清理过期上下文: ${_activeContexts[id]}');
+      debugPrint('[LoginContext] 自动清理过期上下文: ${_activeContexts[id]}');
       _activeContexts.remove(id);
     }
 
@@ -135,7 +136,7 @@ class LoginContextManager {
 
   /// 清理所有上下文（用于测试或重置）
   void clearAll() {
-    print('[LoginContext] 清理所有上下文，共 ${_activeContexts.length} 个');
+    debugPrint('[LoginContext] 清理所有上下文，共 ${_activeContexts.length} 个');
     _activeContexts.clear();
     _cleanupTimer?.cancel();
     _cleanupTimer = null;
@@ -177,7 +178,7 @@ class LoginDioFactory {
       dio.interceptors.add(_LoginLogInterceptor(context));
     }
 
-    print('[LoginDio] 为上下文 ${context.contextId} 创建隔离 Dio 实例');
+    debugPrint('[LoginDio] 为上下文 ${context.contextId} 创建隔离 Dio 实例');
     return dio;
   }
 
@@ -253,7 +254,7 @@ class _LoginCookieInterceptor extends Interceptor {
         cookies,
       );
 
-      print(
+      debugPrint(
         '[LoginCookie] 保存 ${cookies.length} 个 Cookie 到上下文 ${context.contextId}',
       );
     }
@@ -270,13 +271,15 @@ class _LoginLogInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    print('[LoginDio] ${context.contextId} → ${options.method} ${options.uri}');
+    debugPrint(
+      '[LoginDio] ${context.contextId} → ${options.method} ${options.uri}',
+    );
     handler.next(options);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    print(
+    debugPrint(
       '[LoginDio] ${context.contextId} ← ${response.statusCode} ${response.requestOptions.uri}',
     );
     handler.next(response);
@@ -284,7 +287,7 @@ class _LoginLogInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    print(
+    debugPrint(
       '[LoginDio] ${context.contextId} ✗ ${err.type} ${err.requestOptions.uri}',
     );
     handler.next(err);
