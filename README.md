@@ -25,9 +25,16 @@ GUETer 是一个面向高校教学平台的 Flutter 课程助手，当前聚合�
 - 汇总跨平台待办事项，支持本地提醒和通知。
 - 内置 PDF 阅读器，支持目录、页码跳转、夜间阅读和阅读进度保存。
 - 提供 PDF 转图片、图片合并 PDF、压缩、页面提取、水印、打开和分享等文件工具。
+- 提供本地复习中心，支持资料摘录转复习卡片、卡组管理、今日待复习和间隔重复。
+- 提供资料全文搜索，索引本地下载、离线包、文件工具输出和复习卡片来源文件。
+- Android 支持本地图片 OCR，可将扫描文字保存为 TXT、加入搜索索引或生成复习卡片。
+- 提供学习时间轴，汇总待办、复习到期、签到记录和考试/作业截止，并支持导出本地日历文件。
+- 提供资料状态面板，汇总下载目录、离线包、搜索索引、重复文件和本地缺失状态。
 - 提供云盘共享入口，支持文件浏览、下载、上传、目录导航和按权限显示可用操作。
+- 提供诊断修复中心，汇总请求日志、账号状态、网络状态、权限状态和可执行修复建议。
 - 提供学术检索、电脑帮助文档、每日天文图等扩展工具入口。
-- 支持声明式 Mod 插件，可扩展工具入口、快捷命令、文件预览动作和健康中心动作。
+- 支持声明式 Mod 插件，可扩展工具入口、快捷命令、文件预览动作、健康中心动作和模板化本地工作流。
+- Android 支持今日概览桌面小组件，显示本地待办摘要、待复习数量和通知状态。
 
 ### 局域网与网络辅助
 
@@ -79,24 +86,22 @@ keyAlias=your_key_alias
 storeFile=app/your-release-key.jks
 ```
 
-构建三个 Android 轻量包：
+构建 Android arm64-v8a 安装包：
 
 ```powershell
 flutter pub get
-flutter build apk --release --split-per-abi
+flutter build apk --release --target-platform android-arm64 --split-per-abi
 ```
 
 正式发布建议开启 Dart 混淆并输出符号文件：
 
 ```powershell
-flutter build apk --target-platform android-arm64 --split-per-abi --obfuscate --split-debug-info=build\symbols
+flutter build apk --release --target-platform android-arm64 --split-per-abi --obfuscate --split-debug-info=build\symbols
 ```
 
 构建完成后，APK 位于：
 
 - `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`
-- `build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk`
-- `build/app/outputs/flutter-apk/app-x86_64-release.apk`
 
 ## 应用更新
 
@@ -118,6 +123,8 @@ flutter test
 GUETer 支持本地声明式 Mod 插件。插件通过 UTF-8 JSON 清单声明入口、能力、权限和受控动作，不加载 Dart、Flutter、脚本、shell 或原生代码。
 
 当前支持的扩展位置包括工具页入口、命令搜索、文件预览页动作和健康中心动作。插件可执行的能力限定在白名单内，例如打开链接、打开插件内 Markdown、复制文本、预览当前文件、分享当前文件、打开健康中心或打开内置查重清理页。
+
+插件管理页内置模板库，可生成“复制文件路径”“资料转复习卡片”“打开诊断修复中心”“局域网发送当前文件”“保存文件备注”“HTTP GET 展示结果”等本地模板。模板生成后默认不启用，用户可先查看权限和入口再手动启用。
 
 插件开发和使用说明见 [docs/plugin_development.md](docs/plugin_development.md)，示例插件见 [docs/examples/sample_plugin](docs/examples/sample_plugin)。
 
