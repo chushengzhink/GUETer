@@ -75,3 +75,6 @@ third_party/zerotier_sockets/test/
 
 # Claude Code
 .claude/
+
+# Local Playwright captures
+.playwright-cli/
