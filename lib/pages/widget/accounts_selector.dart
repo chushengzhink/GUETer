@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../../models/user.dart';
+import '../../platform.dart';
 import '../../session/account.dart';
+import '../../session/sign_mode_settings.dart';
 
 class AccountsSelector extends StatefulWidget {
   final ValueChanged<List<User>> onSelectionChanged;
   final String title;
   final bool initiallyExpanded;
   final List<User>? initialSelected;
+  final PlatformType? signModePlatform;
 
   const AccountsSelector({
     super.key,
@@ -15,6 +18,7 @@ class AccountsSelector extends StatefulWidget {
     this.title = '选择参与的账号',
     this.initiallyExpanded = true,
     this.initialSelected,
+    this.signModePlatform,
   });
 
   @override
@@ -27,6 +31,10 @@ class _AccountsSelectorState extends State<AccountsSelector> {
   User? _currentUser;
   bool _isLoading = true;
   late bool _isExpanded;
+  SignAccountMode _mode = SignAccountMode.perRunSelection;
+  String? _lockedMessage;
+
+  bool get _isLockedMode => _mode != SignAccountMode.perRunSelection;
 
   bool get _hasSelectableAccounts =>
       _allAccounts.any((user) => user.uid != _currentUser?.uid);
@@ -44,20 +52,40 @@ class _AccountsSelectorState extends State<AccountsSelector> {
     _loadAccounts();
   }
 
-  void _loadAccounts() {
+  Future<void> _loadAccounts() async {
     try {
       _allAccounts = AccountManager.getCurrentPlatformAccounts();
-
-      if (widget.initialSelected != null) {
-        _selectedAccounts = List<User>.from(widget.initialSelected!);
-      } else {
-        _selectedAccounts = List<User>.from(_allAccounts);
-      }
-
+      final signModePlatform = widget.signModePlatform;
+      _mode = signModePlatform == null
+          ? SignAccountMode.perRunSelection
+          : await SignModeSettings.getMode(signModePlatform);
       final currentUserId = AccountManager.currentSessionId;
       _currentUser = currentUserId == null
           ? null
           : AccountManager.getAccountById(currentUserId);
+
+      if (_mode == SignAccountMode.manualCurrent) {
+        _selectedAccounts = _currentUser == null
+            ? <User>[]
+            : <User>[_currentUser!];
+        _lockedMessage = _currentUser == null
+            ? '模式一：请先在账号页切换到当前学习通账号'
+            : '模式一：仅使用当前学习通账号签到';
+      } else if (_mode == SignAccountMode.savedPlatformSelection) {
+        final selectedIds = await SignModeSettings.getSelectedAccountIds(
+          signModePlatform ?? PlatformType.chaoxing,
+        );
+        _selectedAccounts = _allAccounts
+            .where((user) => selectedIds.contains(user.uid))
+            .toList(growable: false);
+        _lockedMessage = _selectedAccounts.isEmpty
+            ? '模式二：暂无签到账号，请到账号页勾选下方账号后保存'
+            : '模式二：使用账号页保存的学习通签到账号';
+      } else if (widget.initialSelected != null) {
+        _selectedAccounts = List<User>.from(widget.initialSelected!);
+      } else {
+        _selectedAccounts = List<User>.from(_allAccounts);
+      }
     } catch (e) {
       debugPrint('加载账号失败: $e');
     }
@@ -74,6 +102,7 @@ class _AccountsSelectorState extends State<AccountsSelector> {
   }
 
   void _toggleSelectAll(bool? value) {
+    if (_isLockedMode) return;
     final selectAll = value ?? false;
     final currentUser = _currentUser;
     final newSelected = <User>[];
@@ -97,6 +126,7 @@ class _AccountsSelectorState extends State<AccountsSelector> {
   }
 
   void _toggleAccountSelection(User user, bool? value) {
+    if (_isLockedMode) return;
     setState(() {
       if (value == true) {
         if (!_selectedAccounts.contains(user)) {
@@ -130,6 +160,7 @@ class _AccountsSelectorState extends State<AccountsSelector> {
             widget.title,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
+          subtitle: _lockedMessage == null ? null : Text(_lockedMessage!),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -143,7 +174,9 @@ class _AccountsSelectorState extends State<AccountsSelector> {
                     : _selectedSelectableCount == 0
                     ? false
                     : null,
-                onChanged: _hasSelectableAccounts ? _toggleSelectAll : null,
+                onChanged: !_isLockedMode && _hasSelectableAccounts
+                    ? _toggleSelectAll
+                    : null,
                 fillColor: WidgetStateProperty.resolveWith<Color>((states) {
                   if (states.contains(WidgetState.selected)) {
                     return Theme.of(context).colorScheme.primary;
@@ -204,10 +237,10 @@ class _AccountsSelectorState extends State<AccountsSelector> {
                       ],
                     ),
                     value: isSelected,
-                    onChanged: isCurrentUser
+                    onChanged: isCurrentUser || _isLockedMode
                         ? null
                         : (value) => _toggleAccountSelection(user, value),
-                    enabled: !isCurrentUser,
+                    enabled: !isCurrentUser && !_isLockedMode,
                     checkColor: isCurrentUser ? Colors.white : null,
                     activeColor: Theme.of(context).colorScheme.primary,
                   );

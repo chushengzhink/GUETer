@@ -112,6 +112,14 @@ bool isSuccessfulTronclassDesktopLoginResponse(Response response) {
   if (hasUserId) {
     return true;
   }
+  final payloadOk =
+      _isTruthyLoginValue(payload?['ok']) ||
+      _isTruthyLoginValue(payload?['success']) ||
+      _isTruthyLoginValue(payload?['result']) ||
+      _isTruthyLoginValue(payload?['code']);
+  if (payloadOk) {
+    return true;
+  }
 
   final setCookieHeaders = response.headers['set-cookie'] ?? const <String>[];
   for (final header in setCookieHeaders) {
@@ -243,6 +251,9 @@ bool shouldPromptTronclassMfaSendFailureDialog(Map<String, dynamic>? result) {
 
 bool canResumeTronclassMfaChallenge(Map<String, dynamic>? result) {
   if (result == null || result['allowManualMfaRetry'] != true) {
+    return false;
+  }
+  if (result['mfaSessionInvalid'] == true) {
     return false;
   }
   final service = (result['service'] ?? '').toString().trim();
@@ -1128,12 +1139,20 @@ class TCLoginApi {
   static const int _dynamicCodeAutoRetryAttempts = 3;
   static const Duration _dynamicCodeRetryInterval = Duration(seconds: 10);
   static const Duration _mfaInitialSendDelay = Duration(milliseconds: 3600);
+  static const Duration _bootstrapPortalSessionCooldown = Duration(seconds: 8);
+  static final Map<String, Future<bool>> _bootstrapPortalSessionInFlight = {};
+  static final Map<String, DateTime> _bootstrapPortalSessionRecentSuccess = {};
   static final List<String> _loginTrace = <String>[];
 
   static void _resetTrace() {
     _loginTrace
       ..clear()
       ..add('[TC] 开始畅课登录链路');
+  }
+
+  static void resetBootstrapPortalSessionDedupeForTests() {
+    _bootstrapPortalSessionInFlight.clear();
+    _bootstrapPortalSessionRecentSuccess.clear();
   }
 
   static void _trace(String message) {
@@ -1212,16 +1231,22 @@ class TCLoginApi {
     String? resolvedLocation,
   }) {
     final currentUrl = response.requestOptions.uri.toString();
-    if (_isCasLoginUrl(resolvedLocation) || _isCasLoginUrl(currentUrl)) {
+    final rawLocation = response.headers.value('location');
+    if (_isReAuthUrl(resolvedLocation) || _isReAuthUrl(rawLocation)) {
+      return true;
+    }
+    if (_isCasLoginUrl(resolvedLocation) || _isCasLoginUrl(rawLocation)) {
       return false;
     }
     if (_looksLikeCasLoginHtml(response.data) &&
         !_looksLikeReAuthHtml(response.data)) {
       return false;
     }
+    if (_looksLikeReAuthHtml(response.data)) {
+      return true;
+    }
     return _isReAuthUrl(currentUrl) ||
-        _isReAuthUrl(resolvedLocation) ||
-        _looksLikeReAuthHtml(response.data);
+        _isReAuthUrl(resolvedLocation);
   }
 
   static bool _isRetryableDynamicCodeTip(String? tip) {
@@ -1230,6 +1255,14 @@ class TCLoginApi {
     return normalized.contains('请求超时重定向') ||
         normalized.contains('请求过快') ||
         normalized.contains('重试');
+  }
+
+  static bool _isRedirectStatus(int? statusCode) {
+    return statusCode == 301 ||
+        statusCode == 302 ||
+        statusCode == 303 ||
+        statusCode == 307 ||
+        statusCode == 308;
   }
 
   static bool _isCasLoginUrl(String? url) {
@@ -1265,6 +1298,7 @@ class TCLoginApi {
     String? reauthEntryUrl,
     String? service,
     LoginContext? loginContext,
+    TronclassCasLoginHttp? casHttp,
   }) async {
     final targetUrl = (reauthEntryUrl != null && reauthEntryUrl.isNotEmpty)
         ? reauthEntryUrl
@@ -1280,11 +1314,12 @@ class TCLoginApi {
     }
 
     try {
-      final resp = await ApiService.sendRequest(
+      final effectiveCasHttp =
+          casHttp ?? TronclassCasLoginHttp(loginContext: loginContext);
+      final resp = await effectiveCasHttp.request(
         targetUrl,
         responseType: ResponseType.plain,
         allowRedirects: false,
-        loginContext: loginContext,
         headers: {
           'accept':
               'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -1308,7 +1343,7 @@ class TCLoginApi {
           ? '短信验证会话未就绪或已失效，请重新进入短信验证页面后再发送验证码'
           : null;
       _trace(
-        '[TC][MFA] reauth prime ready=$ready returnedToLogin=$returnedToLogin status=${resp.statusCode} uri=${resp.requestOptions.uri} location=${location ?? ''} resolved=$resolvedReauthUrl',
+        '[TC][MFA] reauth prime ready=$ready returnedToLogin=$returnedToLogin status=${resp.statusCode} uri=${resp.requestOptions.uri} realUri=${resp.realUri} location=${resp.headers.value('location') ?? ''} resolved=${location ?? resolvedReauthUrl} body=${_shortText(resp.data)}',
       );
       return {
         'reauthEntryUrl': resolvedReauthUrl,
@@ -1413,6 +1448,81 @@ class TCLoginApi {
       // keep null on parse failure
     }
     return null;
+  }
+
+  static Map<String, dynamic>? _tryParseLooseJsonLikeMap(dynamic raw) {
+    final parsed = _tryParseJsonMap(raw);
+    if (parsed != null) {
+      return parsed;
+    }
+
+    final text = raw?.toString() ?? '';
+    if (text.trim().isEmpty) {
+      return null;
+    }
+
+    String? extractQuotedField(String field) {
+      final pattern = RegExp(
+        '''["']${RegExp.escape(field)}["']\\s*:\\s*["']([^"']*)''',
+        caseSensitive: false,
+      );
+      return pattern.firstMatch(text)?.group(1);
+    }
+
+    String? extractNumberField(String field) {
+      final pattern = RegExp(
+        '''["']${RegExp.escape(field)}["']\\s*:\\s*(\\d+)''',
+        caseSensitive: false,
+      );
+      return pattern.firstMatch(text)?.group(1);
+    }
+
+    final result = <String, dynamic>{};
+    for (final field in const [
+      'res',
+      'code',
+      'errCode',
+      'success',
+      'mobile',
+      'returnMessage',
+      'msg',
+      'message',
+      'data',
+    ]) {
+      final value = extractQuotedField(field);
+      if (value != null) {
+        result[field] = value;
+      }
+    }
+    final codeTime = extractNumberField('codeTime');
+    if (codeTime != null) {
+      result['codeTime'] = codeTime;
+    }
+    final codeTimeSeconds = extractNumberField('codeTimeSeconds');
+    if (codeTimeSeconds != null) {
+      result['codeTimeSeconds'] = codeTimeSeconds;
+    }
+
+    final lower = text.toLowerCase();
+    if (lower.contains('"success":false') ||
+        lower.contains("'success':false")) {
+      result['success'] = false;
+    } else if (lower.contains('"success":true') ||
+        lower.contains("'success':true")) {
+      result['success'] = true;
+    }
+    if (lower.contains('authserver/login') && result['data'] == null) {
+      result['data'] = 'https://cas.guet.edu.cn/authserver/login';
+    }
+    if (lower.contains('206302') && result['errCode'] == null) {
+      result['errCode'] = '206302';
+    }
+    if (lower.contains('"res":"success"') ||
+        lower.contains("'res':'success'")) {
+      result['res'] = 'success';
+    }
+
+    return result.isEmpty ? null : result;
   }
 
   // ignore: unused_element
@@ -1591,6 +1701,10 @@ class TCLoginApi {
     response['mfaSessionInvalid'] = sessionInvalid;
     response['mfaContextReady'] = mfaContextReady ?? !sessionInvalid;
     response['verificationStage'] = tronclassVerificationStageMfa;
+    final codeTime = response['codeTime'] ?? response['codeTimeSeconds'];
+    if (codeTime != null) {
+      response['codeTimeSeconds'] = int.tryParse(codeTime.toString());
+    }
     if (!_isDynamicCodeSendSuccess(response)) {
       final exhausted =
           (retryableFailure || sessionInvalid) &&
@@ -1666,11 +1780,49 @@ class TCLoginApi {
     };
   }
 
+  static Map<String, dynamic> _buildMfaContextNotReadyResult({
+    required String? reauthEntryUrl,
+    required String? service,
+    String message = '短信二次验证页面未建立，请稍后重试或使用网页登录完成验证',
+  }) {
+    return {
+      'ok': false,
+      'requireMfa': true,
+      'requireWebReauth': true,
+      'authUrl': buildAuthUri().toString(),
+      'message': message,
+      'debug': lastLoginTrace,
+      'reauthEntryUrl': reauthEntryUrl,
+      'service': service,
+      'mfaContextReady': false,
+      'mfaSessionInvalid': true,
+      'verificationStage': tronclassVerificationStageMfa,
+    };
+  }
+
+  static Map<String, dynamic> _buildAuthRedirectFailureResult({
+    required String message,
+    required String? service,
+    bool casRedirectMissing = false,
+  }) {
+    return {
+      'ok': false,
+      'message': message,
+      'debug': lastLoginTrace,
+      'service': service,
+      'authRedirectFailure': true,
+      'casRedirectMissing': casRedirectMissing,
+      'credentialFailure': false,
+    };
+  }
+
   static Future<Map<String, dynamic>> _sendDynamicCodeWithContext(
     String username, {
     String? reauthEntryUrl,
     String? service,
     LoginContext? loginContext,
+    TronclassCasLoginHttp? casHttp,
+    bool mfaContextAlreadyReady = false,
     int maxAttempts = _dynamicCodeAutoRetryAttempts,
     bool manualSendOnly = false,
   }) async {
@@ -1678,11 +1830,18 @@ class TCLoginApi {
       '[TC][dynamicCode] prepare send username=$username manual=$manualSendOnly',
     );
 
-    final primeResult = await _primeReauthSession(
-      reauthEntryUrl: reauthEntryUrl,
-      service: service,
-      loginContext: loginContext,
-    );
+    final primeResult = mfaContextAlreadyReady
+        ? <String, dynamic>{
+            'reauthEntryUrl': reauthEntryUrl ?? _buildReauthEntryUrl(service),
+            'mfaContextReady': true,
+            'mfaSessionInvalid': false,
+          }
+        : await _primeReauthSession(
+            reauthEntryUrl: reauthEntryUrl,
+            service: service,
+            loginContext: loginContext,
+            casHttp: casHttp,
+          );
     final effectiveReauthEntryUrl =
         primeResult['reauthEntryUrl']?.toString() ?? reauthEntryUrl;
     final mfaContextReady = primeResult['mfaContextReady'] == true;
@@ -1718,13 +1877,14 @@ class TCLoginApi {
       if (effectiveReauthEntryUrl != null && effectiveReauthEntryUrl.isNotEmpty)
         'referer': effectiveReauthEntryUrl,
     };
+    final effectiveCasHttp =
+        casHttp ?? TronclassCasLoginHttp(loginContext: loginContext);
     for (var attempt = 1; attempt <= attemptLimit; attempt++) {
       try {
-        final resp = await ApiService.sendRequest(
+        final resp = await effectiveCasHttp.request(
           url,
           method: 'POST',
           headers: headers,
-          loginContext: loginContext,
           body: {
             'userName': username,
             'authCodeTypeName': 'reAuthDynamicCodeType',
@@ -1737,7 +1897,7 @@ class TCLoginApi {
           '[TC][dynamicCode] attempt=$attempt/$attemptLimit status=${resp.statusCode} data=${resp.data}',
         );
 
-        final parsed = _tryParseJsonMap(resp.data);
+        final parsed = _tryParseLooseJsonLikeMap(resp.data);
         if (parsed != null) {
           final parsedTip = _extractDynamicCodeTip(parsed);
           final parsedRetryable = _isRetryableDynamicCodeTip(parsedTip);
@@ -1867,62 +2027,76 @@ class TCLoginApi {
     String code, {
     String? service,
     LoginContext? loginContext,
+    TronclassCasLoginHttp? casHttp,
   }) async {
-    final resp = await ApiService.sendRequest(
-      TronclassGuetConstants.reauthSubmitUrl,
-      method: 'POST',
-      loginContext: loginContext,
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        'accept': 'application/json, text/javascript, */*; q=0.01',
-        'x-requested-with': 'XMLHttpRequest',
-        if (service != null && service.isNotEmpty)
-          'referer':
-              '${TronclassGuetConstants.reauthLoginViewUrl}?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}',
-      },
-      body: {
-        'service': service ?? '',
-        'reAuthType': 3,
-        'isMultifactor': true,
-        'password': '',
-        'dynamicCode': code,
-        'uuid': '',
-        'answer1': '',
-        'answer2': '',
-        'otpCode': '',
-        'skipTmpReAuth': true,
-      },
-      responseType: ResponseType.json,
-      allowRedirects: false,
-    );
+    final effectiveCasHttp =
+        casHttp ?? TronclassCasLoginHttp(loginContext: loginContext);
 
-    final parsed = _tryParseJsonMap(resp.data);
-    if (parsed != null) {
-      final redirectUrl = _resolveUrlWithBase(
-        resp.requestOptions.uri,
-        resp.headers.value('location'),
+    Future<Map<String, dynamic>> submit(String submitService) async {
+      final resp = await effectiveCasHttp.request(
+        TronclassGuetConstants.reauthSubmitUrl,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'accept': 'application/json, text/javascript, */*; q=0.01',
+          'x-requested-with': 'XMLHttpRequest',
+          if (service != null && service.isNotEmpty)
+            'referer':
+                '${TronclassGuetConstants.reauthLoginViewUrl}?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}',
+        },
+        body: {
+          'service': submitService,
+          'reAuthType': 3,
+          'isMultifactor': true,
+          'password': '',
+          'dynamicCode': code,
+          'uuid': '',
+          'answer1': '',
+          'answer2': '',
+          'otpCode': '',
+          'skipTmpReAuth': true,
+        },
+        responseType: ResponseType.json,
+        allowRedirects: false,
       );
-      final authCode =
-          _extractAuthCodeFromAny(resp) ??
-          (redirectUrl != null && redirectUrl.isNotEmpty
-              ? Uri.tryParse(redirectUrl)?.queryParameters['code']
-              : null);
-      if (authCode != null && authCode.isNotEmpty) {
-        parsed['authCode'] = authCode;
+
+      final parsed = _tryParseJsonMap(resp.data);
+      if (parsed != null) {
+        final redirectUrl = _resolveUrlWithBase(
+          resp.requestOptions.uri,
+          resp.headers.value('location'),
+        );
+        final authCode =
+            _extractAuthCodeFromAny(resp) ??
+            (redirectUrl != null && redirectUrl.isNotEmpty
+                ? Uri.tryParse(redirectUrl)?.queryParameters['code']
+                : null);
+        if (authCode != null && authCode.isNotEmpty) {
+          parsed['authCode'] = authCode;
+        }
+        if (redirectUrl != null && redirectUrl.isNotEmpty) {
+          parsed['redirectUrl'] = redirectUrl;
+        }
+        parsed['responseUri'] = resp.requestOptions.uri.toString();
+        _trace(
+          '[TC][reAuthCheck] status=${resp.statusCode} uri=${resp.requestOptions.uri} realUri=${resp.realUri} location=${resp.headers.value('location') ?? ''} body=${_shortText(resp.data)} parsed=ok code=${parsed['code']} authCode=${parsed['authCode'] ?? ''} redirectUrl=${parsed['redirectUrl'] ?? ''}',
+        );
+        return parsed;
       }
-      if (redirectUrl != null && redirectUrl.isNotEmpty) {
-        parsed['redirectUrl'] = redirectUrl;
-      }
-      parsed['responseUri'] = resp.requestOptions.uri.toString();
       _trace(
-        '[TC][reAuthCheck] status=${resp.statusCode} uri=${resp.requestOptions.uri} realUri=${resp.realUri} location=${resp.headers.value('location') ?? ''} body=${_shortText(resp.data)} parsed=ok code=${parsed['code']} authCode=${parsed['authCode'] ?? ''} redirectUrl=${parsed['redirectUrl'] ?? ''}',
+        '[TC][reAuthCheck] invalid response status=${resp.statusCode} uri=${resp.requestOptions.uri} realUri=${resp.realUri} location=${resp.headers.value('location') ?? ''} body=${_shortText(resp.data)}',
       );
-      return parsed;
+      return {'code': 'reAuth_failed', 'msg': '动态码验证服务返回异常'};
     }
-    _trace(
-      '[TC][reAuthCheck] invalid response status=${resp.statusCode} uri=${resp.requestOptions.uri} realUri=${resp.realUri} location=${resp.headers.value('location') ?? ''} body=${_shortText(resp.data)}',
-    );
-    return {'code': 'reAuth_failed', 'msg': '动态码验证服务返回异常'};
+
+    final first = await submit('');
+    if (first['code']?.toString() != 'reAuth_success' &&
+        service != null &&
+        service.isNotEmpty) {
+      _trace('[TC][reAuthCheck] retry with original service');
+      return submit(service);
+    }
+    return first;
   }
 
   // ignore: unused_element
@@ -2150,12 +2324,16 @@ class TCLoginApi {
     required String password,
     Future<String?> Function(Uint8List imageBytes)? captchaProvider,
     Future<String?> Function(String? mobileHint, String? tip)? mfaCodeProvider,
+    Future<String?> Function(TronclassMfaPromptContext context)?
+    mfaPromptProvider,
     String? reauthEntryUrl,
     String? service,
     LoginContext? loginContext,
+    TronclassCasLoginHttp? casHttp,
+    bool mfaContextReady = false,
     bool manualSendOnly = false,
   }) async {
-    if (mfaCodeProvider == null) {
+    if (mfaCodeProvider == null && mfaPromptProvider == null) {
       return {
         'ok': false,
         'requireMfa': true,
@@ -2173,17 +2351,29 @@ class TCLoginApi {
 
     String? effectiveReauthEntryUrl = reauthEntryUrl;
     String? effectiveService = service;
+    final effectiveCasHttp =
+        casHttp ?? TronclassCasLoginHttp(loginContext: loginContext);
 
     var dynamicCodeInfo = await _sendDynamicCodeWithContext(
       username,
       reauthEntryUrl: effectiveReauthEntryUrl,
       service: effectiveService,
       loginContext: loginContext,
+      casHttp: effectiveCasHttp,
+      mfaContextAlreadyReady: mfaContextReady,
       maxAttempts: manualSendOnly ? 1 : _dynamicCodeAutoRetryAttempts,
       manualSendOnly: manualSendOnly,
     );
 
     if (dynamicCodeInfo['mfaSessionInvalid'] == true) {
+      if (manualSendOnly) {
+        return _buildMfaSendFailureResult(
+          dynamicCodeInfo,
+          manualSendOnly: manualSendOnly,
+          reauthEntryUrl: effectiveReauthEntryUrl,
+          service: effectiveService,
+        );
+      }
       _trace('[TC][MFA] sms verification session invalid, trying to rebuild');
       final rebuiltContext = await _reestablishMfaContext(
         username,
@@ -2227,6 +2417,8 @@ class TCLoginApi {
           reauthEntryUrl: effectiveReauthEntryUrl,
           service: effectiveService,
           loginContext: loginContext,
+          casHttp: effectiveCasHttp,
+          mfaContextAlreadyReady: rebuiltReady,
           maxAttempts: manualSendOnly ? 1 : _dynamicCodeAutoRetryAttempts,
           manualSendOnly: manualSendOnly,
         );
@@ -2252,7 +2444,25 @@ class TCLoginApi {
       );
     }
 
-    final mfaCode = await mfaCodeProvider(mobileHint, tip);
+    final mfaCode = mfaCodeProvider != null
+        ? await mfaCodeProvider(mobileHint, tip)
+        : await mfaPromptProvider!(
+            TronclassMfaPromptContext(
+              mobileHint: mobileHint,
+              tip: tip,
+              codeTimeSeconds:
+                  dynamicCodeInfo['codeTimeSeconds'] as int? ?? 120,
+              resendCode: () => _sendDynamicCodeWithContext(
+                username,
+                reauthEntryUrl: effectiveReauthEntryUrl,
+                service: effectiveService,
+                loginContext: loginContext,
+                casHttp: effectiveCasHttp,
+                maxAttempts: 1,
+                manualSendOnly: true,
+              ),
+            ),
+          );
     if (mfaCode == null || mfaCode.trim().isEmpty) {
       _trace('[TC][MFA] sms code input cancelled');
       return {
@@ -2267,6 +2477,7 @@ class TCLoginApi {
       mfaCode.trim(),
       service: effectiveService,
       loginContext: loginContext,
+      casHttp: effectiveCasHttp,
     );
     if (mfaResult['code']?.toString() != 'reAuth_success') {
       _trace(
@@ -2281,15 +2492,25 @@ class TCLoginApi {
 
     _trace('[TC][MFA] sms code verification success');
 
-    _trace('[TC][MFA] restart auth-code flow within verified session');
-    final authCodeResult = await _loginForAuthCode(
-      username,
-      password,
-      captchaProvider: captchaProvider,
-      mfaCodeProvider: mfaCodeProvider,
+    final directAuthCode = (mfaResult['authCode'] ?? '').toString().trim();
+    if (directAuthCode.isNotEmpty) {
+      _trace('[TC][MFA] reAuth response carried auth code');
+      return completeWithAuthCode(directAuthCode, loginContext: loginContext);
+    }
+
+    final redirectAuthCode = _extractAuthCodeFromRawUrl(
+      mfaResult['redirectUrl']?.toString(),
+    );
+    if (redirectAuthCode != null && redirectAuthCode.isNotEmpty) {
+      _trace('[TC][MFA] reAuth redirect carried auth code');
+      return completeWithAuthCode(redirectAuthCode, loginContext: loginContext);
+    }
+
+    _trace('[TC][MFA] replay auth-code flow within verified CAS session');
+    final authCodeResult = await _replayVerifiedCasAuthorization(
+      service: effectiveService,
       loginContext: loginContext,
-      resumeAfterMfa: true,
-      allowMfaChallenge: false,
+      casHttp: effectiveCasHttp,
     );
     if (authCodeResult['ok'] != true) {
       return authCodeResult;
@@ -2327,9 +2548,15 @@ class TCLoginApi {
           'scope': 'openid',
         },
       );
+      final identityTokenStatus = tokenResp.statusCode;
       final accessToken = tokenResp.data['access_token'];
       if (accessToken == null || accessToken.toString().isEmpty) {
-        return {'ok': false, 'message': '未获取到畅课访问令牌'};
+        return {
+          'ok': false,
+          'message': '未获取到畅课访问令牌',
+          'tokenExchangeOk': false,
+          'identityTokenStatus': identityTokenStatus,
+        };
       }
 
       final loginDesktopResp = await ApiService.sendRequest(
@@ -2338,26 +2565,49 @@ class TCLoginApi {
         loginContext: loginContext,
         body: {'access_token': accessToken, 'org_id': 1},
       );
+      final portalLoginStatus = loginDesktopResp.statusCode;
       final hasCookieBackedSession = isSuccessfulTronclassDesktopLoginResponse(
         loginDesktopResp,
       );
       final sessionId = loginDesktopResp.headers.value('x-session-id');
       final trimmedSessionId = sessionId?.trim();
-      if (trimmedSessionId != null && trimmedSessionId.isNotEmpty) {
+      Map<String, dynamic> successFields({
+        required String? sessionId,
+        required bool cookieBacked,
+      }) {
         return {
           'ok': true,
-          'sessionId': trimmedSessionId,
-          'cookieBacked': false,
+          'sessionId': sessionId,
+          'cookieBacked': cookieBacked,
+          'tokenExchangeOk': true,
+          'portalLoginOk': true,
+          'sessionPersistable':
+              (sessionId != null && sessionId.trim().isNotEmpty) ||
+              cookieBacked,
+          'identityTokenStatus': identityTokenStatus,
+          'portalLoginStatus': portalLoginStatus,
         };
       }
+
+      if (trimmedSessionId != null && trimmedSessionId.isNotEmpty) {
+        return successFields(sessionId: trimmedSessionId, cookieBacked: false);
+      }
       if (hasCookieBackedSession) {
-        return {'ok': true, 'sessionId': null, 'cookieBacked': true};
+        return successFields(sessionId: null, cookieBacked: true);
       }
       if (sessionId == null || sessionId.isEmpty) {
-        return {'ok': false, 'message': '未获取到畅课会话 ID'};
+        return {
+          'ok': false,
+          'message': '未获取到畅课会话 ID',
+          'tokenExchangeOk': true,
+          'portalLoginOk': false,
+          'sessionPersistable': false,
+          'identityTokenStatus': identityTokenStatus,
+          'portalLoginStatus': portalLoginStatus,
+        };
       }
 
-      return {'ok': true, 'sessionId': sessionId};
+      return successFields(sessionId: sessionId, cookieBacked: false);
     } catch (e) {
       debugPrint('tronclass auth completion error: $e');
       return {'ok': false, 'message': '畅课登录失败：$e'};
@@ -2366,12 +2616,83 @@ class TCLoginApi {
     }
   }
 
-  static Future<bool> bootstrapPortalSession({String? sessionId}) async {
+  static Future<bool> bootstrapPortalSession({
+    String? sessionId,
+    bool allowDuringLogin = false,
+    String? dedupeKey,
+    Duration cooldown = _bootstrapPortalSessionCooldown,
+  }) async {
     debugPrint(
       '[TC][bootstrapPortalSession] 开始初始化会话 sessionId=${sessionId?.substring(0, sessionId.length > 20 ? 20 : sessionId.length)}...',
     );
+    final sid = sessionId?.trim();
+    final effectiveDedupeKey =
+        dedupeKey != null && dedupeKey.trim().isNotEmpty
+        ? dedupeKey.trim()
+        : (sid != null && sid.isNotEmpty ? 'session:$sid' : null);
+
+    if (effectiveDedupeKey != null) {
+      final inFlight = _bootstrapPortalSessionInFlight[effectiveDedupeKey];
+      if (inFlight != null) {
+        debugPrint(
+          '[TC][bootstrapPortalSession] reuse in-flight key=$effectiveDedupeKey',
+        );
+        return inFlight;
+      }
+
+      final recentSuccess =
+          _bootstrapPortalSessionRecentSuccess[effectiveDedupeKey];
+      if (recentSuccess != null &&
+          DateTime.now().difference(recentSuccess) < cooldown) {
+        debugPrint(
+          '[TC][bootstrapPortalSession] reuse recent success key=$effectiveDedupeKey',
+        );
+        return true;
+      }
+    }
+
+    Future<bool> runBootstrap() async {
+      final result = await _bootstrapPortalSessionUncached(
+        sid: sid,
+        allowDuringLogin: allowDuringLogin,
+      );
+      if (result && effectiveDedupeKey != null) {
+        _bootstrapPortalSessionRecentSuccess[effectiveDedupeKey] =
+            DateTime.now();
+      }
+      return result;
+    }
+
+    if (effectiveDedupeKey == null) {
+      return runBootstrap();
+    }
+
+    final future = runBootstrap();
+    _bootstrapPortalSessionInFlight[effectiveDedupeKey] = future;
     try {
-      final sid = sessionId?.trim();
+      return await future;
+    } finally {
+      if (identical(
+        _bootstrapPortalSessionInFlight[effectiveDedupeKey],
+        future,
+      )) {
+        _bootstrapPortalSessionInFlight.remove(effectiveDedupeKey);
+      }
+    }
+  }
+
+  static Future<bool> _bootstrapPortalSessionUncached({
+    required String? sid,
+    required bool allowDuringLogin,
+  }) async {
+    try {
+      if (!allowDuringLogin && CookieManager.isAnyLoginInProgress()) {
+        debugPrint(
+          '[TC][bootstrapPortalSession] skip during login activeContexts=${LoginContextManager.instance.hasActiveContexts} isLoggingIn=${CookieManager.isLoggingIn}',
+        );
+        return false;
+      }
+
       if (sid == null || sid.isEmpty) {
         debugPrint('[TC][bootstrapPortalSession] sessionId 为空，跳过');
         return false;
@@ -2406,16 +2727,15 @@ class TCLoginApi {
             skipCredentialValidation: true,
           );
 
-          final setCookie = response.headers['set-cookie'];
-          if (setCookie != null && setCookie.isNotEmpty) {
-            debugPrint('[TC][bootstrapPortalSession] 探测 $i 成功 (set-cookie)');
-            return true;
-          }
-
           final data = response.data;
           if (response.statusCode != null &&
               response.statusCode! >= 200 &&
               response.statusCode! < 400) {
+            final setCookie = response.headers['set-cookie'];
+            if (setCookie != null && setCookie.isNotEmpty) {
+              debugPrint('[TC][bootstrapPortalSession] 探测 $i 成功 (set-cookie)');
+              return true;
+            }
             if (data is! Map<String, dynamic>) {
               debugPrint('[TC][bootstrapPortalSession] 探测 $i 成功 (非 JSON 响应)');
               return true;
@@ -2485,13 +2805,20 @@ class TCLoginApi {
   }) {
     Map<String, dynamic>? data;
 
-    if (payload is Map<String, dynamic>) {
-      if (payload['data'] is Map<String, dynamic>) {
-        data = payload['data'] as Map<String, dynamic>;
-      } else if (payload['user'] is Map<String, dynamic>) {
-        data = payload['user'] as Map<String, dynamic>;
+    if (payload is Map) {
+      final normalizedPayload = payload.map(
+        (key, value) => MapEntry(key.toString(), value),
+      );
+      if (normalizedPayload['data'] is Map) {
+        data = (normalizedPayload['data'] as Map).map(
+          (key, value) => MapEntry(key.toString(), value),
+        );
+      } else if (normalizedPayload['user'] is Map) {
+        data = (normalizedPayload['user'] as Map).map(
+          (key, value) => MapEntry(key.toString(), value),
+        );
       } else {
-        data = payload;
+        data = normalizedPayload;
       }
     }
 
@@ -2536,6 +2863,17 @@ class TCLoginApi {
         : null;
     final school = (orgName ?? data['school'] ?? data['org_name'] ?? '桂林电子科技大学')
         .toString();
+    final studentId =
+        (data['student_no'] ??
+                data['studentNo'] ??
+                data['student_id'] ??
+                data['studentId'] ??
+                data['number'] ??
+                (fallbackUid != null &&
+                        RegExp(r'^\d{6,}$').hasMatch(fallbackUid)
+                    ? fallbackUid
+                    : null))
+            ?.toString();
 
     return User(
       uid: uid,
@@ -2544,6 +2882,7 @@ class TCLoginApi {
       phone: phone,
       school: school,
       platform: 'tronclass',
+      studentId: studentId,
     );
   }
 
@@ -2553,21 +2892,71 @@ class TCLoginApi {
       return codeFromRealUri;
     }
 
+    final codeFromRequestUri =
+        response.requestOptions.uri.queryParameters['code'];
+    if (codeFromRequestUri != null && codeFromRequestUri.isNotEmpty) {
+      return codeFromRequestUri;
+    }
+
     final location = response.headers.value('location');
     if (location != null && location.isNotEmpty) {
-      try {
-        return Uri.parse(location).queryParameters['code'];
-      } catch (_) {
-        return null;
-      }
+      return _extractAuthCodeFromRawUrl(
+        _resolveUrlWithBase(response.requestOptions.uri, location) ?? location,
+      );
     }
     return null;
+  }
+
+  static String? _extractAuthCodeFromRawUrl(String? rawUrl) {
+    if (rawUrl == null || rawUrl.isEmpty) {
+      return null;
+    }
+    try {
+      final code = Uri.parse(rawUrl).queryParameters['code'];
+      if (code != null && code.isNotEmpty) {
+        return _trimAuthCodeDelimiters(code);
+      }
+    } catch (_) {
+      // fallback to regex below
+    }
+
+    final codeRegex = RegExp(
+      r'''[?&]code=([^&\s'"<>{}\]\),]+)''',
+      caseSensitive: false,
+    );
+    final codeMatch = codeRegex.firstMatch(rawUrl);
+    final encoded = codeMatch?.group(1);
+    if (encoded == null || encoded.isEmpty) {
+      return null;
+    }
+    try {
+      return _trimAuthCodeDelimiters(Uri.decodeQueryComponent(encoded));
+    } catch (_) {
+      return _trimAuthCodeDelimiters(encoded);
+    }
   }
 
   static String? _extractAuthCodeFromAny(Response response) {
     final direct = _extractAuthCode(response);
     if (direct != null && direct.isNotEmpty) {
       return direct;
+    }
+
+    final data = response.data;
+    if (data is Map) {
+      final authCode = (data['authCode'] ?? data['auth_code'])
+          ?.toString()
+          .trim();
+      if (authCode != null && authCode.isNotEmpty) {
+        return _trimAuthCodeDelimiters(authCode);
+      }
+      final redirectCode = _extractAuthCodeFromRawUrl(
+        (data['redirectUrl'] ?? data['redirect_url'] ?? data['responseUri'])
+            ?.toString(),
+      );
+      if (redirectCode != null && redirectCode.isNotEmpty) {
+        return redirectCode;
+      }
     }
 
     final htmlRedirect = _resolveUrlWithBase(
@@ -2586,22 +2975,29 @@ class TCLoginApi {
       }
     }
 
-    final raw = response.data?.toString() ?? '';
-    final codeRegex = RegExp(
-      r'''[?&]code=([^&\s'"<>]+)''',
-      caseSensitive: false,
-    );
-    final codeMatch = codeRegex.firstMatch(raw);
-    final encoded = codeMatch?.group(1);
-    if (encoded != null && encoded.isNotEmpty) {
-      try {
-        return Uri.decodeQueryComponent(encoded);
-      } catch (_) {
-        return encoded;
-      }
+    final codeFromBody = _extractAuthCodeFromRawUrl(response.data?.toString());
+    if (codeFromBody != null && codeFromBody.isNotEmpty) {
+      return codeFromBody;
     }
 
     return null;
+  }
+
+  static String _trimAuthCodeDelimiters(String code) {
+    return code.trim().replaceFirst(RegExp(r'''[}\]\),.;]+$'''), '');
+  }
+
+  static bool _isTransientCredentialFailureTip(String? tip) {
+    final normalized = tip?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return true;
+    }
+
+    final lower = normalized.toLowerCase();
+    return lower.contains('闂佽') ||
+        normalized.contains('用户名或者密码有误') ||
+        normalized.contains('用户名或密码有误') ||
+        normalized.contains('用户名') && normalized.contains('密码');
   }
 
   static String _shortText(dynamic value, {int maxLen = 220}) {
@@ -2695,10 +3091,16 @@ class TCLoginApi {
     List<Response> seeds, {
     int maxHops = 5,
     Duration hopDelay = const Duration(milliseconds: 450),
+    LoginContext? loginContext,
+    TronclassCasLoginHttp? casHttp,
   }) async {
     final visited = <String>{};
     final queue = List<Response>.from(seeds);
     var hops = 0;
+
+    final effectiveCasHttp = casHttp == null && loginContext == null
+        ? null
+        : casHttp ?? TronclassCasLoginHttp(loginContext: loginContext);
 
     while (queue.isNotEmpty && hops < maxHops) {
       final current = queue.removeAt(0);
@@ -2740,11 +3142,17 @@ class TCLoginApi {
         try {
           _trace('[TC][authCrawl] hop=$hops follow candidate=$candidate');
           await Future<void>.delayed(hopDelay);
-          final nextResp = await ApiService.sendRequest(
-            candidate,
-            responseType: ResponseType.plain,
-            allowRedirects: true,
-          );
+          final nextResp = effectiveCasHttp == null
+              ? await ApiService.sendRequest(
+                  candidate,
+                  responseType: ResponseType.plain,
+                  allowRedirects: false,
+                )
+              : await effectiveCasHttp.request(
+                  candidate,
+                  responseType: ResponseType.plain,
+                  allowRedirects: false,
+                );
           _trace(
             '[TC][authCrawl] candidate resp status=${nextResp.statusCode} uri=${nextResp.requestOptions.uri} realUri=${nextResp.realUri} location=${nextResp.headers.value('location') ?? ''} body=${_shortText(nextResp.data)}',
           );
@@ -2774,14 +3182,23 @@ class TCLoginApi {
             '[TC][authCrawl] hop=$hops submit form method=$method action=$action fields=${fields.keys.join(',')} body=${_shortText(fields)}',
           );
           await Future<void>.delayed(hopDelay);
-          final formResp = await ApiService.sendRequest(
-            action,
-            method: method,
-            body: method == 'POST' ? fields : null,
-            params: method == 'GET' ? fields : null,
-            responseType: ResponseType.plain,
-            allowRedirects: true,
-          );
+          final formResp = effectiveCasHttp == null
+              ? await ApiService.sendRequest(
+                  action,
+                  method: method,
+                  body: method == 'POST' ? fields : null,
+                  params: method == 'GET' ? fields : null,
+                  responseType: ResponseType.plain,
+                  allowRedirects: false,
+                )
+              : await effectiveCasHttp.request(
+                  action,
+                  method: method,
+                  body: method == 'POST' ? fields : null,
+                  params: method == 'GET' ? fields : null,
+                  responseType: ResponseType.plain,
+                  allowRedirects: false,
+                );
           _trace(
             '[TC][authCrawl] form resp status=${formResp.statusCode} uri=${formResp.requestOptions.uri} realUri=${formResp.realUri} location=${formResp.headers.value('location') ?? ''} body=${_shortText(formResp.data)}',
           );
@@ -2795,10 +3212,177 @@ class TCLoginApi {
     return null;
   }
 
+  static Future<String?> _followAuthRedirectForCode(
+    Response seed, {
+    required TronclassCasLoginHttp casHttp,
+    LoginContext? loginContext,
+    int maxHops = 10,
+  }) async {
+    var current = seed;
+    final visited = <String>{};
+
+    for (var hop = 0; hop < maxHops; hop++) {
+      _trace(
+        '[TC][authFollow] hop=$hop status=${current.statusCode} uri=${current.requestOptions.uri} realUri=${current.realUri} location=${current.headers.value('location') ?? ''} body=${_shortText(current.data)}',
+      );
+
+      final directCode = _extractAuthCodeFromAny(current);
+      if (directCode != null && directCode.isNotEmpty) {
+        _trace('[TC][authFollow] extracted authCode=$directCode');
+        return directCode;
+      }
+
+      final candidates = <String?>[
+        _resolveUrlWithBase(
+          current.requestOptions.uri,
+          current.headers.value('location'),
+        ),
+        _resolveUrlWithBase(
+          current.requestOptions.uri,
+          _extractRedirectUrlFromHtml(current.data),
+        ),
+      ];
+
+      String? nextUrl;
+      for (final candidate in candidates) {
+        if (candidate == null || candidate.isEmpty) {
+          continue;
+        }
+        if (!visited.add(candidate)) {
+          continue;
+        }
+        nextUrl = candidate;
+        break;
+      }
+
+      if (nextUrl == null || nextUrl.isEmpty) {
+        if (_isReAuthResponse(current)) {
+          return null;
+        }
+        if (_looksLikeCasLoginHtml(current.data)) {
+          return null;
+        }
+        final crawlCode = await _crawlAuthCodeFromResponses(
+          [current],
+          maxHops: 3,
+          hopDelay: Duration.zero,
+          loginContext: loginContext,
+          casHttp: casHttp,
+        );
+        if (crawlCode != null && crawlCode.isNotEmpty) {
+          return crawlCode;
+        }
+        return null;
+      }
+
+      current = await casHttp.request(
+        nextUrl,
+        headers: TronclassLoginHeaders.build(
+          stage: TronclassLoginHeaders.stageForUrl(nextUrl),
+        ),
+        responseType: ResponseType.plain,
+        allowRedirects: false,
+      );
+    }
+
+    return null;
+  }
+
+  static Future<Map<String, dynamic>> _replayVerifiedCasAuthorization({
+    required String? service,
+    required LoginContext? loginContext,
+    required TronclassCasLoginHttp casHttp,
+  }) async {
+    _trace('[TC][MFA] replay verified CAS authorization');
+
+    final authProbe = await casHttp.request(
+      _identityAuthUrl,
+      params: _authQueryParams(),
+      headers: TronclassLoginHeaders.build(
+        stage: TronclassLoginRequestStage.identityAuth,
+      ),
+      responseType: ResponseType.plain,
+      allowRedirects: false,
+    );
+
+    final directCode = _extractAuthCodeFromAny(authProbe);
+    if (directCode != null && directCode.isNotEmpty) {
+      return {'ok': true, 'code': directCode};
+    }
+
+    final replayService =
+        _extractService(authProbe) ??
+        _extractServiceFromHtml(authProbe.data) ??
+        _extractServiceFromRawUrl(authProbe.headers.value('location')) ??
+        _extractServiceFromRawUrl(authProbe.requestOptions.uri.toString()) ??
+        service;
+
+    final codeFromAuth = await _followAuthRedirectForCode(
+      authProbe,
+      casHttp: casHttp,
+      loginContext: loginContext,
+    );
+    if (codeFromAuth != null && codeFromAuth.isNotEmpty) {
+      return {'ok': true, 'code': codeFromAuth};
+    }
+
+    if (replayService == null || replayService.isEmpty) {
+      return {
+        'ok': false,
+        'requireWebReauth': true,
+        'authUrl': buildAuthUri().toString(),
+        'message': '短信验证码验证成功，但未获取到 CAS service 参数',
+        'debug': lastLoginTrace,
+      };
+    }
+
+    final casLoginResp = await casHttp.request(
+      TronclassGuetConstants.casLoginUrl,
+      params: {'service': replayService},
+      headers: TronclassLoginHeaders.build(
+        stage: TronclassLoginRequestStage.casLoginPage,
+        service: replayService,
+      ),
+      responseType: ResponseType.plain,
+      allowRedirects: false,
+    );
+    final codeFromCasLogin = await _followAuthRedirectForCode(
+      casLoginResp,
+      casHttp: casHttp,
+      loginContext: loginContext,
+    );
+    if (codeFromCasLogin != null && codeFromCasLogin.isNotEmpty) {
+      return {'ok': true, 'code': codeFromCasLogin};
+    }
+
+    return {
+      'ok': false,
+      'requireWebReauth': true,
+      'authUrl': buildAuthUri().toString(),
+      'message': '动态码验证成功，但未获取到畅课授权码，请在内置页面继续完成授权',
+      'debug': lastLoginTrace,
+      'service': replayService,
+    };
+  }
+
   static String? _extractService(Response response) {
+    final preservedFromRealUri = preserveNestedCasService(
+      response.realUri.toString(),
+    );
+    if (preservedFromRealUri != null && preservedFromRealUri.isNotEmpty) {
+      return preservedFromRealUri;
+    }
+
     final fromRealUri = response.realUri.queryParameters['service'];
     if (fromRealUri != null && fromRealUri.isNotEmpty) {
       return fromRealUri;
+    }
+
+    final preservedFromRequestUri = preserveNestedCasService(
+      response.requestOptions.uri.toString(),
+    );
+    if (preservedFromRequestUri != null && preservedFromRequestUri.isNotEmpty) {
+      return preservedFromRequestUri;
     }
 
     final fromRequestUri =
@@ -2810,7 +3394,13 @@ class TCLoginApi {
     final location = response.headers.value('location');
     if (location != null && location.isNotEmpty) {
       try {
-        final parsedLocation = Uri.parse(location);
+        final resolvedRaw =
+            _resolveUrlWithBase(response.realUri, location) ?? location;
+        final preservedFromLocation = preserveNestedCasService(resolvedRaw);
+        if (preservedFromLocation != null && preservedFromLocation.isNotEmpty) {
+          return preservedFromLocation;
+        }
+        final parsedLocation = Uri.parse(resolvedRaw);
         final resolvedLocation = parsedLocation.hasScheme
             ? parsedLocation
             : response.realUri.resolveUri(parsedLocation);
@@ -2828,6 +3418,10 @@ class TCLoginApi {
   static String? _extractServiceFromRawUrl(String? rawUrl) {
     if (rawUrl == null || rawUrl.isEmpty) {
       return null;
+    }
+    final preserved = preserveNestedCasService(rawUrl);
+    if (preserved != null && preserved.isNotEmpty) {
+      return preserved;
     }
     try {
       final parsed = Uri.parse(rawUrl);
@@ -3052,9 +3646,12 @@ class TCLoginApi {
     String username, {
     required String service,
     LoginContext? loginContext,
+    TronclassCasLoginHttp? casHttp,
   }) async {
     final bfp = await _getOrCreateCasBfp(username);
-    await ApiService.sendRequest(
+    final effectiveCasHttp =
+        casHttp ?? TronclassCasLoginHttp(loginContext: loginContext);
+    await effectiveCasHttp.request(
       '${TronclassGuetConstants.casBaseUrl}/authserver/bfp/info',
       params: {
         'bfp': bfp,
@@ -3066,7 +3663,6 @@ class TCLoginApi {
       ),
       responseType: ResponseType.plain,
       allowRedirects: false,
-      loginContext: loginContext,
     );
   }
 
@@ -3093,19 +3689,23 @@ class TCLoginApi {
     String password, {
     Future<String?> Function(Uint8List imageBytes)? captchaProvider,
     Future<String?> Function(String? mobileHint, String? tip)? mfaCodeProvider,
+    Future<String?> Function(TronclassMfaPromptContext context)?
+    mfaPromptProvider,
     LoginContext? loginContext,
     bool resumeAfterMfa = false,
     bool allowMfaChallenge = true,
     bool stopAfterMfaDetection = false,
+    bool allowCredentialFailureReplay = true,
   }) async {
     _trace(
       resumeAfterMfa
           ? '[TC] restart auth-code flow after MFA'
           : '[TC] 使用 tronclass_plus 登录链路',
     );
+    final effectiveCasHttp = TronclassCasLoginHttp(loginContext: loginContext);
 
     _trace('[TC] 步骤1: 探测 identity auth');
-    final authProbe = await ApiService.sendRequest(
+    final authProbe = await effectiveCasHttp.request(
       _identityAuthUrl,
       params: _authQueryParams(),
       headers: TronclassLoginHeaders.build(
@@ -3113,7 +3713,6 @@ class TCLoginApi {
       ),
       responseType: ResponseType.plain,
       allowRedirects: true,
-      loginContext: loginContext,
     );
     _trace('[TC] 步骤1完成: ${authProbe.statusCode}');
 
@@ -3133,7 +3732,7 @@ class TCLoginApi {
 
     if (service == null || service.isEmpty) {
       _trace('[TC] 步骤2: 尝试不跟随重定向探测');
-      final authProbeNoFollow = await ApiService.sendRequest(
+      final authProbeNoFollow = await effectiveCasHttp.request(
         _identityAuthUrl,
         params: _authQueryParams(),
         headers: TronclassLoginHeaders.build(
@@ -3141,7 +3740,6 @@ class TCLoginApi {
         ),
         responseType: ResponseType.plain,
         allowRedirects: false,
-        loginContext: loginContext,
       );
       _trace('[TC] 步骤2完成: ${authProbeNoFollow.statusCode}');
 
@@ -3209,7 +3807,7 @@ class TCLoginApi {
               continue;
             }
             try {
-              final chaseResp = await ApiService.sendRequest(
+              final chaseResp = await effectiveCasHttp.request(
                 candidate,
                 headers: TronclassLoginHeaders.build(
                   stage: TronclassLoginHeaders.stageForUrl(candidate),
@@ -3217,7 +3815,6 @@ class TCLoginApi {
                 ),
                 responseType: ResponseType.plain,
                 allowRedirects: true,
-                loginContext: loginContext,
               );
               queue.add(chaseResp);
             } catch (_) {
@@ -3237,7 +3834,7 @@ class TCLoginApi {
     }
 
     _trace('[TC] 步骤3: 获取 CAS 登录页面');
-    final loginPageResp = await ApiService.sendRequest(
+    final loginPageResp = await effectiveCasHttp.request(
       TronclassGuetConstants.casLoginUrl,
       params: {'service': service},
       headers: TronclassLoginHeaders.build(
@@ -3246,9 +3843,18 @@ class TCLoginApi {
       ),
       responseType: ResponseType.plain,
       allowRedirects: false,
-      loginContext: loginContext,
     );
     _trace('[TC] 步骤3完成: ${loginPageResp.statusCode}');
+
+    final codeFromLoginPage = await _followAuthRedirectForCode(
+      loginPageResp,
+      casHttp: effectiveCasHttp,
+      loginContext: loginContext,
+    );
+    if (codeFromLoginPage != null && codeFromLoginPage.isNotEmpty) {
+      _trace('[TC] CAS login page redirect code hit');
+      return {'ok': true, 'code': codeFromLoginPage};
+    }
 
     final parsed = _parseLoginHtml(loginPageResp.data.toString());
     final aesKey = parsed['aesKey'];
@@ -3263,6 +3869,7 @@ class TCLoginApi {
         username,
         service: service,
         loginContext: loginContext,
+        casHttp: effectiveCasHttp,
       );
       _trace('[TC][bfp] report complete');
     } catch (e) {
@@ -3271,7 +3878,7 @@ class TCLoginApi {
 
     String captcha = '';
     _trace('[TC] 步骤4: 检查账号密码页是否需要图形验证码');
-    final checkNeedCaptchaResp = await ApiService.sendRequest(
+    final checkNeedCaptchaResp = await effectiveCasHttp.request(
       TronclassGuetConstants.casCheckNeedCaptchaUrl,
       params: {
         'username': username,
@@ -3283,7 +3890,6 @@ class TCLoginApi {
       ),
       responseType: ResponseType.plain,
       allowRedirects: false,
-      loginContext: loginContext,
     );
     _trace('[TC] 步骤4完成: ${checkNeedCaptchaResp.statusCode}');
     final checkNeedCaptcha =
@@ -3298,7 +3904,7 @@ class TCLoginApi {
       if (captchaProvider == null) {
         return {'ok': false, 'message': '当前账号需要图形验证码'};
       }
-      final captchaImageResp = await ApiService.sendRequest(
+      final captchaImageResp = await effectiveCasHttp.request(
         '${TronclassGuetConstants.casCaptchaUrl}?${DateTime.now().millisecondsSinceEpoch}',
         headers: TronclassLoginHeaders.build(
           stage: TronclassLoginRequestStage.casCaptchaImage,
@@ -3306,7 +3912,6 @@ class TCLoginApi {
         ),
         responseType: ResponseType.bytes,
         allowRedirects: false,
-        loginContext: loginContext,
       );
       final rawData = captchaImageResp.data;
       final Uint8List? imageBytes = switch (rawData) {
@@ -3334,7 +3939,7 @@ class TCLoginApi {
     _trace(
       '[TC][login] password accepted path may still enter sms verification',
     );
-    final loginResp = await ApiService.sendRequest(
+    final loginResp = await effectiveCasHttp.request(
       TronclassGuetConstants.casLoginUrl,
       method: 'POST',
       params: {'service': service},
@@ -3342,7 +3947,6 @@ class TCLoginApi {
         stage: TronclassLoginRequestStage.casLoginSubmit,
         service: service,
       ),
-      loginContext: loginContext,
       body: {
         'username': username,
         'password': _encryptPassword(password, utf8.encode(aesKey)),
@@ -3358,14 +3962,25 @@ class TCLoginApi {
       allowRedirects: false,
     );
     _trace('[TC] 步骤5完成: ${loginResp.statusCode}');
+    final loginSubmitLocation = _resolveUrlWithBase(
+      loginResp.requestOptions.uri,
+      loginResp.headers.value('location'),
+    );
+    _trace(
+      '[TC][loginSubmit] status=${loginResp.statusCode} uri=${loginResp.requestOptions.uri} realUri=${loginResp.realUri} location=${loginResp.headers.value('location') ?? ''} resolved=${loginSubmitLocation ?? ''} body=${_shortText(loginResp.data)}',
+    );
 
     final code =
         _extractAuthCodeFromAny(loginResp) ??
-        loginResp.requestOptions.uri.queryParameters['code'];
+        loginResp.requestOptions.uri.queryParameters['code'] ??
+        loginResp.realUri.queryParameters['code'] ??
+        _extractAuthCodeFromRawUrl(loginSubmitLocation);
     if (code != null && code.isNotEmpty) {
       _trace('[TC] login form direct code hit');
       return {'ok': true, 'code': code};
     }
+
+    final isLoginSubmitRedirect = _isRedirectStatus(loginResp.statusCode);
 
     if (_isReAuthResponse(loginResp)) {
       final reauthEntryUrl = _extractReauthEntryUrl(
@@ -3382,6 +3997,12 @@ class TCLoginApi {
       _trace(
         '[TC][MFA] detected sms secondary verification ready=$reauthReady reauthEntryUrl=${reauthEntryUrl ?? ''}',
       );
+      if (!reauthReady) {
+        return _buildMfaContextNotReadyResult(
+          reauthEntryUrl: reauthEntryUrl,
+          service: service,
+        );
+      }
       if (!allowMfaChallenge) {
         return {
           'ok': false,
@@ -3411,10 +4032,78 @@ class TCLoginApi {
         password: password,
         captchaProvider: captchaProvider,
         mfaCodeProvider: mfaCodeProvider,
+        mfaPromptProvider: mfaPromptProvider,
         reauthEntryUrl: reauthEntryUrl,
         service: service,
         loginContext: loginContext,
+        casHttp: effectiveCasHttp,
+        mfaContextReady: reauthReady,
       );
+    }
+
+    if (_isCasLoginUrl(loginSubmitLocation) &&
+        !_isReAuthUrl(loginSubmitLocation) &&
+        _looksLikeReAuthHtml(loginResp.data)) {
+      _trace(
+        '[TC][MFA] login submit redirected back to CAS login, reauth context not ready location=${loginSubmitLocation ?? ''}',
+      );
+      return _buildMfaContextNotReadyResult(
+        reauthEntryUrl: _extractReauthEntryUrl(loginResp, service: service),
+        service: service,
+      );
+    }
+
+    if (isLoginSubmitRedirect) {
+      if (loginSubmitLocation == null || loginSubmitLocation.isEmpty) {
+        _trace('[TC][authFollow] login submit redirect missing location');
+        return _buildAuthRedirectFailureResult(
+          message: 'CAS 登录提交后未返回授权跳转地址，请稍后重试或切换网络',
+          service: service,
+          casRedirectMissing: true,
+        );
+      }
+
+      if (_isCasLoginUrl(loginSubmitLocation) &&
+          !_isReAuthUrl(loginSubmitLocation)) {
+        _trace(
+          '[TC][authFollow] login submit redirected back to CAS login location=$loginSubmitLocation',
+        );
+        return _buildAuthRedirectFailureResult(
+          message:
+              '\u8eab\u4efd\u8ba4\u8bc1\u8df3\u8f6c\u5f02\u5e38\uff0cCAS \u767b\u5f55\u63d0\u4ea4\u540e\u8fd4\u56de\u767b\u5f55\u9875\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u5207\u6362\u7f51\u7edc',
+          service: service,
+        );
+      }
+
+      final codeFromLoginSubmit = await _followAuthRedirectForCode(
+        loginResp,
+        casHttp: effectiveCasHttp,
+        loginContext: loginContext,
+      );
+      if (codeFromLoginSubmit != null && codeFromLoginSubmit.isNotEmpty) {
+        _trace('[TC] login form redirect code hit');
+        return {'ok': true, 'code': codeFromLoginSubmit};
+      }
+
+      _trace(
+        '[TC][authFollow] login submit redirect did not yield auth code location=$loginSubmitLocation',
+      );
+      return _buildAuthRedirectFailureResult(
+        message: '身份认证跳转异常，未获取到畅课授权码，请稍后重试或切换网络',
+        service: service,
+      );
+    }
+
+    if (loginResp.statusCode != 401 && !_looksLikeCasLoginHtml(loginResp.data)) {
+      final codeFromLoginSubmit = await _followAuthRedirectForCode(
+        loginResp,
+        casHttp: effectiveCasHttp,
+        loginContext: loginContext,
+      );
+      if (codeFromLoginSubmit != null && codeFromLoginSubmit.isNotEmpty) {
+        _trace('[TC] login form redirect code hit');
+        return {'ok': true, 'code': codeFromLoginSubmit};
+      }
     }
 
     final loginErrorTip = _extractLoginErrorTip(loginResp.data);
@@ -3422,10 +4111,42 @@ class TCLoginApi {
     _trace(
       '[TC] login POST result=credential_failure tip=${loginErrorTip ?? ''}',
     );
+    final shouldReplayCredentialFailure =
+        !needCaptcha &&
+        allowCredentialFailureReplay &&
+        _isTransientCredentialFailureTip(loginErrorTip);
+    if (shouldReplayCredentialFailure) {
+      _trace('[TC][login] replay once after credential failure');
+      await _clearStaleCasSessionCookies(loginContext);
+      final replayResult = await _loginForAuthCode(
+        username,
+        password,
+        captchaProvider: captchaProvider,
+        mfaCodeProvider: mfaCodeProvider,
+        mfaPromptProvider: mfaPromptProvider,
+        loginContext: loginContext,
+        resumeAfterMfa: resumeAfterMfa,
+        allowMfaChallenge: allowMfaChallenge,
+        stopAfterMfaDetection: stopAfterMfaDetection,
+        allowCredentialFailureReplay: false,
+      );
+      if (replayResult['ok'] == true ||
+          replayResult['requireMfa'] == true ||
+          replayResult['verificationStage'] == tronclassVerificationStageMfa) {
+        return replayResult;
+      }
+      return {
+        ...replayResult,
+        'credentialFailure': true,
+        'retryableCredentialFailure': false,
+      };
+    }
     return {
       'ok': false,
       'message': normalizedLoginFailureMessage,
       'debug': lastLoginTrace,
+      'credentialFailure': true,
+      'retryableCredentialFailure': shouldReplayCredentialFailure,
     };
   }
 
@@ -3453,32 +4174,24 @@ class TCLoginApi {
       _resetTrace();
       CookieManager.isLoggingIn = true;
       await _clearStaleCasSessionCookies(loginContext);
-      final effectiveMfaCodeProvider =
-          mfaCodeProvider ??
-          (mfaPromptProvider == null
-              ? null
-              : (String? mobileHint, String? tip) {
-                  return mfaPromptProvider(
-                    TronclassMfaPromptContext(
-                      mobileHint: mobileHint,
-                      tip: tip,
-                      codeTimeSeconds: 120,
-                      resendCode: () => _sendDynamicCodeWithContext(
-                        username,
-                        manualSendOnly: true,
-                      ),
-                    ),
-                  );
-                });
-
       final authCodeResult = await _loginForAuthCode(
         username,
         password,
         captchaProvider: captchaProvider,
-        mfaCodeProvider: effectiveMfaCodeProvider,
+        mfaCodeProvider: mfaCodeProvider,
+        mfaPromptProvider: mfaPromptProvider,
         loginContext: loginContext,
       );
       if (authCodeResult['ok'] != true) {
+        return authCodeResult;
+      }
+
+      final completedSessionId = (authCodeResult['sessionId'] ?? '')
+          .toString()
+          .trim();
+      if (completedSessionId.isNotEmpty ||
+          authCodeResult['cookieBacked'] == true ||
+          authCodeResult['tokenExchangeOk'] == true) {
         return authCodeResult;
       }
 

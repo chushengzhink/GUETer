@@ -8,10 +8,13 @@ import '../platform.dart';
 import '../api/course.dart';
 import '../api/api_service.dart';
 import '../api/kt_sign.dart';
+import '../api/tronclass_batch_sign_executor.dart';
+import '../api/tronclass_sign_api.dart';
 import '../session/account.dart';
 import '../session/account_events.dart';
 import '../session/app_settings.dart';
 import '../session/sign_record_store.dart';
+import '../session/sign_mode_settings.dart';
 import '../models/course.dart';
 import '../models/active.dart';
 import '../services/platform_network_warmup_service.dart';
@@ -2934,7 +2937,57 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       throw StateError('畅课二维码缺少 rollcallId 或 data');
     }
 
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.tronclass,
+      perRunUsesAllWhenNoSelection: false,
+    );
     if (!mounted) return;
+    if (resolution.mode != SignAccountMode.perRunSelection) {
+      if (resolution.users.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(resolution.message ?? '请先配置畅课签到账号')),
+        );
+        return;
+      }
+      _scanConsoleController.resetForPlatform(SignPlatformContext.tronclass);
+      _scanConsoleController.add(
+        platform: '畅课',
+        accountName: resolution.mode == SignAccountMode.manualCurrent
+            ? '模式一当前账号'
+            : '模式二平台所选账号',
+        accountId: rollcallId,
+        stage: SignRunStage.queued,
+        message: resolution.mode == SignAccountMode.manualCurrent
+            ? '模式一：当前账号直接提交'
+            : '模式二：平台所选直接批量提交',
+      );
+      final result = await TronclassBatchSignExecutor().sign(
+        context: context,
+        courseName: '畅课二维码签到',
+        console: _scanConsoleController,
+        users: resolution.users,
+        isContextMounted: () => mounted,
+        networkPolicy: TronclassBatchNetworkPolicy.direct,
+        action: (_, deviceId) => TronclassSignApi.signQr(
+          rollcallId: rollcallId,
+          data: qrPayload,
+          deviceId: deviceId,
+        ),
+      );
+      if (!mounted) return;
+      final failed = result.items.where((item) => !item.success).toList();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failed.isEmpty
+                ? '畅课二维码签到完成：成功 ${result.successCount}/${result.totalCount}'
+                : '畅课二维码签到完成：成功 ${result.successCount}/${result.totalCount}，失败 ${failed.length}',
+          ),
+        ),
+      );
+      return;
+    }
+
     ApiService.appendExternalConsoleLog(
       'tronclass',
       '[CoursesScan] entering Tronclass QR confirm rollcallId=$rollcallId',
@@ -3464,15 +3517,17 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     }
 
     _scanConsoleController.resetForPlatform(signContext);
-    final targetAccounts = AccountManager.getAccountsForPlatform(
-      signContext.platformType,
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: signContext.platformType,
+      perRunUsesAllWhenNoSelection: true,
     );
+    final targetAccounts = resolution.users;
 
     if (targetAccounts.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('当前没有可用账号，请先登录或选择账号')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resolution.message ?? '当前没有可用账号，请先登录或选择账号')),
+      );
       return;
     }
 
@@ -3496,27 +3551,47 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             message: '检查雨课堂会话',
           );
           final rainExecution = _pendingRainScanExecution;
-          final gateResult = await SignNetworkGate().run<int?>(
-            context: context,
-            platformLabel: '雨课堂',
-            user: user,
-            console: _scanConsoleController,
-            action: () => _signRainClassroomTarget(qrCodeUrl, rainExecution),
-          );
-          if (gateResult.skipped) {
-            final reason = gateResult.reason ?? '用户跳过';
-            failedAccounts.add('${user.name} ($reason)');
-            await signLogStore.append(
+          final int? status;
+          if (resolution.networkPolicy == SignSubmitNetworkPolicy.direct) {
+            _scanConsoleController.add(
               platform: '雨课堂',
-              platformType: PlatformType.rainClassroom,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '失败',
-              detail: reason,
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.queued,
+              message: '平台所选：直接提交',
             );
-            continue;
+            _scanConsoleController.add(
+              platform: '雨课堂',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signStart,
+              message: '开始提交签到',
+            );
+            status = await _signRainClassroomTarget(qrCodeUrl, rainExecution);
+          } else {
+            if (!mounted) return;
+            final gateResult = await SignNetworkGate().run<int?>(
+              context: context,
+              platformLabel: '雨课堂',
+              user: user,
+              console: _scanConsoleController,
+              action: () => _signRainClassroomTarget(qrCodeUrl, rainExecution),
+            );
+            if (gateResult.skipped) {
+              final reason = gateResult.reason ?? '用户跳过';
+              failedAccounts.add('${user.name} ($reason)');
+              await signLogStore.append(
+                platform: '雨课堂',
+                platformType: PlatformType.rainClassroom,
+                courseName: '扫码签到课程',
+                account: user.name,
+                status: '失败',
+                detail: reason,
+              );
+              continue;
+            }
+            status = gateResult.value;
           }
-          final status = gateResult.value;
           ApiService.appendExternalConsoleLog(
             'rainclassroom',
             'rain scan mode=${rainExecution?.kind.name ?? 'dynamicQr'}',
@@ -3601,27 +3676,47 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             continue;
           }
 
-          final gateResult = await SignNetworkGate().run<bool>(
-            context: context,
-            platformLabel: '课堂派',
-            user: user,
-            console: _scanConsoleController,
-            action: () => KTSignApi.scanToSign(qrCodeUrl, user.token),
-          );
-          if (gateResult.skipped) {
-            final reason = gateResult.reason ?? '用户跳过';
-            failedAccounts.add('${user.name} ($reason)');
-            await signLogStore.append(
+          final bool ok;
+          if (resolution.networkPolicy == SignSubmitNetworkPolicy.direct) {
+            _scanConsoleController.add(
               platform: '课堂派',
-              platformType: PlatformType.ketangpai,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '失败',
-              detail: reason,
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.queued,
+              message: '平台所选：直接提交',
             );
-            continue;
+            _scanConsoleController.add(
+              platform: '课堂派',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signStart,
+              message: '开始提交签到',
+            );
+            ok = await KTSignApi.scanToSign(qrCodeUrl, user.token);
+          } else {
+            if (!mounted) return;
+            final gateResult = await SignNetworkGate().run<bool>(
+              context: context,
+              platformLabel: '课堂派',
+              user: user,
+              console: _scanConsoleController,
+              action: () => KTSignApi.scanToSign(qrCodeUrl, user.token),
+            );
+            if (gateResult.skipped) {
+              final reason = gateResult.reason ?? '用户跳过';
+              failedAccounts.add('${user.name} ($reason)');
+              await signLogStore.append(
+                platform: '课堂派',
+                platformType: PlatformType.ketangpai,
+                courseName: '扫码签到课程',
+                account: user.name,
+                status: '失败',
+                detail: reason,
+              );
+              continue;
+            }
+            ok = gateResult.value == true;
           }
-          final ok = gateResult.value == true;
           if (ok) {
             successCount++;
             _scanConsoleController.add(

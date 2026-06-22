@@ -7,8 +7,10 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../api/tronclass_batch_sign_executor.dart';
 import '../api/tronclass_sign_api.dart';
 import '../models/user.dart';
+import '../platform.dart';
 import '../services/sign_platform_context.dart';
 import '../services/sign_run_console.dart';
+import '../session/sign_mode_settings.dart';
 import '../utils/coord_transform.dart';
 import '../widgets/sign_run_console_panel.dart';
 import '../widgets/tronclass_account_selector.dart';
@@ -63,16 +65,24 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
   }
 
   Future<void> _openLocationPicker() async {
-    if (_selectedAccounts.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('请至少选择一个畅课账号')));
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.tronclass,
+      perRunSelection: _selectedAccounts,
+      perRunUsesAllWhenNoSelection: false,
+    );
+    if (!resolution.hasUsers) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resolution.message ?? '请至少选择一个畅课账号')),
+      );
       return;
     }
+    _selectedAccounts = resolution.users;
 
     BMFCoordinate? selectedCoordinate;
     String? selectedAddress;
 
+    if (!mounted) return;
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -236,10 +246,17 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
     required double accuracy,
   }) async {
     if (_isScanning) return;
-    if (_selectedAccounts.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('请至少选择一个畅课账号')));
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.tronclass,
+      perRunSelection: _selectedAccounts,
+      perRunUsesAllWhenNoSelection: false,
+    );
+    final signAccounts = resolution.users;
+    if (signAccounts.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resolution.message ?? '请至少选择一个畅课账号')),
+      );
       return;
     }
 
@@ -248,6 +265,7 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
     });
 
     try {
+      if (!mounted) return;
       final gcj02 = CoordTransform.bd09ToGcj02(latitude, longitude);
       _consoleController.clear();
       final result = await TronclassBatchSignExecutor().sign(
@@ -256,8 +274,12 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
             ? widget.activityName!.trim()
             : '畅课雷达签到',
         console: _consoleController,
-        users: _selectedAccounts,
+        users: signAccounts,
         isContextMounted: () => mounted,
+        networkPolicy:
+            resolution.networkPolicy == SignSubmitNetworkPolicy.direct
+            ? TronclassBatchNetworkPolicy.direct
+            : TronclassBatchNetworkPolicy.strict,
         action: (_, deviceId) => TronclassSignApi.signRadar(
           rollcallId: widget.rollcallId,
           deviceId: deviceId,

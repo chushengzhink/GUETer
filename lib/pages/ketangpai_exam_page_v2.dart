@@ -78,6 +78,80 @@ class _KetangpaiExamPageV2State extends State<KetangpaiExamPageV2> {
     return scheme.tertiary;
   }
 
+  Widget _buildCourseHeader() {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final teacher = widget.course.teacher.trim();
+    final className = (widget.course.note ?? '').trim();
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.lg),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(AppRadius.medium),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer.withValues(alpha: 0.72),
+              borderRadius: BorderRadius.circular(AppRadius.small),
+            ),
+            child: Icon(Icons.assignment_outlined, color: scheme.primary),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.course.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Wrap(
+                  spacing: AppSpacing.md,
+                  runSpacing: AppSpacing.xs,
+                  children: [
+                    if (teacher.isNotEmpty)
+                      Text(
+                        teacher,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    if (className.isNotEmpty)
+                      Text(
+                        className,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    Obx(
+                      () => Text(
+                        '考试 ${_controller.examList.length}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildExamTile(KetangpaiExamSummary exam) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -199,9 +273,13 @@ class _KetangpaiExamPageV2State extends State<KetangpaiExamPageV2> {
         onRefresh: () => _controller.loadExamList(widget.course.courseId),
         child: ListView.builder(
           padding: const EdgeInsets.all(AppSpacing.lg),
-          itemCount: _controller.examList.length,
-          itemBuilder: (context, index) =>
-              _buildExamTile(_controller.examList[index]),
+          itemCount: _controller.examList.length + 1,
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return _buildCourseHeader();
+            }
+            return _buildExamTile(_controller.examList[index - 1]);
+          },
         ),
       );
     });
@@ -210,7 +288,16 @@ class _KetangpaiExamPageV2State extends State<KetangpaiExamPageV2> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.course.name} · 考试')),
+      appBar: AppBar(
+        title: Text('${widget.course.name} · 考试'),
+        actions: [
+          IconButton(
+            tooltip: '刷新考试列表',
+            onPressed: () => _controller.loadExamList(widget.course.courseId),
+            icon: const Icon(Icons.refresh_outlined),
+          ),
+        ],
+      ),
       body: _buildBody(),
     );
   }

@@ -27,7 +27,15 @@ import 'update_announcements_page.dart';
 import 'user_manual_page.dart';
 
 class AccountsPage extends StatefulWidget {
-  const AccountsPage({super.key});
+  const AccountsPage({
+    super.key,
+    UpdateService? updateService,
+    Future<String> Function()? currentVersionLoader,
+  }) : _updateService = updateService,
+       _currentVersionLoader = currentVersionLoader;
+
+  final UpdateService? _updateService;
+  final Future<String> Function()? _currentVersionLoader;
 
   @override
   State<AccountsPage> createState() => _AccountsPageState();
@@ -50,6 +58,8 @@ class _AccountsPageState extends State<AccountsPage>
   Color _globalPrimary = const Color(0xFF1F9EA8);
   Color _globalSecondary = const Color(0xFF157B88);
   UpdateCheckStatus? _updateStatus;
+  bool _checkingUpdate = false;
+  String? _updateCheckError;
 
   @override
   void initState() {
@@ -57,6 +67,7 @@ class _AccountsPageState extends State<AccountsPage>
     AppSettings.globalColorSchemeNotifier.addListener(_onGlobalSchemeChanged);
     _loadGlobalPalette();
     _loadUpdateStatus();
+    _refreshUpdateStatus(showSnackBar: false);
     _loadAccounts();
     _platformChangeSubscription = PlatformManager().platformChanges.listen((
       platform,
@@ -125,6 +136,52 @@ class _AccountsPageState extends State<AccountsPage>
     setState(() {
       _updateStatus = status;
     });
+  }
+
+  Future<void> _refreshUpdateStatus({bool showSnackBar = true}) async {
+    if (_checkingUpdate) {
+      return;
+    }
+    setState(() {
+      _checkingUpdate = true;
+      _updateCheckError = null;
+    });
+    try {
+      final currentVersionLoader = widget._currentVersionLoader;
+      final currentVersion = currentVersionLoader == null
+          ? (await PackageInfo.fromPlatform()).version
+          : await currentVersionLoader();
+      final info = await (widget._updateService ?? UpdateService())
+          .fetchLatest();
+      await UpdateAnnouncementStore().save(info.announcements);
+      final status = UpdateCheckStatus.fromInfo(
+        currentVersion: currentVersion,
+        info: info,
+      );
+      await UpdateCheckStatusStore().save(status);
+      if (!mounted) return;
+      setState(() {
+        _updateStatus = status;
+        _checkingUpdate = false;
+        _updateCheckError = info.metadataWarning;
+      });
+      if (showSnackBar) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(status.hasUpdate ? '发现新版本' : '当前已是最新版本')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _checkingUpdate = false;
+        _updateCheckError = '更新检查失败，请稍后重试';
+      });
+      if (showSnackBar) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('更新检查失败，请稍后重试')));
+      }
+    }
   }
 
   void _applyAccountSnapshot(AccountStateSnapshot snapshot) {
@@ -1774,6 +1831,8 @@ class _AccountsPageState extends State<AccountsPage>
               ),
             ),
           ],
+          const SizedBox(height: AppSpacing.xs),
+          _buildUpdateStatusLine(status),
           const SizedBox(height: AppSpacing.sm),
           Wrap(
             spacing: AppSpacing.sm,
@@ -1794,9 +1853,41 @@ class _AccountsPageState extends State<AccountsPage>
                 icon: const Icon(Icons.open_in_new_rounded),
                 label: const Text('前往下载'),
               ),
+              OutlinedButton.icon(
+                onPressed: _checkingUpdate
+                    ? null
+                    : () => _refreshUpdateStatus(showSnackBar: true),
+                icon: _checkingUpdate
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded),
+                label: const Text('重新检查'),
+              ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildUpdateStatusLine(UpdateCheckStatus status) {
+    final colors = Theme.of(context).colorScheme;
+    final error = _updateCheckError;
+    final text = _checkingUpdate
+        ? '正在检查更新...'
+        : error != null && error.isNotEmpty
+        ? error
+        : '上次检查：${_formatUpdateCheckedAt(status.checkedAt)}';
+    return Text(
+      text,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+        color: error == null ? colors.onSurfaceVariant : colors.error,
+        height: 1.35,
       ),
     );
   }
@@ -1817,14 +1908,64 @@ class _AccountsPageState extends State<AccountsPage>
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
-            child: Text(
-              subtitle,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        subtitle,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (status != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          _checkingUpdate
+                              ? '正在检查更新...'
+                              : '上次检查：${_formatUpdateCheckedAt(status.checkedAt)}',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '重新检查',
+                  onPressed: _checkingUpdate
+                      ? null
+                      : () => _refreshUpdateStatus(showSnackBar: true),
+                  icon: _checkingUpdate
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh_rounded),
+                ),
+              ],
             ),
           ),
+          if (_updateCheckError != null && _updateCheckError!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: Text(
+                _updateCheckError!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ),
           Row(
             children: [
               Expanded(
@@ -1896,6 +2037,16 @@ class _AccountsPageState extends State<AccountsPage>
         builder: (_) => UserManualPage(initialSectionId: initialSectionId),
       ),
     );
+  }
+
+  String _formatUpdateCheckedAt(DateTime value) {
+    if (value.millisecondsSinceEpoch == 0) {
+      return '从未检查';
+    }
+    final local = value.toLocal();
+    String twoDigits(int input) => input.toString().padLeft(2, '0');
+    return '${local.month}/${local.day} '
+        '${twoDigits(local.hour)}:${twoDigits(local.minute)}';
   }
 
   void _openUpdateAnnouncements() {

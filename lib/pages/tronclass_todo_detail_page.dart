@@ -1,13 +1,19 @@
 // ignore_for_file: deprecated_member_use
 
+import 'dart:io';
+
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:html/parser.dart' as html_parser;
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../api/api_service.dart';
+import '../api/tronclass_homework_upload_api.dart';
 
 class TronclassTodoDetailPage extends StatefulWidget {
   final Map<String, dynamic> todo;
@@ -21,12 +27,16 @@ class TronclassTodoDetailPage extends StatefulWidget {
 
 class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
   bool _loading = true;
+  bool _submittingHomework = false;
   Map<String, dynamic>? _detail;
   Map<String, dynamic>? _distribute;
   List<dynamic> _subjects = [];
   final Map<int, List<int>> _answers = {};
+  final List<File> _selectedHomeworkFiles = <File>[];
+  final _homeworkUploadApi = const TronclassHomeworkUploadApi();
   String? _error;
   String? _classroomExamStartTime;
+  String? _homeworkProgress;
 
   @override
   void initState() {
@@ -147,7 +157,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
 
       final distributeEndpoint = _distributeEndpoint(type, id);
 
-      final distributeResponse = await ApiService.sendRequest(distributeEndpoint);
+      final distributeResponse = await ApiService.sendRequest(
+        distributeEndpoint,
+      );
       final distribute = distributeResponse.data;
 
       if (!mounted) return;
@@ -178,14 +190,119 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('暂未找到畅课，请手动完成')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('暂未找到畅课，请手动完成')));
       }
     } catch (e) {
       if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('暂未找到畅课，请手动完成')));
+    }
+  }
+
+  Future<void> _pickHomeworkFiles() async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: false,
+    );
+    if (result == null || result.files.isEmpty || !mounted) return;
+    _addHomeworkFiles(
+      result.files.map((file) => file.path).whereType<String>().map(File.new),
+    );
+  }
+
+  Future<void> _pickHomeworkImages() async {
+    final images = await ImagePicker().pickMultiImage();
+    if (images.isEmpty || !mounted) return;
+    _addHomeworkFiles(images.map((image) => File(image.path)));
+  }
+
+  Future<void> _pickHomeworkVideo() async {
+    final video = await ImagePicker().pickVideo(source: ImageSource.gallery);
+    if (video == null || !mounted) return;
+    _addHomeworkFiles(<File>[File(video.path)]);
+  }
+
+  void _addHomeworkFiles(Iterable<File> files) {
+    final existingPaths = _selectedHomeworkFiles
+        .map((file) => file.path)
+        .toSet();
+    final additions = files
+        .where((file) => file.path.isNotEmpty && existingPaths.add(file.path))
+        .toList(growable: false);
+    if (additions.isEmpty) return;
+    setState(() {
+      _selectedHomeworkFiles.addAll(additions);
+    });
+  }
+
+  void _removeHomeworkFile(File file) {
+    setState(() {
+      _selectedHomeworkFiles.removeWhere((item) => item.path == file.path);
+    });
+  }
+
+  Future<void> _submitHomeworkUpload() async {
+    if (_selectedHomeworkFiles.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先选择要提交的附件')));
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认提交'),
+        content: Text(
+          '将提交 ${_selectedHomeworkFiles.length} 个附件。提交后请以畅课平台状态为准。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('提交'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _submittingHomework = true;
+      _homeworkProgress = '准备上传';
+    });
+
+    try {
+      await _homeworkUploadApi.uploadAndSubmit(
+        activityId: _intId(widget.todo['id']),
+        files: List<File>.from(_selectedHomeworkFiles),
+        onProgress: (index, total, message) {
+          if (!mounted) return;
+          setState(() {
+            _homeworkProgress = '$message ($index/$total)';
+          });
+        },
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('作业提交成功')));
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _submittingHomework = false;
+        _homeworkProgress = null;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂未找到畅课，请手动完成')),
+        SnackBar(content: Text('提交失败: ${_friendlySubmitError(e)}')),
       );
     }
   }
@@ -198,9 +315,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       if (type == 'classroom') {
         await _submitClassroomAnswer(_intId(id));
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('答案已保存')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('答案已保存')));
         return;
       }
 
@@ -214,10 +331,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         final subjectId = subject['id'];
         final answerOptionIds = _answers[subjectId] ?? [];
 
-        return {
-          'subject_id': subjectId,
-          'answer_option_ids': answerOptionIds,
-        };
+        return {'subject_id': subjectId, 'answer_option_ids': answerOptionIds};
       }).toList();
 
       final endpoint = _storageEndpoint(type, _intId(id));
@@ -233,9 +347,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('答案已保存')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('答案已保存')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -300,9 +414,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       if (type == 'classroom') {
         await _submitClassroomAnswer(_intId(id));
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('提交成功')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('提交成功')));
         Navigator.pop(context, true);
         return;
       }
@@ -317,10 +431,7 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         final subjectId = subject['id'];
         final answerOptionIds = _answers[subjectId] ?? [];
 
-        return {
-          'subject_id': subjectId,
-          'answer_option_ids': answerOptionIds,
-        };
+        return {'subject_id': subjectId, 'answer_option_ids': answerOptionIds};
       }).toList();
 
       final endpoint = _submitEndpoint(type, _intId(id));
@@ -328,16 +439,13 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       await ApiService.sendRequest(
         endpoint,
         method: 'POST',
-        body: {
-          'exam_paper_instance_id': instanceId,
-          'subjects': subjects,
-        },
+        body: {'exam_paper_instance_id': instanceId, 'subjects': subjects},
       );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('提交成功')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('提交成功')));
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
@@ -414,6 +522,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
   }
 
   String _friendlySubmitError(Object error) {
+    if (error is TronclassHomeworkUploadException) {
+      return error.message;
+    }
     if (error is DioException) {
       final statusCode = error.response?.statusCode;
       if (statusCode != null) {
@@ -426,21 +537,24 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
 
   Future<void> _exportQuestions() async {
     if (_subjects.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先进入测试并加载题目后再导出')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先进入测试并加载题目后再导出')));
       return;
     }
 
     final text = _buildExportText();
     if (text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂无可导出的题目内容')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('暂无可导出的题目内容')));
       return;
     }
 
-    await Share.share(text, subject: widget.todo['title']?.toString() ?? '测试题目');
+    await Share.share(
+      text,
+      subject: widget.todo['title']?.toString() ?? '测试题目',
+    );
   }
 
   String _buildExportText() {
@@ -491,7 +605,9 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
   }
 
   String _storageEndpoint(String type, int id) {
-    if (type == 'questionnaire') return '/api/questionnaire/$id/submissions/storage';
+    if (type == 'questionnaire') {
+      return '/api/questionnaire/$id/submissions/storage';
+    }
     if (type == 'classroom') return '/api/classroom/$id/submissions/storage';
     return '/api/${type}s/$id/submissions/storage';
   }
@@ -532,60 +648,69 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.error_outline, size: 64, color: Colors.red),
-                      const SizedBox(height: 16),
-                      Text('加载失败', style: TextStyle(fontSize: 18, color: Colors.grey[600])),
-                      const SizedBox(height: 8),
-                      Text(_error!, style: TextStyle(fontSize: 14, color: Colors.grey[500])),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _loadDetail,
-                        child: const Text('重试'),
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text(
+                    '加载失败',
+                    style: TextStyle(fontSize: 18, color: Colors.grey[600]),
                   ),
-                )
-              : type == 'homework'
-                  ? _buildHomeworkView(courseName, endTimeStr)
-                  : _distribute == null
-                      ? _buildExamInfoView(courseName, endTimeStr)
-                      : _buildExamView(courseName, endTimeStr),
+                  const SizedBox(height: 8),
+                  Text(
+                    _error!,
+                    style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _loadDetail,
+                    child: const Text('重试'),
+                  ),
+                ],
+              ),
+            )
+          : type == 'homework'
+          ? _buildHomeworkView(courseName, endTimeStr)
+          : _distribute == null
+          ? _buildExamInfoView(courseName, endTimeStr)
+          : _buildExamView(courseName, endTimeStr),
       bottomNavigationBar: !_loading && _detail != null
           ? _distribute == null && type != 'homework'
-              ? SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: ElevatedButton(
-                      onPressed: _startExam,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1DB6C2),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      child: const Text('开始答题', style: TextStyle(fontSize: 16)),
-                    ),
-                  ),
-                )
-              : _distribute != null
-                  ? SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: ElevatedButton(
-                          onPressed: _submitAnswer,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1DB6C2),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                          ),
-                          child: const Text('提交', style: TextStyle(fontSize: 16)),
+                ? SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: ElevatedButton(
+                        onPressed: _startExam,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1DB6C2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        child: const Text(
+                          '开始答题',
+                          style: TextStyle(fontSize: 16),
                         ),
                       ),
-                    )
-                  : null
+                    ),
+                  )
+                : _distribute != null
+                ? SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: ElevatedButton(
+                        onPressed: _submitAnswer,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1DB6C2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        child: const Text('提交', style: TextStyle(fontSize: 16)),
+                      ),
+                    ),
+                  )
+                : null
           : null,
     );
   }
@@ -593,8 +718,10 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
   Widget _buildHomeworkView(String courseName, String endTimeStr) {
     final description = _detail?['data']?['description']?.toString() ?? '';
     final homeworkType = _detail?['data']?['homework_type']?.toString() ?? '';
-    final scorePercentage = _detail?['data']?['score_percentage']?.toString() ?? '';
-    final referenceAnswer = _detail?['data']?['reference_answer']?.toString() ?? '';
+    final scorePercentage =
+        _detail?['data']?['score_percentage']?.toString() ?? '';
+    final referenceAnswer =
+        _detail?['data']?['reference_answer']?.toString() ?? '';
 
     return SingleChildScrollView(
       child: Column(
@@ -608,7 +735,10 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
               children: [
                 Text(
                   courseName,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 if (endTimeStr.isNotEmpty) ...[
                   const SizedBox(height: 4),
@@ -645,26 +775,10 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
                   Text(_stripHtml(referenceAnswer)),
                 ],
                 const SizedBox(height: 24),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange[50],
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.orange[200]!),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Colors.orange[700]),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '作业提交功能暂未实现，请前往畅课APP完成提交',
-                          style: TextStyle(color: Colors.orange[900]),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                if (homeworkType == 'file_upload')
+                  _buildHomeworkUploadPanel()
+                else
+                  _buildUnsupportedHomeworkSubmitNotice(),
               ],
             ),
           ),
@@ -685,11 +799,15 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         _detail?['finish_at']?.toString() ??
         widget.todo['end_time']?.toString() ??
         '';
-    final scorePercentage = _detail?['data']?['score_percentage']?.toString() ?? '';
+    final scorePercentage =
+        _detail?['data']?['score_percentage']?.toString() ?? '';
     final totalScore = _detail?['total_score']?.toString() ?? '';
-    final announceScoreStatus = _detail?['announce_score_status']?.toString() ?? '';
-    final announceAnswerStatus = _detail?['announce_answer_status']?.toString() ?? '';
-    final completionCriterion = _detail?['completion_criterion']?.toString() ?? '';
+    final announceScoreStatus =
+        _detail?['announce_score_status']?.toString() ?? '';
+    final announceAnswerStatus =
+        _detail?['announce_answer_status']?.toString() ?? '';
+    final completionCriterion =
+        _detail?['completion_criterion']?.toString() ?? '';
 
     return SingleChildScrollView(
       child: Column(
@@ -703,7 +821,10 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
               children: [
                 Text(
                   courseName,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 if (endTimeStr.isNotEmpty) ...[
                   const SizedBox(height: 4),
@@ -723,21 +844,27 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
                 if (startTime.isNotEmpty)
                   _buildInfoRow(
                     '开始时间',
-                    DateFormat('yyyy-MM-dd HH:mm').format(DateTime.parse(startTime).toLocal()),
+                    DateFormat(
+                      'yyyy-MM-dd HH:mm',
+                    ).format(DateTime.parse(startTime).toLocal()),
                   ),
                 if (endTime.isNotEmpty)
                   _buildInfoRow(
                     '结束时间',
-                    DateFormat('yyyy-MM-dd HH:mm').format(DateTime.parse(endTime).toLocal()),
+                    DateFormat(
+                      'yyyy-MM-dd HH:mm',
+                    ).format(DateTime.parse(endTime).toLocal()),
                   ),
                 if (scorePercentage.isNotEmpty)
                   _buildInfoRow('成绩占比', '$scorePercentage%'),
-                if (totalScore.isNotEmpty)
-                  _buildInfoRow('总分', totalScore),
+                if (totalScore.isNotEmpty) _buildInfoRow('总分', totalScore),
                 if (announceScoreStatus.isNotEmpty)
                   _buildInfoRow('成绩公布', _getAnnounceLabel(announceScoreStatus)),
                 if (announceAnswerStatus.isNotEmpty)
-                  _buildInfoRow('答案公布', _getAnnounceLabel(announceAnswerStatus)),
+                  _buildInfoRow(
+                    '答案公布',
+                    _getAnnounceLabel(announceAnswerStatus),
+                  ),
                 if (completionCriterion.isNotEmpty)
                   _buildInfoRow('完成指标', completionCriterion),
                 if (description.isNotEmpty) ...[
@@ -768,7 +895,10 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
             children: [
               Text(
                 courseName,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               if (endTimeStr.isNotEmpty) ...[
                 const SizedBox(height: 4),
@@ -791,6 +921,144 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
         ),
       ],
     );
+  }
+
+  Widget _buildHomeworkUploadPanel() {
+    final canSubmit = _selectedHomeworkFiles.isNotEmpty && !_submittingHomework;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '提交附件',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _submittingHomework ? null : _pickHomeworkFiles,
+              icon: const Icon(Icons.attach_file),
+              label: const Text('选择文件'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _submittingHomework ? null : _pickHomeworkImages,
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('选择照片'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _submittingHomework ? null : _pickHomeworkVideo,
+              icon: const Icon(Icons.video_library_outlined),
+              label: const Text('选择视频'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (_selectedHomeworkFiles.isEmpty)
+          Text('尚未选择附件', style: TextStyle(color: Colors.grey[600]))
+        else
+          ..._selectedHomeworkFiles.map(_buildSelectedHomeworkFileTile),
+        if (_submittingHomework) ...[
+          const SizedBox(height: 16),
+          const LinearProgressIndicator(),
+          const SizedBox(height: 8),
+          Text(_homeworkProgress ?? '正在提交'),
+        ],
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: canSubmit ? _submitHomeworkUpload : null,
+            icon: _submittingHomework
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.cloud_upload_outlined),
+            label: Text(_submittingHomework ? '正在提交' : '提交作业'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSelectedHomeworkFileTile(File file) {
+    final name = p.basename(file.path);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: Icon(_fileIconFor(name)),
+        title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: FutureBuilder<int>(
+          future: file.length(),
+          builder: (context, snapshot) {
+            final size = snapshot.data;
+            return Text(size == null ? file.path : _formatFileSize(size));
+          },
+        ),
+        trailing: IconButton(
+          tooltip: '移除',
+          icon: const Icon(Icons.close),
+          onPressed: _submittingHomework
+              ? null
+              : () => _removeHomeworkFile(file),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUnsupportedHomeworkSubmitNotice() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange[50],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.orange[200]!),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline, color: Colors.orange[700]),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '该作业类型暂未支持本地提交，请前往畅课 APP 完成提交',
+              style: TextStyle(color: Colors.orange[900]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _fileIconFor(String fileName) {
+    final extension = p.extension(fileName).toLowerCase();
+    if (<String>{
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.gif',
+      '.webp',
+      '.heic',
+    }.contains(extension)) {
+      return Icons.image_outlined;
+    }
+    if (<String>{'.mp4', '.mov', '.avi', '.mkv'}.contains(extension)) {
+      return Icons.movie_outlined;
+    }
+    if (extension == '.pdf') return Icons.picture_as_pdf_outlined;
+    return Icons.insert_drive_file_outlined;
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    final kb = bytes / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(1)} KB';
+    final mb = kb / 1024;
+    if (mb < 1024) return '${mb.toStringAsFixed(1)} MB';
+    final gb = mb / 1024;
+    return '${gb.toStringAsFixed(1)} GB';
   }
 
   Widget _buildInfoRow(String label, String value) {
@@ -886,7 +1154,8 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
                 final option = entry.value as Map<String, dynamic>;
                 final optionId = option['id'] as int;
                 final content = option['content']?.toString() ?? '';
-                final isSelected = _answers[subjectId]?.contains(optionId) ?? false;
+                final isSelected =
+                    _answers[subjectId]?.contains(optionId) ?? false;
 
                 return CheckboxListTile(
                   title: _buildOptionTitle(entry.key, content),
@@ -894,7 +1163,10 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
                   onChanged: (value) {
                     setState(() {
                       if (value == true) {
-                        _answers[subjectId] = [...(_answers[subjectId] ?? []), optionId];
+                        _answers[subjectId] = [
+                          ...(_answers[subjectId] ?? []),
+                          optionId,
+                        ];
                       } else {
                         _answers[subjectId] = (_answers[subjectId] ?? [])
                             .where((id) => id != optionId)
@@ -964,11 +1236,18 @@ class _TronclassTodoDetailPageState extends State<TronclassTodoDetailPage> {
 
     for (final match in regex.allMatches(text)) {
       if (match.start > lastEnd) {
-        parts.add({'text': text.substring(lastEnd, match.start), 'isMath': false});
+        parts.add({
+          'text': text.substring(lastEnd, match.start),
+          'isMath': false,
+        });
       }
 
       final mathContent =
-          match.group(1) ?? match.group(2) ?? match.group(3) ?? match.group(4) ?? '';
+          match.group(1) ??
+          match.group(2) ??
+          match.group(3) ??
+          match.group(4) ??
+          '';
       parts.add({'text': mathContent, 'isMath': true});
       lastEnd = match.end;
     }

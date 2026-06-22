@@ -14,7 +14,7 @@ import 'tronclass_sign_api.dart';
 
 enum TronclassBatchSignKind { number, qr, radar }
 
-enum TronclassBatchNetworkPolicy { strict, qrFastFirst }
+enum TronclassBatchNetworkPolicy { strict, direct, qrFastFirst }
 
 class TronclassBatchSignItemResult {
   const TronclassBatchSignItemResult({
@@ -154,8 +154,12 @@ class TronclassBatchSignExecutor {
           console: console,
           action: action,
           skipNetworkGate:
-              networkPolicy == TronclassBatchNetworkPolicy.qrFastFirst &&
-              index == 0,
+              networkPolicy == TronclassBatchNetworkPolicy.direct ||
+              (networkPolicy == TronclassBatchNetworkPolicy.qrFastFirst &&
+                  index == 0),
+          directMessage: networkPolicy == TronclassBatchNetworkPolicy.direct
+              ? '平台所选：直接提交'
+              : '极速防过期：首账号跳过换网直接提交',
         );
         if (response.skipped) {
           await _appendRecord(courseName, user, false, response.message);
@@ -172,7 +176,8 @@ class TronclassBatchSignExecutor {
 
         final signResponse = response.response;
         final success =
-            signResponse != null && TronclassSignApi.isSignSuccess(signResponse);
+            signResponse != null &&
+            TronclassSignApi.isSignSuccess(signResponse);
         final message = signResponse == null
             ? '签到无响应'
             : TronclassSignApi.getSignMessage(signResponse.data);
@@ -210,6 +215,7 @@ class TronclassBatchSignExecutor {
     required SignRunConsoleController console,
     required TronclassSignAction action,
     required bool skipNetworkGate,
+    required String directMessage,
   }) async {
     if (!skipNetworkGate) {
       final gateResult = await _networkGate.run<Response<dynamic>>(
@@ -237,7 +243,7 @@ class TronclassBatchSignExecutor {
       accountName: user.name,
       accountId: user.uid,
       stage: SignRunStage.userContinue,
-      message: '极速防过期：首账号跳过换网直接提交',
+      message: directMessage,
     );
     console.add(
       platform: '畅课',
@@ -323,10 +329,7 @@ class _TronclassActionResult {
 }
 
 class _TronclassHealthResult {
-  const _TronclassHealthResult({
-    required this.healthy,
-    required this.message,
-  });
+  const _TronclassHealthResult({required this.healthy, required this.message});
 
   final bool healthy;
   final String message;

@@ -9,7 +9,7 @@ import 'package:get/get.dart';
 
 User _ketangpaiUser() {
   return User(
-    name: '课堂派用户',
+    name: 'ketangpai-user',
     avatar: '',
     phone: '',
     uid: 'kt-user',
@@ -22,6 +22,9 @@ User _ketangpaiUser() {
 SignController _fakeSignController({
   void Function(String signId, String code)? onNumberSign,
   void Function(String signId, String latitude, String longitude)? onGpsSign,
+  bool numberSuccess = true,
+  bool gpsSuccess = true,
+  String message = 'ok',
 }) {
   return SignController(
     accountProvider: () => _ketangpaiUser(),
@@ -38,10 +41,10 @@ SignController _fakeSignController({
           required accuracy,
         }) async {
           onNumberSign?.call(signId, code);
-          return const KetangpaiServiceResult<Map<String, dynamic>>(
-            success: true,
-            message: 'ok',
-            data: <String, dynamic>{},
+          return KetangpaiServiceResult<Map<String, dynamic>>(
+            success: numberSuccess,
+            message: message,
+            data: const <String, dynamic>{},
           );
         },
     gpsSignRequest:
@@ -55,10 +58,10 @@ SignController _fakeSignController({
           required accuracy,
         }) async {
           onGpsSign?.call(signId, latitude, longitude);
-          return const KetangpaiServiceResult<Map<String, dynamic>>(
-            success: true,
-            message: 'ok',
-            data: <String, dynamic>{},
+          return KetangpaiServiceResult<Map<String, dynamic>>(
+            success: gpsSuccess,
+            message: message,
+            data: const <String, dynamic>{},
           );
         },
   );
@@ -126,7 +129,7 @@ void main() {
       expect(result, '1234');
     });
 
-    testWidgets('direct mode calls SignController and does not pop', (
+    testWidgets('direct mode calls SignController and pops on success', (
       tester,
     ) async {
       String? calledSignId;
@@ -147,11 +150,35 @@ void main() {
         ),
       );
       await tester.enterText(find.byType(EditableText).first, '5678');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpAndSettle();
 
       expect(calledSignId, 'sign-1');
       expect(calledCode, '5678');
-      expect(find.text('数字签到'), findsOneWidget);
+      expect(find.text('open'), findsOneWidget);
+    });
+
+    testWidgets('direct mode keeps page and shows error on failure', (
+      tester,
+    ) async {
+      final controller = _fakeSignController(
+        numberSuccess: false,
+        message: 'bad code',
+      );
+
+      await _pushPage<String>(
+        tester,
+        KetangpaiNumberSignPage(
+          signId: 'sign-1',
+          directSubmit: true,
+          signController: controller,
+        ),
+      );
+      await tester.enterText(find.byType(EditableText).first, '5678');
+      await tester.pumpAndSettle();
+
+      expect(find.text('bad code'), findsOneWidget);
     });
   });
 
@@ -177,7 +204,7 @@ void main() {
 
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('确认'));
+      await tester.tap(find.byType(FilledButton).last);
       await tester.pumpAndSettle();
 
       expect(result?.latitude, '25.3');
@@ -219,12 +246,12 @@ void main() {
 
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      await tester.enterText(find.widgetWithText(TextField, '25.3'), '120');
-      await tester.tap(find.text('确认'));
+      await tester.enterText(find.byType(TextField).first, '120');
+      await tester.tap(find.byType(FilledButton).last);
       await tester.pumpAndSettle();
 
       expect(requested, isFalse);
-      expect(find.text('请输入有效的经纬度和精度'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
     });
 
     testWidgets('direct mode submits valid coordinates through controller', (
@@ -265,12 +292,52 @@ void main() {
 
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('确认'));
+      await tester.tap(find.byType(FilledButton).last);
       await tester.pumpAndSettle();
 
       expect(calledSignId, 'sign-2');
       expect(calledLatitude, '25.3');
       expect(calledLongitude, '110.4');
+      expect(find.text('open'), findsOneWidget);
+    });
+
+    testWidgets('direct mode keeps dialog open and shows service failure', (
+      tester,
+    ) async {
+      final controller = _fakeSignController(
+        gpsSuccess: false,
+        message: 'outside range',
+      );
+
+      await tester.pumpWidget(
+        GetMaterialApp(
+          home: Builder(
+            builder: (context) {
+              return Scaffold(
+                body: ElevatedButton(
+                  onPressed: () {
+                    KetangpaiGpsSignDialog.show(
+                      context,
+                      signId: 'sign-2',
+                      directSubmit: true,
+                      signController: controller,
+                    );
+                  },
+                  child: const Text('open'),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(FilledButton).last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('outside range'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
     });
   });
 }

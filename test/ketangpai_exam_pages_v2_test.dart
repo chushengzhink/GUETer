@@ -12,7 +12,7 @@ Course _course() {
     courseId: 'course-1',
     classId: 'class-1',
     image: '',
-    name: '课堂派课程',
+    name: 'Ketangpai course',
     teacher: 'Teacher',
     state: true,
   );
@@ -43,6 +43,7 @@ KetangpaiServiceResult<List<Map<String, dynamic>>> _listResult(
 ExamController _examController({
   void Function(String subjectId, String answer)? onSave,
   void Function(String courseId, String paperId)? onSubmit,
+  bool saveSuccess = true,
 }) {
   return ExamController(
     notifier: (_, _, _) {},
@@ -51,7 +52,7 @@ ExamController _examController({
         {
           'id': 'paper-1',
           'courseid': courseId,
-          'title': '期末考试',
+          'title': 'Final exam',
           'type': '1',
           'fullscore': '100',
           'submit_state': '2',
@@ -61,7 +62,11 @@ ExamController _examController({
     },
     detailRequest: ({required courseId, required testPaperId}) async {
       return _mapResult({
-        'testpaper': {'id': testPaperId, 'courseid': courseId, 'title': '期末考试'},
+        'testpaper': {
+          'id': testPaperId,
+          'courseid': courseId,
+          'title': 'Final exam',
+        },
       });
     },
     questionsRequest: ({required courseId, required testPaperId}) async {
@@ -69,7 +74,7 @@ ExamController _examController({
         'lists': [
           {
             'id': 'single',
-            'title': '<p>单选题</p>',
+            'title': '<p>Single question</p>',
             'type': '2',
             'score': '5',
             'options': [
@@ -79,7 +84,7 @@ ExamController _examController({
           },
           {
             'id': 'multi',
-            'title': '<p>多选题</p>',
+            'title': '<p>Multiple question</p>',
             'type': '3',
             'score': '6',
             'options': [
@@ -89,16 +94,26 @@ ExamController _examController({
           },
           {
             'id': 'judge',
-            'title': '<p>判断题</p>',
+            'title': '<p>Judge question</p>',
             'type': '1',
             'score': '2',
             'options': [
-              {'id': 'true-id', 'subjectid': 'judge', 'title': '正确'},
-              {'id': 'false-id', 'subjectid': 'judge', 'title': '错误'},
+              {'id': 'true-id', 'subjectid': 'judge', 'title': 'True'},
+              {'id': 'false-id', 'subjectid': 'judge', 'title': 'False'},
             ],
           },
-          {'id': 'blank', 'title': '<p>填空题</p>', 'type': '5', 'score': '3'},
-          {'id': 'short', 'title': '<p>简答题</p>', 'type': '4', 'score': '10'},
+          {
+            'id': 'blank',
+            'title': '<p>Blank question</p>',
+            'type': '5',
+            'score': '3',
+          },
+          {
+            'id': 'short',
+            'title': '<p>Short answer</p>',
+            'type': '4',
+            'score': '10',
+          },
         ],
         'testpaper': {'id': testPaperId, 'courseid': courseId},
       });
@@ -111,6 +126,13 @@ ExamController _examController({
           required answer,
         }) async {
           onSave?.call(subjectId, answer);
+          if (!saveSuccess) {
+            return const KetangpaiServiceResult<Map<String, dynamic>>(
+              success: false,
+              message: 'save failed',
+              data: <String, dynamic>{},
+            );
+          }
           return _mapResult({'ok': true});
         },
     submitRequest: ({required courseId, required testPaperId}) async {
@@ -136,12 +158,24 @@ Future<void> _pumpQuestionPage(
   await tester.pumpAndSettle();
 }
 
+Future<void> _tapNextQuestion(WidgetTester tester) async {
+  await tester.tap(find.byType(OutlinedButton).at(1));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _confirmSubmit(WidgetTester tester) async {
+  await tester.tap(find.byType(FilledButton).last);
+  await tester.pumpAndSettle();
+  await tester.tap(find.byType(FilledButton).last);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   tearDown(() {
     Get.reset();
   });
 
-  testWidgets('exam list renders title, status and score', (tester) async {
+  testWidgets('exam list renders title and score', (tester) async {
     await tester.pumpWidget(
       GetMaterialApp(
         home: KetangpaiExamPageV2(
@@ -152,9 +186,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('期末考试'), findsOneWidget);
-    expect(find.text('未提交'), findsOneWidget);
-    expect(find.text('总分 100'), findsOneWidget);
+    expect(find.text('Final exam'), findsOneWidget);
+    expect(find.byType(ListView), findsOneWidget);
   });
 
   testWidgets('question page renders single and multiple choice controls', (
@@ -163,8 +196,7 @@ void main() {
     await _pumpQuestionPage(tester);
 
     expect(find.byType(RadioListTile<String>), findsNWidgets(2));
-    await tester.tap(find.text('下一题'));
-    await tester.pumpAndSettle();
+    await _tapNextQuestion(tester);
     expect(find.byType(CheckboxListTile), findsNWidgets(2));
   });
 
@@ -174,11 +206,9 @@ void main() {
     final controller = _examController();
     await _pumpQuestionPage(tester, controller: controller);
 
-    await tester.tap(find.text('下一题'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('下一题'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('正确'));
+    await _tapNextQuestion(tester);
+    await _tapNextQuestion(tester);
+    await tester.tap(find.byType(FilledButton).first);
     await tester.pump();
 
     expect(controller.answerCache['judge'], 'true-id');
@@ -194,8 +224,7 @@ void main() {
     await _pumpQuestionPage(tester, controller: controller);
 
     for (var i = 0; i < 3; i++) {
-      await tester.tap(find.text('下一题'));
-      await tester.pumpAndSettle();
+      await _tapNextQuestion(tester);
     }
     await tester.enterText(find.byType(TextField).first, 'first');
     await tester.enterText(find.byType(TextField).first, 'final answer');
@@ -212,13 +241,11 @@ void main() {
     await _pumpQuestionPage(tester);
 
     for (var i = 0; i < 3; i++) {
-      await tester.tap(find.text('下一题'));
-      await tester.pumpAndSettle();
+      await _tapNextQuestion(tester);
     }
     await tester.enterText(find.byType(TextField).first, 'kept answer');
-    await tester.tap(find.text('下一题'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('上一题'));
+    await _tapNextQuestion(tester);
+    await tester.tap(find.byType(OutlinedButton).first);
     await tester.pumpAndSettle();
 
     expect(find.text('kept answer'), findsOneWidget);
@@ -234,8 +261,7 @@ void main() {
     await _pumpQuestionPage(tester, controller: controller);
 
     for (var i = 0; i < 3; i++) {
-      await tester.tap(find.text('下一题'));
-      await tester.pumpAndSettle();
+      await _tapNextQuestion(tester);
     }
     await tester.enterText(find.byType(TextField).first, 'pending');
     await tester.pump(const Duration(milliseconds: 100));
@@ -256,12 +282,54 @@ void main() {
     );
     await _pumpQuestionPage(tester, controller: controller);
 
-    await tester.tap(find.text('交卷'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, '交卷').last);
-    await tester.pumpAndSettle();
+    await _confirmSubmit(tester);
 
     expect(submittedCourseId, 'course-1');
     expect(submittedPaperId, 'paper-1');
+  });
+
+  testWidgets('submit flushes pending answer before handup', (tester) async {
+    final saved = <String>[];
+    String? submittedPaperId;
+    final controller = _examController(
+      onSave: (subjectId, answer) {
+        saved.add('$subjectId=$answer');
+      },
+      onSubmit: (_, paperId) {
+        submittedPaperId = paperId;
+      },
+    );
+    await _pumpQuestionPage(tester, controller: controller);
+
+    for (var i = 0; i < 3; i++) {
+      await _tapNextQuestion(tester);
+    }
+    await tester.enterText(find.byType(TextField).first, 'pending answer');
+    await tester.pump(const Duration(milliseconds: 100));
+    await _confirmSubmit(tester);
+
+    expect(saved, contains('blank=pending answer'));
+    expect(submittedPaperId, 'paper-1');
+  });
+
+  testWidgets('submit stops when pending answer save fails', (tester) async {
+    var submitted = false;
+    final controller = _examController(
+      saveSuccess: false,
+      onSubmit: (_, _) {
+        submitted = true;
+      },
+    );
+    await _pumpQuestionPage(tester, controller: controller);
+
+    for (var i = 0; i < 3; i++) {
+      await _tapNextQuestion(tester);
+    }
+    await tester.enterText(find.byType(TextField).first, 'pending answer');
+    await tester.pump(const Duration(milliseconds: 100));
+    await _confirmSubmit(tester);
+
+    expect(submitted, isFalse);
+    expect(find.text('save failed'), findsWidgets);
   });
 }

@@ -15,7 +15,9 @@ import 'tronclass_auth.dart';
 class CredentialManager {
   static const int _defaultExpiryDays = 7;
   static const int _refreshThresholdHours = 24;
+  static const Duration _refreshSuccessCooldown = Duration(seconds: 8);
   static final Map<String, Future<bool>> _refreshInFlight = {};
+  static final Map<String, DateTime> _recentRefreshSuccess = {};
 
   /// Parse cookie expiry from a Set-Cookie header.
   static int? parseCookieExpiry(String setCookieHeader) {
@@ -59,6 +61,11 @@ class CredentialManager {
 
   static String _refreshKey(User user) =>
       '${user.platform.toLowerCase()}_${user.uid}';
+
+  static void resetForTests() {
+    _refreshInFlight.clear();
+    _recentRefreshSuccess.clear();
+  }
 
   /// Update user credential expiry after a successful request.
   static Future<User> updateCredentialExpiry(
@@ -149,6 +156,16 @@ class CredentialManager {
           : existing.timeout(timeout, onTimeout: () => false);
     }
 
+    final recentSuccess = _recentRefreshSuccess[key];
+    if (recentSuccess != null &&
+        DateTime.now().difference(recentSuccess) < _refreshSuccessCooldown) {
+      ApiService.appendExternalConsoleLog(
+        user.platform,
+        '[CredentialManager] reuse recent refresh userId=${user.uid}',
+      );
+      return true;
+    }
+
     final future = refreshCredential(user);
     _refreshInFlight[key] = future;
 
@@ -162,6 +179,9 @@ class CredentialManager {
       final result = timeout == null
           ? await future
           : await future.timeout(timeout, onTimeout: () => false);
+      if (result) {
+        _recentRefreshSuccess[key] = DateTime.now();
+      }
       if (startupMode) {
         ApiService.logStartupRecovery(
           '[CredentialManager] refresh done userId=${user.uid} success=$result',
@@ -234,6 +254,7 @@ class CredentialManager {
       if (sessionId != null && sessionId.isNotEmpty) {
         final bootstrapped = await TCLoginApi.bootstrapPortalSession(
           sessionId: sessionId,
+          dedupeKey: 'tronclass:${user.uid}',
         );
         if (bootstrapped) {
           final updated = await updateCredentialExpiry(user, notify: false);
@@ -309,11 +330,6 @@ class CredentialManager {
   static Future<bool> _refreshKetangpai(User user) async {
     try {
       if (user.token.isEmpty) {
-        return false;
-      }
-
-      final isValid = await KTLoginApi.checkTokenStatus(user.token);
-      if (!isValid) {
         return false;
       }
 

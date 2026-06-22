@@ -882,11 +882,30 @@ class _ToolsPageState extends State<ToolsPage>
           initialQuery: _toolSearchQuery,
           actions: actions,
           onQueryChanged: (value) {
-            setState(() => _toolSearchQuery = value);
+            _setToolSearchQuery(value);
           },
         );
       },
     );
+  }
+
+  void _setToolSearchQuery(String value) {
+    if (_toolSearchQuery == value && _toolSearchController.text == value) {
+      return;
+    }
+    setState(() {
+      _toolSearchQuery = value;
+      if (_toolSearchController.text != value) {
+        _toolSearchController.value = TextEditingValue(
+          text: value,
+          selection: TextSelection.collapsed(offset: value.length),
+        );
+      }
+    });
+  }
+
+  void _clearToolSearch() {
+    _setToolSearchQuery('');
   }
 
   List<_ToolActionSpec> _filteredActions(List<_ToolCategorySpec> categories) {
@@ -1012,10 +1031,6 @@ class _ToolsPageState extends State<ToolsPage>
                 'Search tools, PDF, transfer, cloud...',
               ),
               searchController: _toolSearchController,
-              onSearchChanged: (value) {
-                setState(() => _toolSearchQuery = value);
-                _openToolSearch();
-              },
               onSearchTap: _openToolSearch,
             ),
           ),
@@ -1048,6 +1063,27 @@ class _ToolsPageState extends State<ToolsPage>
             ),
           ),
         ),
+        if (_toolSearchQuery.trim().isNotEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            sliver: SliverToBoxAdapter(
+              child: _ToolSearchResultsSection(
+                title: _tr('\u641c\u7d22\u7ed3\u679c', 'Search results'),
+                subtitle: _tr(
+                  '\u5df2\u5728\u5168\u90e8\u5de5\u5177\u4e2d\u7b5b\u9009\u5339\u914d\u9879\u3002',
+                  'Matching tools from every category.',
+                ),
+                emptyText: _tr(
+                  '\u6ca1\u6709\u627e\u5230\u5339\u914d\u5de5\u5177',
+                  'No matching tools',
+                ),
+                clearLabel: _tr('\u6e05\u7a7a', 'Clear'),
+                query: _toolSearchQuery,
+                actions: _filteredActions(categories),
+                onClear: _clearToolSearch,
+              ),
+            ),
+          ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
           sliver: SliverToBoxAdapter(
@@ -1117,20 +1153,26 @@ class _ToolsPageState extends State<ToolsPage>
   }
 
   Widget _buildCategoryShortcutGrid(List<_ToolCategorySpec> categories) {
-    return SliverGrid(
-      delegate: SliverChildBuilderDelegate((context, index) {
-        return _ToolCategoryShortcutCard(
-          category: categories[index],
-          selected: index == _selectedToolCategory,
-          onTap: () => _selectToolCategory(index),
+    return SliverLayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.crossAxisExtent - 32;
+        final columns = width >= 720 ? 3 : 2;
+        return SliverGrid(
+          delegate: SliverChildBuilderDelegate((context, index) {
+            return _ToolCategoryShortcutCard(
+              category: categories[index],
+              selected: index == _selectedToolCategory,
+              onTap: () => _selectToolCategory(index),
+            );
+          }, childCount: categories.length),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: width < 380 ? 1.78 : 2.28,
+          ),
         );
-      }, childCount: categories.length),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 2.35,
-      ),
+      },
     );
   }
 
@@ -2965,7 +3007,6 @@ class _ToolCommandHeader extends StatelessWidget {
     required this.statusText,
     required this.searchHint,
     required this.searchController,
-    required this.onSearchChanged,
     this.onSearchTap,
   });
 
@@ -2975,7 +3016,6 @@ class _ToolCommandHeader extends StatelessWidget {
   final String statusText;
   final String searchHint;
   final TextEditingController searchController;
-  final ValueChanged<String> onSearchChanged;
   final VoidCallback? onSearchTap;
 
   @override
@@ -3040,23 +3080,31 @@ class _ToolCommandHeader extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          TextField(
-            controller: searchController,
-            onChanged: onSearchChanged,
-            onTap: onSearchTap,
-            decoration: InputDecoration(
-              hintText: searchHint,
-              prefixIcon: const Icon(Icons.search_rounded),
-              isDense: true,
-              filled: true,
-              fillColor: colorScheme.surface.withValues(alpha: 0.86),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide.none,
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 12,
+          Semantics(
+            button: true,
+            textField: true,
+            label: searchHint,
+            child: TextField(
+              controller: searchController,
+              readOnly: true,
+              showCursor: false,
+              canRequestFocus: false,
+              onTap: onSearchTap,
+              decoration: InputDecoration(
+                hintText: searchHint,
+                prefixIcon: const Icon(Icons.search_rounded),
+                suffixIcon: const Icon(Icons.keyboard_arrow_up_rounded),
+                isDense: true,
+                filled: true,
+                fillColor: colorScheme.surface.withValues(alpha: 0.86),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
               ),
             ),
           ),
@@ -3761,37 +3809,43 @@ class _WheelNodeButton extends StatelessWidget {
 
     return Transform.translate(
       offset: offset,
-      child: GestureDetector(
-        onTap: () => onSelected(index),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          width: selected ? 70 : 58,
-          height: selected ? 70 : 58,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Color.alphaBlend(
-              category.color.withValues(alpha: selected ? 0.20 : 0.10),
-              Theme.of(context).colorScheme.surface,
+      child: Semantics(
+        button: true,
+        enabled: true,
+        selected: selected,
+        label: '${category.label}, ${category.subtitle}',
+        child: GestureDetector(
+          onTap: () => onSelected(index),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: selected ? 70 : 58,
+            height: selected ? 70 : 58,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color.alphaBlend(
+                category.color.withValues(alpha: selected ? 0.20 : 0.10),
+                Theme.of(context).colorScheme.surface,
+              ),
+              border: Border.all(
+                color: category.color.withValues(alpha: selected ? 0.7 : 0.25),
+                width: selected ? 2 : 1,
+              ),
+              boxShadow: [
+                if (selected)
+                  BoxShadow(
+                    color: category.color.withValues(alpha: 0.22),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+              ],
             ),
-            border: Border.all(
-              color: category.color.withValues(alpha: selected ? 0.7 : 0.25),
-              width: selected ? 2 : 1,
-            ),
-            boxShadow: [
-              if (selected)
-                BoxShadow(
-                  color: category.color.withValues(alpha: 0.22),
-                  blurRadius: 20,
-                  offset: const Offset(0, 8),
-                ),
-            ],
-          ),
-          child: Transform.rotate(
-            angle: -wheelRotation,
-            child: Icon(
-              category.icon,
-              color: category.color,
-              size: selected ? 31 : 27,
+            child: Transform.rotate(
+              angle: -wheelRotation,
+              child: Icon(
+                category.icon,
+                color: category.color,
+                size: selected ? 31 : 27,
+              ),
             ),
           ),
         ),
@@ -4030,6 +4084,116 @@ class _ToolSectionTitle extends StatelessWidget {
   }
 }
 
+class _ToolSearchResultsSection extends StatelessWidget {
+  const _ToolSearchResultsSection({
+    required this.title,
+    required this.subtitle,
+    required this.emptyText,
+    required this.clearLabel,
+    required this.query,
+    required this.actions,
+    required this.onClear,
+  });
+
+  final String title;
+  final String subtitle;
+  final String emptyText;
+  final String clearLabel;
+  final String query;
+  final List<_ToolActionSpec> actions;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return AppCard(
+      elevation: 0,
+      radius: 22,
+      border: Border.all(color: _dashboardPrimary.withValues(alpha: 0.16)),
+      color: _dashboardSurface(context, _dashboardPrimary),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _ToolIconBox(
+                icon: Icons.manage_search_rounded,
+                color: _dashboardPrimary,
+              ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 180),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$title · ${actions.length}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$subtitle "$query"',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton.icon(
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded, size: 18),
+                label: Text(clearLabel),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (actions.isEmpty)
+            _ToolEmptySearchCard(text: emptyText)
+          else
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 760
+                    ? 3
+                    : constraints.maxWidth >= 460
+                    ? 2
+                    : 1;
+                final spacing = columns == 1 ? 10.0 : 12.0;
+                final tileHeight = columns == 1 ? 108.0 : 132.0;
+                return Wrap(
+                  spacing: spacing,
+                  runSpacing: spacing,
+                  children: actions
+                      .map(
+                        (action) => SizedBox(
+                          width:
+                              (constraints.maxWidth - spacing * (columns - 1)) /
+                              columns,
+                          height: tileHeight,
+                          child: _ToolActionCard(action: action),
+                        ),
+                      )
+                      .toList(),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ToolActionCard extends StatelessWidget {
   const _ToolActionCard({required this.action});
 
@@ -4136,57 +4300,69 @@ class _ToolCategoryShortcutCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AppCard(
-      elevation: 0,
-      radius: 18,
-      onTap: onTap,
-      border: Border.all(
-        color: category.color.withValues(alpha: selected ? 0.52 : 0.16),
-        width: selected ? 1.6 : 1,
-      ),
-      color: Color.alphaBlend(
-        category.color.withValues(alpha: selected ? 0.14 : 0.055),
-        theme.colorScheme.surface,
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: category.color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(category.icon, color: category.color, size: 23),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 176;
+        return AppCard(
+          elevation: 0,
+          radius: 18,
+          onTap: onTap,
+          padding: EdgeInsets.all(compact ? 12 : 16),
+          border: Border.all(
+            color: category.color.withValues(alpha: selected ? 0.52 : 0.16),
+            width: selected ? 1.6 : 1,
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  category.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  category.subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
+          color: Color.alphaBlend(
+            category.color.withValues(alpha: selected ? 0.14 : 0.055),
+            theme.colorScheme.surface,
           ),
-        ],
-      ),
+          child: Row(
+            children: [
+              Container(
+                width: compact ? 36 : 42,
+                height: compact ? 36 : 42,
+                decoration: BoxDecoration(
+                  color: category.color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(compact ? 12 : 14),
+                ),
+                child: Icon(
+                  category.icon,
+                  color: category.color,
+                  size: compact ? 20 : 23,
+                ),
+              ),
+              SizedBox(width: compact ? 8 : 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      category.label,
+                      maxLines: compact ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        height: 1.08,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      category.subtitle,
+                      maxLines: compact ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.15,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

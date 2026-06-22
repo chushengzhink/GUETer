@@ -9,6 +9,7 @@ import '../../../models/active.dart';
 import '../../../platform.dart';
 import '../../../session/account.dart';
 import '../../../session/sign_record_store.dart';
+import '../../../session/sign_mode_settings.dart';
 import '../../../services/sign_network_gate.dart';
 import '../../../services/sign_platform_context.dart';
 import '../../../services/sign_run_console.dart';
@@ -383,6 +384,7 @@ class SignInPageState extends State<SignInPage> {
                 // 账号选择
                 AccountsSelector(
                   key: _accountsSelectorKey,
+                  signModePlatform: PlatformType.chaoxing,
                   onSelectionChanged: (selected) {
                     setState(() {
                       _selectedAccounts = selected;
@@ -453,6 +455,20 @@ class SignInPageState extends State<SignInPage> {
   }
 
   Future<void> _performMultiSign() async {
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.chaoxing,
+      perRunSelection: _selectedAccounts,
+      perRunUsesAllWhenNoSelection: false,
+    );
+    if (!resolution.hasUsers) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(resolution.message ?? '请至少选择一个学习通账号')),
+        );
+      }
+      return;
+    }
+    _selectedAccounts = resolution.users;
     if (_selectedAccounts.isEmpty || _currentStrategy == null) return;
     if (_isMultiSigning) return;
 
@@ -488,7 +504,9 @@ class SignInPageState extends State<SignInPage> {
 
     final results = <String?>[];
     for (var user in _selectedAccounts) {
-      final result = await _signAccountWithNetworkGate(user);
+      final result = resolution.networkPolicy == SignSubmitNetworkPolicy.direct
+          ? await _signAccountDirect(user)
+          : await _signAccountWithNetworkGate(user);
       results.add(result);
     }
 
@@ -523,6 +541,36 @@ class SignInPageState extends State<SignInPage> {
       return '$_networkSkippedResultPrefix${gateResult.reason ?? '用户跳过'}';
     }
     return gateResult.value;
+  }
+
+  Future<String?> _signAccountDirect(User user) async {
+    _consoleController.add(
+      platform: '学习通',
+      accountName: user.name,
+      accountId: user.uid,
+      stage: SignRunStage.queued,
+      message: '平台所选：直接提交',
+    );
+    _consoleController.add(
+      platform: '学习通',
+      accountName: user.name,
+      accountId: user.uid,
+      stage: SignRunStage.signStart,
+      message: '开始提交签到',
+    );
+    try {
+      return await _currentStrategy!.signForAccount(user, _signParams, this);
+    } catch (e) {
+      _consoleController.add(
+        platform: '学习通',
+        accountName: user.name,
+        accountId: user.uid,
+        stage: SignRunStage.aborted,
+        message: '签到请求异常',
+        detail: e.toString(),
+      );
+      rethrow;
+    }
   }
 
   Future<void> _handleSignResult(

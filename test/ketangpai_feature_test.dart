@@ -155,14 +155,14 @@ void main() {
     test('sign task and outcome parse mixed response shapes', () {
       final task = KetangpaiSignTask.fromJson({
         'id': 123,
-        'type': '4',
+        'type': '2',
         'name': 'GPS签到',
         'starttime': 100,
         'endtime': 200,
         'courseid': 'course-1',
       });
       expect(task.id, '123');
-      expect(task.type, 4);
+      expect(task.type, 2);
       expect(task.name, 'GPS签到');
       expect(task.courseId, 'course-1');
 
@@ -174,6 +174,24 @@ void main() {
       expect(outcome.success, isTrue);
       expect(outcome.message, 'signed');
       expect(outcome.state, 8);
+    });
+
+    test('sign task accepts alternate id type title and course fields', () {
+      final task = KetangpaiSignTask.fromJson({
+        'signId': 456,
+        'signType': '1',
+        'title': '数字签到',
+        'startTime': '08:00',
+        'endTime': '08:10',
+        'courseId': 'course-2',
+      });
+
+      expect(task.id, '456');
+      expect(task.type, 1);
+      expect(task.name, '数字签到');
+      expect(task.startTime, '08:00');
+      expect(task.endTime, '08:10');
+      expect(task.courseId, 'course-2');
     });
   });
 
@@ -300,6 +318,35 @@ void main() {
       expect(paper.remainingTimes, 2);
       expect(paper.fallbackNumber, 1);
     });
+
+    test('exam summary accepts alternate paper id fields', () {
+      final summary = KetangpaiExamSummary.fromJson({
+        'testPaperId': 123,
+        'title': 'exam',
+      });
+
+      expect(summary.id, '123');
+    });
+
+    test('normalizes HTML wrapped myanswer for text questions', () {
+      final question = KetangpaiExamQuestion.fromJson({
+        'id': 'q1',
+        'type': '4',
+        'myanswer': '<p>first&nbsp;line</p><p>Tom &amp; Jerry</p>',
+      });
+
+      expect(question.myAnswer, 'first line\nTom & Jerry');
+    });
+
+    test('exam paper accepts alternate question list fields', () {
+      final paper = KetangpaiExamPaper.fromJson({
+        'questions': [
+          {'id': 'q1', 'type': '2'},
+        ],
+      });
+
+      expect(paper.questions.single.id, 'q1');
+    });
   });
 
   group('Ketangpai service helpers', () {
@@ -406,6 +453,50 @@ void main() {
       expect(saved.message, 'saved');
       expect(submitted.success, isTrue);
       expect(submitted.message, 'submitted');
+    });
+
+    test('builds sign and exam request bodies matching reference API', () {
+      expect(
+        KetangpaiService.buildNumberSignBody(signId: 'sign-1', code: '1234'),
+        {'id': 'sign-1', 'code': '1234'},
+      );
+      expect(
+        KetangpaiService.buildGpsSignBody(
+          signId: 'sign-1',
+          latitude: '25.3',
+          longitude: '110.4',
+        ),
+        {
+          'id': 'sign-1',
+          'code': '',
+          'unusual': 0,
+          'latitude': '25.3',
+          'longitude': '110.4',
+          'accuracy': '100',
+          'clienttype': 1,
+        },
+      );
+      expect(KetangpaiService.buildExamListBody(courseId: 'course-1'), {
+        'courseid': 'course-1',
+        'contenttype': 6,
+        'dirid': 0,
+        'lessonlink': <dynamic>[],
+        'sort': <dynamic>[],
+        'page': 1,
+        'limit': 50,
+        'desc': 3,
+        'courserole': 0,
+        'vtr_type': '',
+      });
+      expect(
+        KetangpaiService.buildSaveAnswerBody(
+          courseId: 'course-1',
+          testPaperId: 'paper-1',
+          subjectId: 'q1',
+          answer: 'A',
+        ),
+        containsPair('attachment', ''),
+      );
     });
   });
 }

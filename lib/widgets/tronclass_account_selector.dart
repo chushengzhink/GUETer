@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import '../session/account.dart';
+import '../session/sign_mode_settings.dart';
 
 class TronclassAccountSelector extends StatefulWidget {
   const TronclassAccountSelector({
@@ -28,6 +29,10 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
   List<User> _accounts = <User>[];
   Set<String> _selectedIds = <String>{};
   String? _currentUserId;
+  SignAccountMode _mode = SignAccountMode.perRunSelection;
+  String? _lockedMessage;
+
+  bool get _isLockedMode => _mode != SignAccountMode.perRunSelection;
 
   @override
   void initState() {
@@ -36,16 +41,32 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
     _loadAccounts();
   }
 
-  void _loadAccounts() {
+  Future<void> _loadAccounts() async {
     _accounts = AccountManager.getAccountsForPlatform(PlatformType.tronclass);
     _currentUserId = AccountManager.currentSessionId;
+    _mode = await SignModeSettings.getMode(PlatformType.tronclass);
 
     final currentAccount = _accounts
         .where((user) => user.uid == _currentUserId)
         .cast<User?>()
         .firstOrNull;
-    final defaultAccount = currentAccount ?? _accounts.firstOrNull;
-    _selectedIds = defaultAccount == null ? <String>{} : {defaultAccount.uid};
+    if (_mode == SignAccountMode.manualCurrent) {
+      _selectedIds = currentAccount == null ? <String>{} : {currentAccount.uid};
+      _lockedMessage = currentAccount == null
+          ? '模式一：请先在账号页切换到当前畅课账号'
+          : '模式一：仅使用当前畅课账号签到';
+    } else if (_mode == SignAccountMode.savedPlatformSelection) {
+      _selectedIds = await SignModeSettings.getSelectedAccountIds(
+        PlatformType.tronclass,
+      );
+      _lockedMessage = _selectedIds.isEmpty
+          ? '模式二：暂无签到账号，请到账号页勾选下方账号后保存'
+          : '模式二：使用账号页保存的畅课签到账号';
+    } else {
+      final defaultAccount = currentAccount ?? _accounts.firstOrNull;
+      _selectedIds = defaultAccount == null ? <String>{} : {defaultAccount.uid};
+      _lockedMessage = null;
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -71,6 +92,7 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
   }
 
   void _toggleUser(User user, bool selected) {
+    if (_isLockedMode) return;
     final next = Set<String>.from(_selectedIds);
     if (selected) {
       next.add(user.uid);
@@ -81,10 +103,12 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
   }
 
   void _selectAll() {
+    if (_isLockedMode) return;
     _setSelectedIds(_accounts.map((user) => user.uid).toSet());
   }
 
   void _invertSelection() {
+    if (_isLockedMode) return;
     _setSelectedIds(
       _accounts
           .where((user) => !_selectedIds.contains(user.uid))
@@ -94,6 +118,7 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
   }
 
   void _clearSelection() {
+    if (_isLockedMode) return;
     _setSelectedIds(<String>{});
   }
 
@@ -123,9 +148,10 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
           subtitle: Text(
-            _accounts.isEmpty
-                ? '未找到已绑定畅课账号'
-                : '已选 ${_selectedIds.length}/${_accounts.length}',
+            _lockedMessage ??
+                (_accounts.isEmpty
+                    ? '未找到已绑定畅课账号'
+                    : '已选 ${_selectedIds.length}/${_accounts.length}'),
           ),
           childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
           children: [
@@ -141,17 +167,21 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
               Row(
                 children: [
                   TextButton.icon(
-                    onPressed: enabled ? _selectAll : null,
+                    onPressed: enabled && !_isLockedMode ? _selectAll : null,
                     icon: const Icon(Icons.done_all_rounded, size: 18),
                     label: const Text('全选'),
                   ),
                   TextButton.icon(
-                    onPressed: enabled ? _invertSelection : null,
+                    onPressed: enabled && !_isLockedMode
+                        ? _invertSelection
+                        : null,
                     icon: const Icon(Icons.swap_horiz_rounded, size: 18),
                     label: const Text('反选'),
                   ),
                   TextButton.icon(
-                    onPressed: enabled ? _clearSelection : null,
+                    onPressed: enabled && !_isLockedMode
+                        ? _clearSelection
+                        : null,
                     icon: const Icon(Icons.clear_rounded, size: 18),
                     label: const Text('清空'),
                   ),
@@ -160,7 +190,7 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
               for (final user in _accounts)
                 CheckboxListTile(
                   value: _selectedIds.contains(user.uid),
-                  onChanged: enabled
+                  onChanged: enabled && !_isLockedMode
                       ? (value) => _toggleUser(user, value == true)
                       : null,
                   title: Row(

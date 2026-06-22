@@ -5,8 +5,8 @@ import '../platform.dart';
 import '../services/sign_network_gate.dart';
 import '../services/sign_run_console.dart';
 import '../session/sign_record_store.dart';
+import 'ketangpai_response.dart';
 import 'kt_sign.dart';
-import 'login.dart';
 
 class KtFollowSignResult {
   const KtFollowSignResult({
@@ -20,6 +20,9 @@ class KtFollowSignResult {
   final List<String> failedAccounts;
 }
 
+typedef KetangpaiFollowSignAction =
+    Future<KetangpaiSignResult> Function(User user);
+
 class KtFollowSignExecutor {
   static Future<KtFollowSignResult> signByScan({
     required String scanUrl,
@@ -30,8 +33,9 @@ class KtFollowSignExecutor {
     SignRunConsoleController? console,
     SignNetworkGate? networkGate,
     bool Function()? isContextMounted,
+    bool reconnectNetwork = true,
   }) {
-    return _execute(
+    return debugExecute(
       users: users,
       courseName: courseName,
       tokenHealthHint: tokenHealthHint,
@@ -39,6 +43,7 @@ class KtFollowSignExecutor {
       console: console,
       networkGate: networkGate,
       isContextMounted: isContextMounted,
+      reconnectNetwork: reconnectNetwork,
       signTypeLabel: '扫码签到',
       signAction: (user) => KTSignApi.scanToSignResult(scanUrl, user.token),
     );
@@ -54,8 +59,9 @@ class KtFollowSignExecutor {
     SignRunConsoleController? console,
     SignNetworkGate? networkGate,
     bool Function()? isContextMounted,
+    bool reconnectNetwork = true,
   }) {
-    return _execute(
+    return debugExecute(
       users: users,
       courseName: courseName,
       tokenHealthHint: tokenHealthHint,
@@ -63,6 +69,7 @@ class KtFollowSignExecutor {
       console: console,
       networkGate: networkGate,
       isContextMounted: isContextMounted,
+      reconnectNetwork: reconnectNetwork,
       signTypeLabel: '数字签到',
       signAction: (user) => KTSignApi.numberSignResult(
         code: code,
@@ -85,8 +92,9 @@ class KtFollowSignExecutor {
     SignRunConsoleController? console,
     SignNetworkGate? networkGate,
     bool Function()? isContextMounted,
+    bool reconnectNetwork = true,
   }) {
-    return _execute(
+    return debugExecute(
       users: users,
       courseName: courseName,
       tokenHealthHint: tokenHealthHint,
@@ -94,6 +102,7 @@ class KtFollowSignExecutor {
       console: console,
       networkGate: networkGate,
       isContextMounted: isContextMounted,
+      reconnectNetwork: reconnectNetwork,
       signTypeLabel: 'GPS签到',
       signAction: (user) => KTSignApi.gpsSignResult(
         token: user.token,
@@ -119,8 +128,9 @@ class KtFollowSignExecutor {
     SignRunConsoleController? console,
     SignNetworkGate? networkGate,
     bool Function()? isContextMounted,
+    bool reconnectNetwork = true,
   }) {
-    return _execute(
+    return debugExecute(
       users: users,
       courseName: courseName,
       tokenHealthHint: tokenHealthHint,
@@ -128,6 +138,7 @@ class KtFollowSignExecutor {
       console: console,
       networkGate: networkGate,
       isContextMounted: isContextMounted,
+      reconnectNetwork: reconnectNetwork,
       signTypeLabel: '签入签出',
       signAction: (user) => KTSignApi.checkInOutSignResult(
         token: user.token,
@@ -139,16 +150,18 @@ class KtFollowSignExecutor {
     );
   }
 
-  static Future<KtFollowSignResult> _execute({
+  @visibleForTesting
+  static Future<KtFollowSignResult> debugExecute({
     required List<User> users,
     required String courseName,
     required String signTypeLabel,
-    required Future<KetangpaiSignResult> Function(User user) signAction,
+    required KetangpaiFollowSignAction signAction,
     Map<String, bool>? tokenHealthHint,
     BuildContext? context,
     SignRunConsoleController? console,
     SignNetworkGate? networkGate,
     bool Function()? isContextMounted,
+    bool reconnectNetwork = true,
   }) async {
     final failedAccounts = <String>[];
     var successCount = 0;
@@ -184,33 +197,19 @@ class KtFollowSignExecutor {
         continue;
       }
 
-      final tokenHealthy =
-          tokenHealthHint?[user.uid] ??
-          await KTLoginApi.checkTokenStatus(token);
-      if (!tokenHealthy) {
+      if (tokenHealthHint?[user.uid] == false) {
         console?.add(
           platform: '课堂派',
           accountName: user.name,
           accountId: user.uid,
-          stage: SignRunStage.signFailure,
-          message: 'token失效，请重新登录',
+          stage: SignRunStage.sessionCheck,
+          message: 'token 探活待确认，继续尝试签到',
         );
-        failedAccounts.add('${user.name} (token失效)');
-        await logStore.append(
-          platform: '课堂派',
-          platformType: PlatformType.ketangpai,
-          courseName: courseName,
-          account: user.name,
-          status: '失败',
-          detail: 'token失效，请重新登录',
-        );
-        continue;
       }
 
       try {
-        final gate = networkGate ?? SignNetworkGate();
         final KetangpaiSignResult signResult;
-        if (context != null && console != null) {
+        if (context != null && console != null && reconnectNetwork) {
           if (!context.mounted ||
               (isContextMounted != null && !isContextMounted())) {
             failedAccounts.add('${user.name} (页面已关闭)');
@@ -224,6 +223,7 @@ class KtFollowSignExecutor {
             );
             continue;
           }
+          final gate = networkGate ?? SignNetworkGate();
           final gateResult = await gate.run<KetangpaiSignResult>(
             context: context,
             platformLabel: '课堂派',
@@ -244,9 +244,24 @@ class KtFollowSignExecutor {
             );
             continue;
           }
-          signResult =
-              gateResult.value ?? KetangpaiSignResult.failure('???????');
+          signResult = gateResult.value ?? KetangpaiSignResult.failure('签到无响应');
         } else {
+          if (console != null) {
+            console.add(
+              platform: '课堂派',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.queued,
+              message: reconnectNetwork ? '等待签到' : '平台所选：直接提交',
+            );
+            console.add(
+              platform: '课堂派',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signStart,
+              message: '开始提交签到',
+            );
+          }
           signResult = await signAction(user);
         }
 
@@ -270,7 +285,9 @@ class KtFollowSignExecutor {
                 : signTypeLabel,
           );
         } else {
-          final reason = signResult.message.isNotEmpty
+          final reason = isKetangpaiAuthExpired(signResult.raw)
+              ? '登录态过期，请重新登录'
+              : signResult.message.isNotEmpty
               ? signResult.message
               : '$signTypeLabel 失败';
           console?.add(

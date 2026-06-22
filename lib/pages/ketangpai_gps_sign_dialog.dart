@@ -59,6 +59,7 @@ class _KetangpaiGpsSignDialogState extends State<KetangpaiGpsSignDialog> {
     text: '100',
   );
   String? _error;
+  KtSignRecord? _lastRecord;
   late final String _signControllerTag;
   late final SignController _signController;
 
@@ -95,6 +96,10 @@ class _KetangpaiGpsSignDialogState extends State<KetangpaiGpsSignDialog> {
     final latValue = double.tryParse(latitude);
     final lngValue = double.tryParse(longitude);
     final accuracyValue = double.tryParse(accuracy);
+    setState(() {
+      _error = null;
+      _lastRecord = null;
+    });
     if (latValue == null ||
         latValue < -90 ||
         latValue > 90 ||
@@ -116,7 +121,21 @@ class _KetangpaiGpsSignDialogState extends State<KetangpaiGpsSignDialog> {
           accuracy: accuracy,
         ),
       );
-      await _signController.gpsSign(widget.signId?.trim() ?? '');
+      final record = await _signController.gpsSign(widget.signId?.trim() ?? '');
+      if (!mounted) return;
+      setState(() {
+        _lastRecord = record;
+        _error = record.success ? null : record.message;
+      });
+      if (record.success) {
+        Navigator.of(context).pop(
+          KetangpaiGpsSignConfig(
+            latitude: latitude,
+            longitude: longitude,
+            accuracy: accuracy,
+          ),
+        );
+      }
       return;
     }
     Navigator.of(context).pop(
@@ -132,11 +151,19 @@ class _KetangpaiGpsSignDialogState extends State<KetangpaiGpsSignDialog> {
   Widget build(BuildContext context) {
     return Obx(() {
       final isLoading = _signController.signStatus.value == SignStatus.loading;
+      final record = _lastRecord;
       return AlertDialog(
         title: const Text('GPS 签到'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Text(
+              '默认坐标 25.3 / 110.4 仅作参考；如课堂派启用地理围栏，请输入现场真实坐标后提交。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _latitudeController,
               enabled: !isLoading,
@@ -170,6 +197,13 @@ class _KetangpaiGpsSignDialogState extends State<KetangpaiGpsSignDialog> {
               Text(
                 _error!,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            if (record?.success == true) ...[
+              const SizedBox(height: 12),
+              Text(
+                record!.message,
+                style: TextStyle(color: Theme.of(context).colorScheme.primary),
               ),
             ],
             if (isLoading) ...[

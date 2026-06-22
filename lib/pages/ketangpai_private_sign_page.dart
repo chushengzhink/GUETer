@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../api/course.dart';
 import '../api/kt_follow_sign.dart';
-import '../api/login.dart';
 import '../models/course.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import '../services/sign_platform_context.dart';
 import '../services/sign_run_console.dart';
 import '../session/account.dart';
+import '../session/sign_mode_settings.dart';
 import '../widgets/sign_run_console_panel.dart';
 import 'ketangpai_scan_sign_page.dart';
 import 'ketangpai_number_sign_page.dart';
@@ -114,11 +114,7 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     final result = <String, bool>{};
     for (final user in users) {
       final token = user.token.trim();
-      if (token.isEmpty) {
-        result[user.uid] = false;
-        continue;
-      }
-      result[user.uid] = await KTLoginApi.checkTokenStatus(token);
+      result[user.uid] = token.isNotEmpty;
     }
     return result;
   }
@@ -150,27 +146,38 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     }
   }
 
+  Future<SignModeResolution?> _resolveSignUsers() async {
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.ketangpai,
+      perRunSelection: _users
+          .where((user) => _selectedUserIds.contains(user.uid))
+          .toList(growable: false),
+      perRunUsesAllWhenNoSelection: false,
+    );
+    if (resolution.users.isEmpty && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resolution.message ?? '请先选择至少一个账号')),
+      );
+    }
+    return resolution.users.isEmpty ? null : resolution;
+  }
+
   Future<void> _signSelectedByScan(String url) async {
-    if (_selectedUserIds.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('请先选择至少一个账号')));
-      }
+    final resolution = await _resolveSignUsers();
+    if (resolution == null) {
       return;
     }
-
-    final selectedUsers = _users
-        .where((user) => _selectedUserIds.contains(user.uid))
-        .toList();
+    if (!mounted) return;
     final result = await KtFollowSignExecutor.signByScan(
       scanUrl: url,
-      users: selectedUsers,
+      users: resolution.users,
       courseName: '课堂派扫码签到',
       tokenHealthHint: _tokenHealth,
       context: context,
       console: _consoleController,
       isContextMounted: () => mounted,
+      reconnectNetwork:
+          resolution.networkPolicy == SignSubmitNetworkPolicy.reconnect,
     );
 
     if (!mounted) return;
@@ -213,21 +220,22 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     String signId,
     String courseName,
   ) async {
-    if (_selectedUserIds.isEmpty) {
+    final resolution = await _resolveSignUsers();
+    if (resolution == null) {
       return;
     }
-    final selectedUsers = _users
-        .where((user) => _selectedUserIds.contains(user.uid))
-        .toList();
+    if (!mounted) return;
     final result = await KtFollowSignExecutor.signByNumber(
       code: code,
       signId: signId,
-      users: selectedUsers,
+      users: resolution.users,
       courseName: courseName,
       tokenHealthHint: _tokenHealth,
       context: context,
       console: _consoleController,
       isContextMounted: () => mounted,
+      reconnectNetwork:
+          resolution.networkPolicy == SignSubmitNetworkPolicy.reconnect,
     );
     if (!mounted) return;
     _showBatchSignResult(
@@ -244,15 +252,14 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     String courseId,
     KetangpaiGpsSignConfig gpsConfig,
   ) async {
-    if (_selectedUserIds.isEmpty) {
+    final resolution = await _resolveSignUsers();
+    if (resolution == null) {
       return;
     }
-    final selectedUsers = _users
-        .where((user) => _selectedUserIds.contains(user.uid))
-        .toList();
+    if (!mounted) return;
     final result = await KtFollowSignExecutor.signByGps(
       signId: signId,
-      users: selectedUsers,
+      users: resolution.users,
       courseName: courseName,
       tokenHealthHint: _tokenHealth,
       courseId: courseId, // 传递 courseId 用于读取 GPS 坐标配置
@@ -262,42 +269,12 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       context: context,
       console: _consoleController,
       isContextMounted: () => mounted,
+      reconnectNetwork:
+          resolution.networkPolicy == SignSubmitNetworkPolicy.reconnect,
     );
     if (!mounted) return;
     _showBatchSignResult(
       title: 'GPS签到结果',
-      successCount: result.successCount,
-      totalCount: result.totalCount,
-      failedAccounts: result.failedAccounts,
-    );
-  }
-
-  Future<void> _signSelectedByCheckInOut(
-    String signId,
-    String courseName,
-    KetangpaiGpsSignConfig? gpsConfig,
-  ) async {
-    if (_selectedUserIds.isEmpty) {
-      return;
-    }
-    final selectedUsers = _users
-        .where((user) => _selectedUserIds.contains(user.uid))
-        .toList();
-    final result = await KtFollowSignExecutor.signByCheckInOut(
-      signId: signId,
-      users: selectedUsers,
-      courseName: courseName,
-      tokenHealthHint: _tokenHealth,
-      latitude: gpsConfig?.latitude,
-      longitude: gpsConfig?.longitude,
-      accuracy: gpsConfig?.accuracy,
-      context: context,
-      console: _consoleController,
-      isContextMounted: () => mounted,
-    );
-    if (!mounted) return;
-    _showBatchSignResult(
-      title: '签入签出结果',
       successCount: result.successCount,
       totalCount: result.totalCount,
       failedAccounts: result.failedAccounts,
@@ -345,27 +322,10 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
       if (result != null && result.isNotEmpty) {
         await _signSelectedByScan(result);
       }
-    } else if (entry.signType == 4) {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('签入签出'),
-          content: const Text('确认进行签入签出操作？'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('确定'),
-            ),
-          ],
-        ),
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('暂不支持的课堂派签到类型: ${entry.signType}')),
       );
-      if (confirm == true) {
-        await _signSelectedByCheckInOut(entry.signId, entry.course.name, null);
-      }
     }
     if (mounted) {
       setState(() {});
@@ -497,11 +457,24 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
         return 'GPS签到';
       case 3:
         return '扫码签到';
-      case 4:
-        return '签入签出';
       default:
-        return '未知类型';
+        return '暂不支持';
     }
+  }
+
+  _SigningCourseEntry? _firstEntryOfType(int type) {
+    for (final entry in _signingCourses) {
+      if (entry.signType == type) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  void _showNoMatchingSignTask(int type) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('当前没有${_signWayLabel(type)}任务')));
   }
 
   Future<void> _showSignWayDialog() async {
@@ -531,14 +504,18 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     if (result == 1) {
       await _handleRoomScanSign();
     } else if (result == 2) {
-      final entry = _signingCourses.isNotEmpty ? _signingCourses.first : null;
+      final entry = _firstEntryOfType(1);
       if (entry != null) {
         await _handleCourseSign(entry);
+      } else if (mounted) {
+        _showNoMatchingSignTask(1);
       }
     } else if (result == 3) {
-      final entry = _signingCourses.isNotEmpty ? _signingCourses.first : null;
+      final entry = _firstEntryOfType(2);
       if (entry != null) {
         await _handleCourseSign(entry);
+      } else if (mounted) {
+        _showNoMatchingSignTask(2);
       }
     }
   }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -463,6 +464,14 @@ void main() {
         TronclassLoginNextAction.failure,
       );
       expect(
+        resolveTronclassLoginNextAction({
+          'ok': false,
+          'authRedirectFailure': true,
+          'casRedirectMissing': true,
+        }),
+        TronclassLoginNextAction.failure,
+      );
+      expect(
         resolveTronclassLoginNextAction(null),
         TronclassLoginNextAction.failure,
       );
@@ -470,6 +479,342 @@ void main() {
   });
 
   group('Tronclass MFA resend state', () {
+    test('bootstrapPortalSession skips while login is active by default', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'current_platform': 'tronclass',
+      });
+      ApiService.resetForTests();
+      CookieManager.resetForTests();
+      await ApiService.initialize();
+      await PlatformManager().initialize();
+      await CookieManager.initialize();
+
+      CookieManager.isLoggingIn = true;
+      addTearDown(() => CookieManager.isLoggingIn = false);
+      var bootstrapRequests = 0;
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            bootstrapRequests++;
+            return _plainResponse(url, data: <String, dynamic>{'ok': true});
+          };
+
+      final skipped = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+      );
+      final allowed = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+      );
+
+      expect(skipped, isFalse);
+      expect(allowed, isTrue);
+      expect(bootstrapRequests, 1);
+    });
+
+    test('login-time portal bootstrap cookies do not enter legacy temp jar', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'current_platform': 'tronclass',
+      });
+      ApiService.resetForTests();
+      CookieManager.resetForTests();
+      await ApiService.initialize();
+      await PlatformManager().initialize();
+      await CookieManager.initialize();
+
+      CookieManager.isLoggingIn = true;
+      addTearDown(() => CookieManager.isLoggingIn = false);
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            return _plainResponse(
+              url,
+              data: <String, dynamic>{'user_id': 119405},
+              headers: const <String, List<String>>{
+                'set-cookie': <String>[
+                  'session=portal-session; Path=/; HttpOnly',
+                  'role_token=portal-role; Path=/; HttpOnly',
+                ],
+              },
+            );
+          };
+
+      final ok = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+      );
+
+      expect(ok, isTrue);
+      expect(CookieManager.getTempCookieJar(), isNull);
+    });
+
+    test('bootstrapPortalSession does not treat 400 set-cookie as success', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'current_platform': 'tronclass',
+      });
+      ApiService.resetForTests();
+      CookieManager.resetForTests();
+      await ApiService.initialize();
+      await PlatformManager().initialize();
+      await CookieManager.initialize();
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            return _plainResponse(
+              url,
+              statusCode: 400,
+              data: <String, dynamic>{'errors': <String>['bad session']},
+              headers: const <String, List<String>>{
+                'set-cookie': <String>['session=bad; Path=/; HttpOnly'],
+              },
+            );
+          };
+
+      final ok = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+      );
+
+      expect(ok, isFalse);
+    });
+
+    test('bootstrapPortalSession reuses recent success by dedupe key', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'current_platform': 'tronclass',
+      });
+      ApiService.resetForTests();
+      CookieManager.resetForTests();
+      await ApiService.initialize();
+      await PlatformManager().initialize();
+      await CookieManager.initialize();
+
+      var bootstrapRequests = 0;
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            bootstrapRequests++;
+            return _plainResponse(
+              url,
+              data: <String, dynamic>{'ok': true},
+              headers: const <String, List<String>>{
+                'set-cookie': <String>['session=ok; Path=/; HttpOnly'],
+              },
+            );
+          };
+
+      final first = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+        dedupeKey: 'tronclass:user',
+      );
+      final second = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+        dedupeKey: 'tronclass:user',
+      );
+
+      expect(first, isTrue);
+      expect(second, isTrue);
+      expect(bootstrapRequests, 1);
+    });
+
+    test('bootstrapPortalSession does not cache failures', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'current_platform': 'tronclass',
+      });
+      ApiService.resetForTests();
+      CookieManager.resetForTests();
+      await ApiService.initialize();
+      await PlatformManager().initialize();
+      await CookieManager.initialize();
+
+      var bootstrapRequests = 0;
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            bootstrapRequests++;
+            return _plainResponse(
+              url,
+              statusCode: 400,
+              data: <String, dynamic>{'errors': <String>['bad session']},
+            );
+          };
+
+      final first = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+        dedupeKey: 'tronclass:user',
+      );
+      final second = await TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+        dedupeKey: 'tronclass:user',
+      );
+
+      expect(first, isFalse);
+      expect(second, isFalse);
+      expect(bootstrapRequests, 6);
+    });
+
+    test('bootstrapPortalSession reuses in-flight request', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'current_platform': 'tronclass',
+      });
+      ApiService.resetForTests();
+      CookieManager.resetForTests();
+      await ApiService.initialize();
+      await PlatformManager().initialize();
+      await CookieManager.initialize();
+
+      var bootstrapRequests = 0;
+      final completer = Completer<Response<dynamic>>();
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) {
+            bootstrapRequests++;
+            return completer.future;
+          };
+
+      final firstFuture = TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+        dedupeKey: 'tronclass:user',
+      );
+      final secondFuture = TCLoginApi.bootstrapPortalSession(
+        sessionId: 'session-id',
+        allowDuringLogin: true,
+        dedupeKey: 'tronclass:user',
+      );
+      await Future<void>.delayed(Duration.zero);
+      completer.complete(
+        _plainResponse(
+          TronclassGuetConstants.portalSessionLoginUrl,
+          data: <String, dynamic>{'ok': true},
+          headers: const <String, List<String>>{
+            'set-cookie': <String>['session=ok; Path=/; HttpOnly'],
+          },
+        ),
+      );
+
+      expect(await firstFuture, isTrue);
+      expect(await secondFuture, isTrue);
+      expect(bootstrapRequests, 1);
+    });
+
+    test('Tronclass credential refresh reuses recent success', () async {
+      final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'current_platform': 'tronclass',
+        'tronclass_auth_session_tc-user': 'session-id',
+        'tronclass_auth_expiry_tc-user': nowSeconds + 3600,
+      });
+      ApiService.resetForTests();
+      CookieManager.resetForTests();
+      await ApiService.initialize();
+      await PlatformManager().initialize();
+      await AccountManager.initialize();
+      await CookieManager.initialize();
+
+      final user = User(
+        uid: 'tc-user',
+        name: 'Tronclass User',
+        avatar: '',
+        phone: '13800000000',
+        school: 'GUET',
+        platform: 'tronclass',
+        credentialExpiry: nowSeconds + 3600,
+      );
+      await AccountManager.addAccountForPlatformName(
+        'tronclass',
+        user,
+        notify: false,
+        migrateTempCookies: false,
+      );
+      await AccountManager.setCurrentSessionForPlatformName(
+        'tronclass',
+        user.uid,
+        notify: false,
+      );
+
+      var bootstrapRequests = 0;
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            bootstrapRequests++;
+            return _plainResponse(
+              url,
+              data: <String, dynamic>{'ok': true},
+              headers: const <String, List<String>>{
+                'set-cookie': <String>['session=ok; Path=/; HttpOnly'],
+              },
+            );
+          };
+
+      final first = await CredentialManager.refreshCredentialGuarded(user);
+      final second = await CredentialManager.refreshCredentialGuarded(user);
+
+      expect(first, isTrue);
+      expect(second, isTrue);
+      expect(bootstrapRequests, 1);
+    });
+
     test('shows failure dialog after auto retry exhaustion', () {
       final result = {
         'ok': false,
@@ -699,6 +1044,344 @@ void main() {
       expect(bobBfps.first, isNot(aliceBfps.first));
     });
 
+    test('identityAuth 404 with CAS login uri still continues CAS flow', () async {
+      const service =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+      final casLoginUrl =
+          'https://cas.guet.edu.cn/authserver/login?service=${Uri.encodeQueryComponent(service)}';
+      var casLoginGetCalls = 0;
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            if (url.contains('/protocol/openid-connect/auth')) {
+              return _plainResponse(casLoginUrl, statusCode: 404);
+            }
+            if (url == TronclassGuetConstants.casLoginUrl && method == 'GET') {
+              casLoginGetCalls++;
+              return _plainResponse(
+                url,
+                data:
+                    '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+              );
+            }
+            if (_isTronclassBfpUrl(url)) {
+              return _plainResponse(url, data: '{}');
+            }
+            if (url.contains('checkNeedCaptcha.htl')) {
+              return _plainResponse(url, data: '{"isNeed":false}');
+            }
+            if (url == TronclassGuetConstants.casLoginUrl && method == 'POST') {
+              return _plainResponse(
+                url,
+                statusCode: 401,
+                data:
+                    '<html><span id="showErrorTip">invalid credentials</span></html>',
+              );
+            }
+            throw StateError('Unexpected request: $method $url');
+          };
+
+      final result = await TCLoginApi.login('user', 'password');
+
+      expect(result['ok'], isNot(true));
+      expect(result['message'], isNot('未获取到 CAS service 参数'));
+      expect(casLoginGetCalls, 1);
+    });
+
+    test('CAS login GET 302 callback code completes token session', () async {
+      const service =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+      const callbackUrl =
+          'https://mobile.guet.edu.cn/cas-callback?_h5=true&code=login-get-code';
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            if (url.contains('/protocol/openid-connect/auth')) {
+              return _plainResponse(
+                'https://cas.guet.edu.cn/authserver/login?service=${Uri.encodeQueryComponent(service)}',
+              );
+            }
+            if (url == TronclassGuetConstants.casLoginUrl && method == 'GET') {
+              return _plainResponse(
+                url,
+                statusCode: 302,
+                headers: const <String, List<String>>{
+                  'location': <String>[callbackUrl],
+                },
+              );
+            }
+            if (url.contains('/protocol/openid-connect/token')) {
+              expect((body as Map)['code'], 'login-get-code');
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'access_token': 'access-token'},
+              );
+            }
+            if (url ==
+                'https://courses.guet.edu.cn/api/login?login=access_token') {
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'ok': true},
+                headers: <String, List<String>>{
+                  'x-session-id': <String>['session-id'],
+                },
+              );
+            }
+            throw StateError('Unexpected request: $method $url');
+          };
+
+      final result = await TCLoginApi.login('user', 'password');
+
+      expect(result['ok'], isTrue, reason: result.toString());
+      expect(result['sessionId'], 'session-id');
+    });
+
+    test('CAS login POST 302 callback code completes token session', () async {
+      const service =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+      const callbackUrl =
+          'https://mobile.guet.edu.cn/cas-callback?_h5=true&code=post-code';
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            if (url.contains('/protocol/openid-connect/auth')) {
+              return _plainResponse(
+                '${TronclassGuetConstants.casLoginUrl}?service=${Uri.encodeQueryComponent(service)}',
+              );
+            }
+            if (url.startsWith(TronclassGuetConstants.casLoginUrl) &&
+                method == 'GET') {
+              return _plainResponse(
+                url,
+                data:
+                    '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+              );
+            }
+            if (_isTronclassBfpUrl(url)) {
+              return _plainResponse(url, data: '{}');
+            }
+            if (url.contains('checkNeedCaptcha.htl')) {
+              return _plainResponse(url, data: '{"isNeed":false}');
+            }
+            if (url == TronclassGuetConstants.casLoginUrl &&
+                method == 'POST') {
+              return _plainResponse(
+                url,
+                statusCode: 302,
+                headers: const <String, List<String>>{
+                  'location': <String>[callbackUrl],
+                },
+              );
+            }
+            if (url.contains('/protocol/openid-connect/token')) {
+              expect((body as Map)['code'], 'post-code');
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'access_token': 'access-token'},
+              );
+            }
+            if (url ==
+                'https://courses.guet.edu.cn/api/login?login=access_token') {
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'ok': true},
+                headers: <String, List<String>>{
+                  'x-session-id': <String>['session-id'],
+                },
+              );
+            }
+            throw StateError('Unexpected request: $method $url');
+          };
+
+      final result = await TCLoginApi.login('user', 'password');
+
+      expect(result['ok'], isTrue, reason: result.toString());
+      expect(result['sessionId'], 'session-id');
+    });
+
+    test('CAS login POST 302 broker chain completes token session', () async {
+      const service =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+      const brokerLoginUrl =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/login?session_code=s&client_id=TronclassH5&tab_id=t';
+      final casTicketUrl =
+          '${TronclassGuetConstants.casLoginUrl}?service=${Uri.encodeQueryComponent(service)}';
+      const endpointUrl =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state&ticket=ST-1';
+      const callbackUrl =
+          'https://mobile.guet.edu.cn/cas-callback?_h5=true&code=broker-code';
+      var casLoginGetCalls = 0;
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            if (url.contains('/protocol/openid-connect/auth')) {
+              return _plainResponse(
+                '${TronclassGuetConstants.casLoginUrl}?service=${Uri.encodeQueryComponent(service)}',
+              );
+            }
+            if (url.startsWith(TronclassGuetConstants.casLoginUrl) &&
+                method == 'GET') {
+              casLoginGetCalls++;
+              if (casLoginGetCalls > 1) {
+                return _plainResponse(
+                  url,
+                  statusCode: 302,
+                  headers: const <String, List<String>>{
+                    'location': <String>[endpointUrl],
+                  },
+                );
+              }
+              return _plainResponse(
+                url,
+                data:
+                    '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+              );
+            }
+            if (_isTronclassBfpUrl(url)) {
+              return _plainResponse(url, data: '{}');
+            }
+            if (url.contains('checkNeedCaptcha.htl')) {
+              return _plainResponse(url, data: '{"isNeed":false}');
+            }
+            if (url == TronclassGuetConstants.casLoginUrl &&
+                method == 'POST') {
+              return _plainResponse(
+                url,
+                statusCode: 302,
+                headers: const <String, List<String>>{
+                  'location': <String>[brokerLoginUrl],
+                },
+              );
+            }
+            if (url == brokerLoginUrl) {
+              return _plainResponse(
+                url,
+                statusCode: 303,
+                headers: <String, List<String>>{
+                  'location': <String>[casTicketUrl],
+                },
+              );
+            }
+            if (url == endpointUrl) {
+              return _plainResponse(
+                url,
+                statusCode: 302,
+                headers: const <String, List<String>>{
+                  'location': <String>[callbackUrl],
+                },
+              );
+            }
+            if (url.contains('/protocol/openid-connect/token')) {
+              expect((body as Map)['code'], 'broker-code');
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'access_token': 'access-token'},
+              );
+            }
+            if (url ==
+                'https://courses.guet.edu.cn/api/login?login=access_token') {
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'ok': true},
+                headers: <String, List<String>>{
+                  'x-session-id': <String>['session-id'],
+                },
+              );
+            }
+            throw StateError('Unexpected request: $method $url');
+          };
+
+      final result = await TCLoginApi.login('user', 'password');
+
+      expect(result['ok'], isTrue, reason: result.toString());
+      expect(result['sessionId'], 'session-id');
+    });
+
+    test('CAS login POST 302 without location reports redirect failure', () async {
+      const service =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            if (url.contains('/protocol/openid-connect/auth')) {
+              return _plainResponse(
+                '${TronclassGuetConstants.casLoginUrl}?service=${Uri.encodeQueryComponent(service)}',
+              );
+            }
+            if (url == TronclassGuetConstants.casLoginUrl &&
+                method == 'GET') {
+              return _plainResponse(
+                url,
+                data:
+                    '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+              );
+            }
+            if (_isTronclassBfpUrl(url)) {
+              return _plainResponse(url, data: '{}');
+            }
+            if (url.contains('checkNeedCaptcha.htl')) {
+              return _plainResponse(url, data: '{"isNeed":false}');
+            }
+            if (url == TronclassGuetConstants.casLoginUrl &&
+                method == 'POST') {
+              return _plainResponse(url, statusCode: 302);
+            }
+            throw StateError('Unexpected request: $method $url');
+          };
+
+      final result = await TCLoginApi.login('user', 'password');
+
+      expect(result['ok'], isFalse);
+      expect(result['authRedirectFailure'], isTrue);
+      expect(result['casRedirectMissing'], isTrue);
+      expect(result['credentialFailure'], isFalse);
+    });
+
     test('plain failures do not enter MFA resend dialog flow', () {
       final result = {'ok': false, 'message': 'send failed'};
 
@@ -780,6 +1463,183 @@ void main() {
 
       expect(result['requireMfa'], isTrue);
     });
+
+    test(
+      'MFA 302 to reAuthLoginView is ready and sends dynamic code',
+      () async {
+        const service =
+            'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+        final reauthEntryUrl =
+            'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthLoginView.do?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}';
+        var authCodeReady = false;
+        var dynamicCodeCalls = 0;
+        var reauthSubmitCalls = 0;
+
+        ApiService.debugSendRequestOverride =
+            (
+              url, {
+              required method,
+              params,
+              headers,
+              body,
+              responseType = ResponseType.json,
+              allowRedirects = true,
+              skipCredentialValidation = false,
+            }) async {
+              if (url == TronclassGuetConstants.identityAuthUrl) {
+                if (authCodeReady) {
+                  return _plainResponse(
+                    'https://mobile.guet.edu.cn/cas-callback?_h5=true&code=auth-code',
+                  );
+                }
+                return _plainResponse(
+                  '${TronclassGuetConstants.casLoginUrl}?service=${Uri.encodeQueryComponent(service)}',
+                );
+              }
+              if (url == TronclassGuetConstants.casLoginUrl &&
+                  method == 'GET') {
+                return _plainResponse(
+                  url,
+                  data:
+                      '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+                );
+              }
+              if (_isTronclassBfpUrl(url)) {
+                return _plainResponse(url, data: '{}');
+              }
+              if (url.contains('checkNeedCaptcha.htl')) {
+                return _plainResponse(url, data: '{"isNeed":false}');
+              }
+              if (url == TronclassGuetConstants.casLoginUrl &&
+                  method == 'POST') {
+                return _plainResponse(
+                  TronclassGuetConstants.casLoginUrl,
+                  statusCode: 302,
+                  headers: <String, List<String>>{
+                    'location': <String>[reauthEntryUrl],
+                  },
+                  data:
+                      '<html><form action="/authserver/reAuthCheck/reAuthSubmit.do"><input name="dynamicCode" value="" /></form></html>',
+                );
+              }
+              if (url.contains('getDynamicCodeByReauth.do')) {
+                dynamicCodeCalls++;
+                return _plainResponse(
+                  url,
+                  data:
+                      '{"res":"success","mobile":"138****0000","returnMessage":"sent"}',
+                );
+              }
+              if (url.contains('reAuthSubmit.do')) {
+                reauthSubmitCalls++;
+                authCodeReady = true;
+                return _plainResponse(
+                  url,
+                  data: <String, dynamic>{'code': 'reAuth_success'},
+                );
+              }
+              if (url.contains('/protocol/openid-connect/token')) {
+                return _plainResponse(
+                  url,
+                  data: <String, dynamic>{'access_token': 'access-token'},
+                );
+              }
+              if (url ==
+                  'https://courses.guet.edu.cn/api/login?login=access_token') {
+                return _plainResponse(
+                  url,
+                  data: <String, dynamic>{'ok': true},
+                  headers: <String, List<String>>{
+                    'x-session-id': <String>['session-id'],
+                  },
+                );
+              }
+              throw StateError('Unexpected request: $method $url');
+            };
+
+        final result = await TCLoginApi.login(
+          'user',
+          'password',
+          mfaCodeProvider: (_, _) async => '123456',
+        );
+
+        expect(result['ok'], isTrue, reason: result.toString());
+        expect(result['sessionId'], 'session-id');
+        expect(dynamicCodeCalls, 1);
+        expect(reauthSubmitCalls, 1);
+      },
+    );
+
+    test(
+      'CAS POST 302 back to login without MFA is auth redirect failure',
+      () async {
+        const service =
+            'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+        final loginRedirectUrl =
+            '${TronclassGuetConstants.casLoginUrl}?service=${Uri.encodeQueryComponent(service)}';
+        var dynamicCodeCalls = 0;
+
+        ApiService.debugSendRequestOverride =
+            (
+              url, {
+              required method,
+              params,
+              headers,
+              body,
+              responseType = ResponseType.json,
+              allowRedirects = true,
+              skipCredentialValidation = false,
+            }) async {
+              if (url == TronclassGuetConstants.identityAuthUrl) {
+                return _plainResponse(loginRedirectUrl);
+              }
+              if (url == TronclassGuetConstants.casLoginUrl &&
+                  method == 'GET') {
+                return _plainResponse(
+                  url,
+                  data:
+                      '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+                );
+              }
+              if (_isTronclassBfpUrl(url)) {
+                return _plainResponse(url, data: '{}');
+              }
+              if (url.contains('checkNeedCaptcha.htl')) {
+                return _plainResponse(url, data: '{"isNeed":false}');
+              }
+              if (url == TronclassGuetConstants.casLoginUrl &&
+                  method == 'POST') {
+                return _plainResponse(
+                  TronclassGuetConstants.casLoginUrl,
+                  statusCode: 302,
+                  headers: <String, List<String>>{
+                    'location': <String>[loginRedirectUrl],
+                  },
+                  data: '',
+                );
+              }
+              if (url.contains('getDynamicCodeByReauth.do')) {
+                dynamicCodeCalls++;
+                return _plainResponse(
+                  url,
+                  data: '{"res":"success","mobile":"138****0000"}',
+                );
+              }
+              throw StateError('Unexpected request: $method $url');
+            };
+
+        final result = await TCLoginApi.login(
+          'user',
+          'password',
+          mfaCodeProvider: (_, _) async => '123456',
+        );
+
+        expect(result['ok'], isFalse);
+        expect(result['authRedirectFailure'], isTrue);
+        expect(result['credentialFailure'], isFalse);
+        expect(dynamicCodeCalls, 0);
+      },
+    );
 
     test(
       'CAS login page dynamicCode markup does not trigger MFA before POST',
@@ -993,7 +1853,7 @@ void main() {
       expect(result['portalLoginStatus'], 200);
       expect(captchaProviderCalls, 1);
       expect(captchaImageCalls, 1);
-      expect(casLoginGetCalls, 3);
+      expect(casLoginGetCalls, 1);
       expect(casLoginPostCalls, 1);
       expect(reauthPrimeCalls, 0);
       expect(dynamicCodeCalls, 1);
@@ -1025,13 +1885,8 @@ void main() {
               '/auth/realms/guet/protocol/openid-connect/auth',
             )) {
               if (authCodeReady) {
-                if (allowRedirects) {
-                  identityAfterMfaReplayCalls++;
-                } else {
-                  throw StateError(
-                    'Post-MFA flow must replay login, not probe',
-                  );
-                }
+                expect(allowRedirects, isFalse);
+                identityAfterMfaReplayCalls++;
                 return _plainResponse(
                   url,
                   statusCode: 303,
@@ -1225,7 +2080,196 @@ void main() {
       expect(replayCasLoginGetCalls, 1);
     });
 
-    test('post-MFA replays full CAS login with the same executor', () async {
+    test('post-MFA direct authCode skips authorization replay', () async {
+      const service =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+      final reauthEntryUrl =
+          'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthLoginView.do?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}';
+      var authReplayCalls = 0;
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            if (url.contains('/protocol/openid-connect/auth')) {
+              authReplayCalls++;
+              return _plainResponse(
+                'https://cas.guet.edu.cn/authserver/login?service=${Uri.encodeQueryComponent(service)}',
+              );
+            }
+            if (url == 'https://cas.guet.edu.cn/authserver/login' &&
+                method == 'GET') {
+              return _plainResponse(
+                url,
+                data:
+                    '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+              );
+            }
+            if (_isTronclassBfpUrl(url)) {
+              return _plainResponse(url, data: '{}');
+            }
+            if (url.contains('checkNeedCaptcha.htl')) {
+              return _plainResponse(url, data: '{"isNeed":false}');
+            }
+            if (url == 'https://cas.guet.edu.cn/authserver/login' &&
+                method == 'POST') {
+              return _plainResponse(
+                reauthEntryUrl,
+                statusCode: 401,
+                data:
+                    '<html><form action="/authserver/reAuthCheck/reAuthSubmit.do"><input name="dynamicCode" value="" /></form></html>',
+              );
+            }
+            if (url.contains('getDynamicCodeByReauth.do')) {
+              return _plainResponse(
+                url,
+                data:
+                    '{"res":"success","mobile":"138****0000","returnMessage":"ok"}',
+              );
+            }
+            if (url.contains('reAuthSubmit.do')) {
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{
+                  'code': 'reAuth_success',
+                  'authCode': 'direct-code',
+                },
+              );
+            }
+            if (url.contains('/protocol/openid-connect/token')) {
+              expect((body as Map)['code'], 'direct-code');
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'access_token': 'access-token'},
+              );
+            }
+            if (url ==
+                'https://courses.guet.edu.cn/api/login?login=access_token') {
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'ok': true},
+                headers: <String, List<String>>{
+                  'x-session-id': <String>['session-id'],
+                },
+              );
+            }
+            throw StateError('Unexpected request: $method $url');
+          };
+
+      final result = await TCLoginApi.login(
+        'user',
+        'password',
+        mfaCodeProvider: (_, _) async => '123456',
+      );
+
+      expect(result['ok'], isTrue, reason: result.toString());
+      expect(result['sessionId'], 'session-id');
+      expect(authReplayCalls, 1);
+    });
+
+    test('post-MFA redirectUrl auth code skips authorization replay', () async {
+      const service =
+          'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
+      final reauthEntryUrl =
+          'https://cas.guet.edu.cn/authserver/reAuthCheck/reAuthLoginView.do?isMultifactor=true&service=${Uri.encodeQueryComponent(service)}';
+      var authReplayCalls = 0;
+
+      ApiService.debugSendRequestOverride =
+          (
+            url, {
+            required method,
+            params,
+            headers,
+            body,
+            responseType = ResponseType.json,
+            allowRedirects = true,
+            skipCredentialValidation = false,
+          }) async {
+            if (url.contains('/protocol/openid-connect/auth')) {
+              authReplayCalls++;
+              return _plainResponse(
+                'https://cas.guet.edu.cn/authserver/login?service=${Uri.encodeQueryComponent(service)}',
+              );
+            }
+            if (url == 'https://cas.guet.edu.cn/authserver/login' &&
+                method == 'GET') {
+              return _plainResponse(
+                url,
+                data:
+                    '<html><form id="casLoginForm"><input name="execution" value="e1s1" /><input name="pwdEncryptSalt" value="1234567890abcdef" /></form></html>',
+              );
+            }
+            if (_isTronclassBfpUrl(url)) {
+              return _plainResponse(url, data: '{}');
+            }
+            if (url.contains('checkNeedCaptcha.htl')) {
+              return _plainResponse(url, data: '{"isNeed":false}');
+            }
+            if (url == 'https://cas.guet.edu.cn/authserver/login' &&
+                method == 'POST') {
+              return _plainResponse(
+                reauthEntryUrl,
+                statusCode: 401,
+                data:
+                    '<html><form action="/authserver/reAuthCheck/reAuthSubmit.do"><input name="dynamicCode" value="" /></form></html>',
+              );
+            }
+            if (url.contains('getDynamicCodeByReauth.do')) {
+              return _plainResponse(
+                url,
+                data:
+                    '{"res":"success","mobile":"138****0000","returnMessage":"ok"}',
+              );
+            }
+            if (url.contains('reAuthSubmit.do')) {
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{
+                  'code': 'reAuth_success',
+                  'redirectUrl':
+                      'https://mobile.guet.edu.cn/cas-callback?_h5=true&code=redirect-code',
+                },
+              );
+            }
+            if (url.contains('/protocol/openid-connect/token')) {
+              expect((body as Map)['code'], 'redirect-code');
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'access_token': 'access-token'},
+              );
+            }
+            if (url ==
+                'https://courses.guet.edu.cn/api/login?login=access_token') {
+              return _plainResponse(
+                url,
+                data: <String, dynamic>{'ok': true},
+                headers: <String, List<String>>{
+                  'x-session-id': <String>['session-id'],
+                },
+              );
+            }
+            throw StateError('Unexpected request: $method $url');
+          };
+
+      final result = await TCLoginApi.login(
+        'user',
+        'password',
+        mfaCodeProvider: (_, _) async => '123456',
+      );
+
+      expect(result['ok'], isTrue, reason: result.toString());
+      expect(result['sessionId'], 'session-id');
+      expect(authReplayCalls, 1);
+    });
+
+    test('post-MFA replay does not submit password again', () async {
       const service =
           'https://identity.guet.edu.cn/auth/realms/guet/broker/cas-client/endpoint?state=test-state';
       final reauthEntryUrl =
@@ -1264,6 +2308,15 @@ void main() {
             if (url == 'https://cas.guet.edu.cn/authserver/login' &&
                 method == 'GET') {
               casLoginGetCalls++;
+              if (authCodeReady) {
+                return _plainResponse(
+                  url,
+                  statusCode: 302,
+                  headers: const <String, List<String>>{
+                    'location': <String>[callbackUrl],
+                  },
+                );
+              }
               return _plainResponse(
                 url,
                 data:
@@ -1280,7 +2333,7 @@ void main() {
                 method == 'POST') {
               casLoginPostCalls++;
               if (authCodeReady) {
-                return _plainResponse(callbackUrl);
+                throw StateError('Password form must not be posted after MFA');
               }
               return _plainResponse(
                 reauthEntryUrl,
@@ -1342,8 +2395,8 @@ void main() {
       expect(result['sessionId'], 'session-id');
       expect(dynamicCodeCalls, 1);
       expect(reauthSubmitCalls, 1);
-      expect(casLoginGetCalls, 6);
-      expect(casLoginPostCalls, 2);
+      expect(casLoginGetCalls, 2);
+      expect(casLoginPostCalls, 1);
     });
 
     test('login POST MFA path sends dynamicCode without reauth view preflight', () async {

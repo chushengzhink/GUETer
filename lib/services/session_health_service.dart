@@ -160,6 +160,7 @@ class SessionHealthService {
     try {
       final bootstrapped = await TCLoginApi.bootstrapPortalSession(
         sessionId: sessionId,
+        dedupeKey: 'tronclass:${user.uid}',
       ).timeout(_probeTimeout, onTimeout: () => false);
       if (!bootstrapped) {
         return false;

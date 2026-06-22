@@ -20,6 +20,23 @@ String _stringOf(dynamic value, [String fallback = '']) {
   return text.isEmpty ? fallback : text;
 }
 
+String normalizeKetangpaiAnswerText(dynamic value) {
+  final text = _stringOf(value).trim();
+  if (text.isEmpty) return '';
+  if (!RegExp(r'<[^>]+>').hasMatch(text)) return text;
+  return text
+      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'</p>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<[^>]+>'), '')
+      .replaceAll('&nbsp;', ' ')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .trim();
+}
+
 int _intOf(dynamic value, [int fallback = 0]) {
   if (value is int) return value;
   if (value is num) return value.toInt();
@@ -158,7 +175,13 @@ class KetangpaiExamSummary {
 
   factory KetangpaiExamSummary.fromJson(Map<String, dynamic> json) {
     return KetangpaiExamSummary(
-      id: _stringOf(json['id'] ?? json['testpaperid']),
+      id: _stringOf(
+        json['id'] ??
+            json['testpaperid'] ??
+            json['testPaperId'] ??
+            json['paperid'] ??
+            json['paperId'],
+      ),
       courseId: _stringOf(json['courseid']),
       title: _stringOf(json['title']),
       type: _stringOf(json['type']),
@@ -357,7 +380,7 @@ class KetangpaiExamQuestion {
       options: _mapListOf(
         json['options'],
       ).map(KetangpaiExamOption.fromJson).toList(),
-      myAnswer: json['myanswer']?.toString(),
+      myAnswer: normalizeKetangpaiAnswerText(json['myanswer']),
       raw: Map<String, dynamic>.from(json),
     );
   }
@@ -396,9 +419,11 @@ class KetangpaiExamPaper {
   final Map<String, dynamic> raw;
 
   factory KetangpaiExamPaper.fromJson(Map<String, dynamic> json) {
+    final questionSource =
+        json['lists'] ?? json['list'] ?? json['questions'] ?? json['subjects'];
     return KetangpaiExamPaper(
       questions: _mapListOf(
-        json['lists'],
+        questionSource,
       ).map(KetangpaiExamQuestion.fromJson).toList(),
       handupState: _stringOf(json['handupState']),
       rehandup: _stringOf(json['rehandup']),

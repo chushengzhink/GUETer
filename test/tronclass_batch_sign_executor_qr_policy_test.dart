@@ -64,18 +64,19 @@ void main() {
         home: Builder(
           builder: (context) => ElevatedButton(
             onPressed: () async {
-              result = await TronclassBatchSignExecutor(
-                sessionHealthChecker: (_) async => true,
-              ).sign(
-                context: context,
-                courseName: 'qr',
-                console: console,
-                users: users,
-                action: (_, _) async {
-                  actionCalls += 1;
-                  return _response({'status': 'on_call'});
-                },
-              );
+              result =
+                  await TronclassBatchSignExecutor(
+                    sessionHealthChecker: (_) async => true,
+                  ).sign(
+                    context: context,
+                    courseName: 'qr',
+                    console: console,
+                    users: users,
+                    action: (_, _) async {
+                      actionCalls += 1;
+                      return _response({'status': 'on_call'});
+                    },
+                  );
             },
             child: const Text('run'),
           ),
@@ -148,6 +149,60 @@ void main() {
     );
   });
 
+  testWidgets('direct policy skips network gate for every account', (
+    tester,
+  ) async {
+    var networkCalls = 0;
+    var actionCalls = 0;
+    MobileDataReconnectService.debugRestartOverride = () async {
+      networkCalls += 1;
+      return const MobileDataReconnectResult(
+        success: true,
+        mode: MobileDataReconnectMode.privilegedAuto,
+        message: 'ok',
+        ipBefore: '1.1.1.1',
+        ipAfter: '2.2.2.2',
+        ipChanged: true,
+      );
+    };
+
+    final console = SignRunConsoleController();
+    addTearDown(console.dispose);
+    final users = [_user('1'), _user('2'), _user('3')];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => ElevatedButton(
+            onPressed: () async {
+              await TronclassBatchSignExecutor(
+                sessionHealthChecker: (_) async => true,
+              ).sign(
+                context: context,
+                courseName: 'qr',
+                console: console,
+                users: users,
+                networkPolicy: TronclassBatchNetworkPolicy.direct,
+                action: (_, _) async {
+                  actionCalls += 1;
+                  return _response({'status': 'on_call'});
+                },
+              );
+            },
+            child: const Text('run'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('run'));
+    await tester.pumpAndSettle();
+
+    expect(networkCalls, 0);
+    expect(actionCalls, 3);
+    expect(console.events.map((event) => event.message), contains('平台所选：直接提交'));
+  });
+
   testWidgets('qr expired response skips remaining accounts without network', (
     tester,
   ) async {
@@ -175,19 +230,20 @@ void main() {
         home: Builder(
           builder: (context) => ElevatedButton(
             onPressed: () async {
-              result = await TronclassBatchSignExecutor(
-                sessionHealthChecker: (_) async => true,
-              ).sign(
-                context: context,
-                courseName: 'qr',
-                console: console,
-                users: users,
-                networkPolicy: TronclassBatchNetworkPolicy.qrFastFirst,
-                action: (_, _) async {
-                  actionCalls += 1;
-                  return _response({'message': 'QR_code_expired'});
-                },
-              );
+              result =
+                  await TronclassBatchSignExecutor(
+                    sessionHealthChecker: (_) async => true,
+                  ).sign(
+                    context: context,
+                    courseName: 'qr',
+                    console: console,
+                    users: users,
+                    networkPolicy: TronclassBatchNetworkPolicy.qrFastFirst,
+                    action: (_, _) async {
+                      actionCalls += 1;
+                      return _response({'message': 'QR_code_expired'});
+                    },
+                  );
             },
             child: const Text('run'),
           ),
@@ -202,9 +258,8 @@ void main() {
     expect(actionCalls, 1);
     expect(result?.failedCount, 1);
     expect(result?.skippedCount, 2);
-    expect(
-      result?.items.skip(1).map((item) => item.message).toSet(),
-      {'签到二维码已过期，请重新扫码'},
-    );
+    expect(result?.items.skip(1).map((item) => item.message).toSet(), {
+      '签到二维码已过期，请重新扫码',
+    });
   });
 }

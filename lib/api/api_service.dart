@@ -14,6 +14,7 @@ import '../session/account.dart';
 import '../session/credential_manager.dart';
 import '../session/login_context.dart';
 import '../platform.dart';
+import 'login.dart';
 import 'platform_functional_request_profile.dart';
 import 'sign_request_profile.dart';
 import 'platform_request_stability.dart';
@@ -1146,6 +1147,8 @@ class ApiService {
     _startupRecoverySessionActive = false;
     debugSendRequestOverride = null;
     debugCredentialValidatorOverride = null;
+    TCLoginApi.resetBootstrapPortalSessionDedupeForTests();
+    CredentialManager.resetForTests();
     consoleLogVersion.value = 0;
   }
 

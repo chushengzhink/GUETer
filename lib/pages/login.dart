@@ -700,6 +700,8 @@ class _LoginPageState extends State<LoginPage> {
         debugPrint('[TC][后台] setSessionIdForUser 完成');
         final portalBootstrapped = await TCLoginApi.bootstrapPortalSession(
           sessionId: sid,
+          allowDuringLogin: true,
+          dedupeKey: 'tronclass:${user.uid}',
         ).timeout(const Duration(seconds: 8), onTimeout: () => false);
         debugPrint('[TC][后台] bootstrapPortalSession 完成: $portalBootstrapped');
       }
@@ -1350,7 +1352,8 @@ class _LoginPageState extends State<LoginPage> {
           if (nextAction == TronclassLoginNextAction.requireMfa) {
             if (mounted) {
               await _showTronclassDebugDialog(
-                message: tronclassRetryLimitMessage,
+                message: (result['message'] ?? '畅课需要短信二次验证，请按提示完成验证')
+                    .toString(),
                 debug: result['debug']?.toString() ?? '',
               );
             }
@@ -1397,7 +1400,8 @@ class _LoginPageState extends State<LoginPage> {
             if (nextAction == TronclassLoginNextAction.requireMfa) {
               if (mounted) {
                 await _showTronclassDebugDialog(
-                  message: '登录失败，请稍后重试',
+                  message: (result['message'] ?? '畅课需要短信二次验证，请按提示完成验证')
+                      .toString(),
                   debug: result['debug']?.toString() ?? '',
                 );
               }
@@ -1461,11 +1465,6 @@ class _LoginPageState extends State<LoginPage> {
             (loginResult?['msg'] ?? loginResult?['message'] ?? '课堂派登录失败')
                 .toString(),
           );
-        }
-
-        final tokenHealthy = await KTLoginApi.checkTokenStatus(token);
-        if (!tokenHealthy) {
-          throw Exception('课堂派登录成功但 token 无效，请重试或改用短信登录');
         }
 
         user =

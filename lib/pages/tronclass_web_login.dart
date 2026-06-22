@@ -600,7 +600,11 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage>
       });
     }
 
-    final ok = await TCLoginApi.bootstrapPortalSession(sessionId: sid);
+    final ok = await TCLoginApi.bootstrapPortalSession(
+      sessionId: sid,
+      allowDuringLogin: true,
+      dedupeKey: _portalSessionDedupeKey(),
+    );
     if (!_controllerReady || !mounted) {
       return;
     }
@@ -650,7 +654,11 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage>
       });
     }
 
-    final ok = await TCLoginApi.bootstrapPortalSession(sessionId: sid);
+    final ok = await TCLoginApi.bootstrapPortalSession(
+      sessionId: sid,
+      allowDuringLogin: true,
+      dedupeKey: _portalSessionDedupeKey(),
+    );
     if (!_controllerReady || !mounted) {
       return;
     }
@@ -933,7 +941,19 @@ class _TronclassWebLoginPageState extends State<TronclassWebLoginPage>
     }
 
     _portalSessionId = sessionId;
-    await TCLoginApi.bootstrapPortalSession(sessionId: sessionId);
+    await TCLoginApi.bootstrapPortalSession(
+      sessionId: sessionId,
+      allowDuringLogin: true,
+      dedupeKey: 'tronclass:$accountId',
+    );
+  }
+
+  String? _portalSessionDedupeKey() {
+    final accountId = widget.accountId ?? AccountManager.currentSessionId;
+    if (accountId == null || accountId.isEmpty) {
+      return null;
+    }
+    return 'tronclass:$accountId';
   }
 
   Future<void> _loadInitialRequest(WebViewController controller) async {

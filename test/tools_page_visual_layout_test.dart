@@ -19,6 +19,33 @@ void main() {
     expect(source, contains('category: selectedCategory'));
   });
 
+  test('header search opens command sheet without onChanged modal loop', () {
+    expect(source, contains('onSearchTap: _openToolSearch'));
+    expect(source, contains('readOnly: true'));
+    expect(source, contains('showCursor: false'));
+    expect(source, isNot(contains('onSearchChanged:')));
+    expect(source, isNot(contains('_openToolSearch();')));
+  });
+
+  test('dashboard shows persistent search results with clear action', () {
+    expect(source, contains('class _ToolSearchResultsSection'));
+    expect(source, contains('_toolSearchQuery.trim().isNotEmpty'));
+    expect(source, contains('actions: _filteredActions(categories)'));
+    expect(source, contains('onClear: _clearToolSearch'));
+    expect(source, contains("child: _ToolActionCard(action: action)"));
+  });
+
+  test('wheel category nodes expose semantic selection state', () {
+    expect(source, contains('class _WheelNodeButton'));
+    expect(source, contains('Semantics('));
+    expect(source, contains('button: true'));
+    expect(source, contains('selected: selected'));
+    expect(
+      source,
+      contains("label: '\${category.label}, \${category.subtitle}'"),
+    );
+  });
+
   test(
     'category detail uses compact visual grid with two-column mobile layout',
     () {

@@ -26,6 +26,7 @@ class _KetangpaiNumberSignPageState extends State<KetangpaiNumberSignPage> {
   final TextEditingController _controller = TextEditingController();
   late final String _signControllerTag;
   late final SignController _signController;
+  KtSignRecord? _lastRecord;
 
   bool get _isDirectMode =>
       widget.directSubmit || (widget.signId?.trim().isNotEmpty ?? false);
@@ -58,7 +59,15 @@ class _KetangpaiNumberSignPageState extends State<KetangpaiNumberSignPage> {
     }
 
     final signId = widget.signId?.trim() ?? '';
-    await _signController.numberSign(signId, pin);
+    final record = await _signController.numberSign(signId, pin);
+    if (!mounted) return;
+    setState(() => _lastRecord = record);
+    if (record.success) {
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (mounted) {
+        Navigator.of(context).maybePop();
+      }
+    }
   }
 
   @override
@@ -96,6 +105,9 @@ class _KetangpaiNumberSignPageState extends State<KetangpaiNumberSignPage> {
         child: Obx(() {
           final isLoading =
               _signController.signStatus.value == SignStatus.loading;
+          final record = _lastRecord;
+          final message = record?.message ?? _signController.error.value;
+          final isSuccess = record?.success == true;
           return Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -120,6 +132,45 @@ class _KetangpaiNumberSignPageState extends State<KetangpaiNumberSignPage> {
                   '正在提交签到',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+              if (!isLoading && message.trim().isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 32),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color:
+                        (isSuccess
+                                ? theme.colorScheme.primaryContainer
+                                : theme.colorScheme.errorContainer)
+                            .withValues(alpha: 0.75),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isSuccess
+                            ? Icons.check_circle_outline
+                            : Icons.error_outline,
+                        color: isSuccess
+                            ? theme.colorScheme.onPrimaryContainer
+                            : theme.colorScheme.onErrorContainer,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          message,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: isSuccess
+                                ? theme.colorScheme.onPrimaryContainer
+                                : theme.colorScheme.onErrorContainer,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],

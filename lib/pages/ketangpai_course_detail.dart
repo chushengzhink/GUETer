@@ -4,6 +4,16 @@ import 'package:flutter/material.dart';
 
 import '../api/course.dart';
 import '../models/course.dart';
+import 'ketangpai_announcement_page.dart';
+import 'ketangpai_answer_question_page.dart';
+import 'ketangpai_attendance_stats_page.dart';
+import 'ketangpai_course_ware_page.dart';
+import 'ketangpai_exam_page_v2.dart';
+import 'ketangpai_homework_page.dart';
+import 'ketangpai_sign_status_page.dart';
+import 'ketangpai_source_page.dart';
+import 'ketangpai_topic_page.dart';
+import 'widget/ketangpai_sign_task_panel.dart';
 
 class KetangpaiCourseDetailPage extends StatefulWidget {
   final Course course;
@@ -19,6 +29,7 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
   Map<String, dynamic>? _courseDetail;
   Map<String, dynamic>? _signStatus;
   List<Course>? _signingCourses;
+  List<dynamic>? _pendingSigns;
   bool _loading = true;
 
   @override
@@ -35,6 +46,9 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
     final detail = await KTCourseApi.getCourseDetail(widget.course.courseId);
     final signStatus = await KTCourseApi.getSignStatus(widget.course.courseId);
     final signingCourses = await KTCourseApi.getSigningCourses();
+    final pendingSigns = await KTCourseApi.getNotFinishSign(
+      widget.course.courseId,
+    );
 
     if (!mounted) return;
     setState(() {
@@ -43,12 +57,14 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
       _signingCourses = signingCourses
           .where((course) => course.courseId == widget.course.courseId)
           .toList();
+      _pendingSigns = pendingSigns;
       _loading = false;
     });
   }
 
   bool get _hasActiveSignIn =>
-      _signingCourses != null && _signingCourses!.isNotEmpty;
+      (_pendingSigns?.isNotEmpty ?? false) ||
+      (_signingCourses != null && _signingCourses!.isNotEmpty);
 
   Future<void> _showRawData(String title, Map<String, dynamic>? data) async {
     await showDialog<void>(
@@ -93,10 +109,7 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
               children: [
                 Text(
                   label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -114,7 +127,12 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
     );
   }
 
-  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
+  Widget _buildStatCard(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(16),
@@ -137,10 +155,239 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
             const SizedBox(height: 4),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade700,
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openPage(Widget page) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+  }
+
+  Widget _buildActionTile({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    bool highlighted = false,
+  }) {
+    final theme = Theme.of(context);
+    return Material(
+      color: highlighted
+          ? color.withValues(alpha: 0.12)
+          : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.42),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color),
               ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: theme.colorScheme.outline),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionPanel(ColorScheme colorScheme) {
+    final activeSubtitle = _hasActiveSignIn ? '当前课程有待处理签到' : '查看签到状态与考勤记录';
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  '课堂工作台',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const Spacer(),
+                if (_hasActiveSignIn)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text(
+                      '签到中',
+                      style: TextStyle(
+                        color: Colors.green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final wide = constraints.maxWidth >= 620;
+                final width = wide
+                    ? (constraints.maxWidth - 12) / 2
+                    : constraints.maxWidth;
+                Widget sized(Widget child) =>
+                    SizedBox(width: width, child: child);
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    sized(
+                      _buildActionTile(
+                        title: '签到',
+                        subtitle: activeSubtitle,
+                        icon: Icons.how_to_reg_outlined,
+                        color: Colors.green,
+                        highlighted: _hasActiveSignIn,
+                        onTap: () => _openPage(
+                          KetangpaiSignStatusPage(
+                            courseId: widget.course.courseId,
+                          ),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '考试 V2',
+                        subtitle: '进入迁移后的考试列表和答题页',
+                        icon: Icons.assignment_outlined,
+                        color: colorScheme.primary,
+                        onTap: () => _openPage(
+                          KetangpaiExamPageV2(course: widget.course),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '资料',
+                        subtitle: '查看附件、外链并下载到资料库',
+                        icon: Icons.folder_copy_outlined,
+                        color: Colors.indigo,
+                        onTap: () => _openPage(
+                          KetangpaiSourcePage(course: widget.course),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '作业',
+                        subtitle: '查看课堂派作业内容',
+                        icon: Icons.fact_check_outlined,
+                        color: Colors.orange,
+                        onTap: () => _openPage(
+                          KetangpaiHomeworkPage(course: widget.course),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '话题',
+                        subtitle: '查看课程话题与讨论',
+                        icon: Icons.forum_outlined,
+                        color: Colors.teal,
+                        onTap: () => _openPage(
+                          KetangpaiTopicPage(course: widget.course),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '统计',
+                        subtitle: '查看课堂表现和考勤统计',
+                        icon: Icons.bar_chart_outlined,
+                        color: Colors.blue,
+                        onTap: () => _openPage(
+                          KetangpaiAttendanceStatsPage(course: widget.course),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '课件',
+                        subtitle: '打开课件与课程内容',
+                        icon: Icons.menu_book_outlined,
+                        color: Colors.purple,
+                        onTap: () => _openPage(
+                          KetangpaiCourseWarePage(course: widget.course),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '答疑',
+                        subtitle: '查看互动答疑内容',
+                        icon: Icons.question_answer_outlined,
+                        color: Colors.brown,
+                        onTap: () => _openPage(
+                          KetangpaiAnswerQuestionPage(course: widget.course),
+                        ),
+                      ),
+                    ),
+                    sized(
+                      _buildActionTile(
+                        title: '公告',
+                        subtitle: '查看课程公告',
+                        icon: Icons.campaign_outlined,
+                        color: Colors.redAccent,
+                        onTap: () => _openPage(
+                          KetangpaiAnnouncementPage(course: widget.course),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ],
         ),
@@ -297,6 +544,14 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
                     ),
                   ),
                   const SizedBox(height: 20),
+                  KetangpaiSignTaskPanel(
+                    course: widget.course,
+                    courseId: widget.course.courseId,
+                    initialTasks: _pendingSigns,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildActionPanel(colorScheme),
+                  const SizedBox(height: 16),
                   Card(
                     elevation: 2,
                     shape: RoundedRectangleBorder(

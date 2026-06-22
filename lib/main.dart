@@ -562,7 +562,11 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       final sessionId = result?['sessionId']?.toString().trim();
       if (sessionId != null && sessionId.isNotEmpty) {
         await TronclassAuthManager.setSessionIdForUser(user.uid, sessionId);
-        await TCLoginApi.bootstrapPortalSession(sessionId: sessionId);
+        await TCLoginApi.bootstrapPortalSession(
+          sessionId: sessionId,
+          allowDuringLogin: true,
+          dedupeKey: 'tronclass:${user.uid}',
+        );
       } else {
         await TronclassAuthManager.clearSessionIdForUser(user.uid);
       }

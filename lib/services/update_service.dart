@@ -299,6 +299,10 @@ class UpdateService {
 
   static const String defaultFolderUrl = '';
   static const String defaultFolderPassword = '';
+  static const String updateTextMissingWarning =
+      '暂未获取到完整更新公告，请确认 update.txt 已上传到更新文件夹。';
+  static const String updateTextUnreadableWarning =
+      '已发现新版本，但 update.txt 完整公告暂不可读。';
 
   final Dio _dio;
   final String _folderUrl;
@@ -316,6 +320,11 @@ class UpdateService {
     _ensureSuccess(pageResponse);
 
     final html = pageResponse.data ?? '';
+    final directJsonText = _extractWholeJsonObject(html);
+    if (directJsonText != null) {
+      return UpdateInfo.fromJson(_decodeJsonMap(directJsonText));
+    }
+
     final params = LanzouFolderParams.parse(html, folderUri);
     final cookie = _cookieHeader(pageResponse.headers);
     final files = await _fetchFolderFiles(params, cookie);
@@ -328,7 +337,7 @@ class UpdateService {
       return _withMetadataWarning(
         _withForceMarker(metadata, forceFromVersions),
         metadataSource: 'apk',
-        metadataWarning: '暂未获取到完整更新公告，请确认 update.txt 已上传到更新文件夹。',
+        metadataWarning: updateTextMissingWarning,
       );
     }
 
@@ -340,7 +349,7 @@ class UpdateService {
       return _withMetadataWarning(
         _withForceMarker(metadata, forceFromVersions),
         metadataSource: 'apk',
-        metadataWarning: '暂未获取到完整更新公告，请确认 update.txt 已上传到更新文件夹。',
+        metadataWarning: updateTextUnreadableWarning,
       );
     }
 
@@ -426,23 +435,52 @@ class UpdateService {
         return UpdateInfo.fromJson(_decodeJsonMap(directJsonText));
       }
 
-      final textUrl = _extractDownloadUrl(pageOrText, origin);
-      if (textUrl == null) {
-        return null;
+      final visited = <String>{updateEntry.downloadUrl(origin)};
+      for (final textUrl in _extractDownloadUrls(pageOrText, origin)) {
+        final info = await _tryFetchUpdateInfoFromUrl(textUrl, origin, visited);
+        if (info != null) {
+          return info;
+        }
       }
-      final textResponse = await _dio.get<String>(
-        textUrl,
-        options: Options(responseType: ResponseType.plain),
-      );
-      _ensureSuccess(textResponse);
-      final jsonText = _extractJsonObject(textResponse.data ?? '');
-      if (jsonText == null) {
-        return null;
-      }
-      return UpdateInfo.fromJson(_decodeJsonMap(jsonText));
     } catch (_) {
       return null;
     }
+    return null;
+  }
+
+  Future<UpdateInfo?> _tryFetchUpdateInfoFromUrl(
+    String url,
+    String origin,
+    Set<String> visited,
+  ) async {
+    if (!visited.add(url)) {
+      return null;
+    }
+    try {
+      final response = await _dio.get<String>(
+        url,
+        options: Options(responseType: ResponseType.plain),
+      );
+      _ensureSuccess(response);
+      final text = response.data ?? '';
+      final jsonText = _extractJsonObject(text);
+      if (jsonText != null) {
+        return UpdateInfo.fromJson(_decodeJsonMap(jsonText));
+      }
+      for (final nestedUrl in _extractDownloadUrls(text, origin)) {
+        final info = await _tryFetchUpdateInfoFromUrl(
+          nestedUrl,
+          origin,
+          visited,
+        );
+        if (info != null) {
+          return info;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
   }
 
   static LanzouFileEntry _selectLatestApk(List<LanzouFileEntry> files) {
@@ -602,8 +640,20 @@ class UpdateService {
     return null;
   }
 
-  static String? _extractDownloadUrl(String html, String origin) {
+  static String? _extractWholeJsonObject(String text) {
+    final normalized = text.startsWith('\uFEFF')
+        ? text.substring(1).trim()
+        : text.trim();
+    if (normalized.startsWith('{') && normalized.endsWith('}')) {
+      return normalized;
+    }
+    return null;
+  }
+
+  static List<String> _extractDownloadUrls(String html, String origin) {
+    final urls = <String>{};
     final patterns = <RegExp>[
+      RegExp(r'''<iframe\b[^>]*\bsrc=["']([^"']+)["']''', caseSensitive: false),
       RegExp(
         r'''href=["']([^"']*(?:download|file|txt)[^"']*)["']''',
         caseSensitive: false,
@@ -625,11 +675,11 @@ class UpdateService {
         }
         final resolved = uri.hasScheme ? uri : Uri.parse(origin).resolve(raw);
         if (resolved.scheme == 'http' || resolved.scheme == 'https') {
-          return resolved.toString();
+          urls.add(resolved.toString());
         }
       }
     }
-    return null;
+    return urls.toList(growable: false);
   }
 
   static void _ensureSuccess(Response<dynamic> response) {

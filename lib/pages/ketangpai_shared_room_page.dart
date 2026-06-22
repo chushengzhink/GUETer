@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../api/kt_follow_sign.dart';
-import '../api/login.dart';
 import '../models/user.dart';
 import '../platform.dart';
 import '../services/sign_platform_context.dart';
 import '../services/sign_run_console.dart';
 import '../session/account.dart';
+import '../session/sign_mode_settings.dart';
 import '../widgets/sign_run_console_panel.dart';
 import 'widget/scan.dart';
 
@@ -54,9 +54,7 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
     final tokenHealth = <String, bool>{};
     for (final user in users) {
       final token = user.token.trim();
-      tokenHealth[user.uid] = token.isNotEmpty
-          ? await KTLoginApi.checkTokenStatus(token)
-          : false;
+      tokenHealth[user.uid] = token.isNotEmpty;
     }
 
     if (!mounted) return;
@@ -126,9 +124,26 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
       _signing = true;
     });
 
-    final selectedUsers = _users
-        .where((user) => _selectedUserIds.contains(user.uid))
-        .toList();
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.ketangpai,
+      perRunSelection: _users
+          .where((user) => _selectedUserIds.contains(user.uid))
+          .toList(growable: false),
+      perRunUsesAllWhenNoSelection: false,
+    );
+    final selectedUsers = resolution.users;
+    if (selectedUsers.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _signing = false;
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resolution.message ?? '请先选择至少一个课堂派账号')),
+      );
+      return;
+    }
+    if (!mounted) return;
 
     final result = await KtFollowSignExecutor.signByScan(
       scanUrl: qr,
@@ -138,6 +153,8 @@ class _KetangpaiSharedRoomPageState extends State<KetangpaiSharedRoomPage> {
       context: context,
       console: _consoleController,
       isContextMounted: () => mounted,
+      reconnectNetwork:
+          resolution.networkPolicy == SignSubmitNetworkPolicy.reconnect,
     );
 
     if (!mounted) return;

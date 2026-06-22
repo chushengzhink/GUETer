@@ -1963,6 +1963,7 @@ class KTCourseApi {
     return _filterKetangpaiContent(items, (item, contentType, text) {
       return text.contains('公告') ||
           text.contains('通知') ||
+          _fieldMatchesAny(item, const ['announcement', 'notice']) ||
           text.contains('announcement') ||
           text.contains('notice');
     });
@@ -1976,6 +1977,7 @@ class KTCourseApi {
       return text.contains('互动答题') ||
           text.contains('抢答') ||
           text.contains('答题') ||
+          _fieldMatchesAny(item, const ['question', 'answer', 'qa']) ||
           text.contains('question') ||
           text.contains('作答');
     });
@@ -1993,6 +1995,12 @@ class KTCourseApi {
     final items = await getCourseContentList(courseId, contentType: 0);
     return _filterKetangpaiContent(items, (item, contentType, text) {
       return text.contains('课件') ||
+          _fieldMatchesAny(item, const [
+            'courseware',
+            'ware',
+            'ppt',
+            'slides',
+          ]) ||
           text.contains('ppt') ||
           text.contains('slides') ||
           text.contains('讲义') ||

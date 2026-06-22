@@ -203,6 +203,31 @@ void main() {
   });
 
   group('UpdateService', () {
+    test(
+      'loads direct update json source without lanzou folder parsing',
+      () async {
+        final adapter = _LanzouAdapter(
+          folderHtml:
+              '{"version":"1.0.11","buildNumber":12,"tag":"1.0.11+12","releaseNotes":"direct metadata","apk":{"abi":"arm64-v8a","fileName":"GUETer_1.0.11+12_arm64-v8a.apk","downloadUrl":"https://updates.example.test/GUETer_1.0.11+12_arm64-v8a.apk"}}',
+          listJson: _folderListJson(),
+        );
+        final service = UpdateService(
+          dio: _dioWith(adapter),
+          folderUrl: 'https://updates.example.test/share-folder',
+        );
+
+        final info = await service.fetchLatest();
+
+        expect(info.version, '1.0.11');
+        expect(info.buildNumber, 12);
+        expect(info.tag, '1.0.11+12');
+        expect(info.releaseNotes, 'direct metadata');
+        expect(info.metadataSource, 'update.txt');
+        expect(info.apk.fileName, 'GUETer_1.0.11+12_arm64-v8a.apk');
+        expect(adapter.lastForm, isNull);
+      },
+    );
+
     test('loads lanzou folder list and builds stable apk page url', () async {
       final adapter = _LanzouAdapter(
         folderHtml: _folderHtml(),
@@ -352,6 +377,53 @@ void main() {
 
       expect(info.metadataSource, 'update.txt');
       expect(info.releaseNotes, 'landing metadata');
+    });
+
+    test('extracts update metadata from a lanzou iframe page', () async {
+      final adapter = _LanzouAdapter(
+        folderHtml: _folderHtml(),
+        listJson: _folderListJson(),
+        filePages: {
+          'https://updates.example.test/iVlkZ3r5tkte':
+              '<html><iframe src="/fn?abc"></iframe></html>',
+          'https://updates.example.test/fn?abc':
+              '{"version":"1.0.4","buildNumber":5,"releaseNotes":"iframe metadata","apk":{"downloadUrl":"https://expired.example/app.apk"}}',
+        },
+      );
+      final service = UpdateService(
+        dio: _dioWith(adapter),
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'test-password',
+      );
+
+      final info = await service.fetchLatest();
+
+      expect(info.metadataSource, 'update.txt');
+      expect(info.releaseNotes, 'iframe metadata');
+    });
+
+    test('unreadable iframe update text still returns apk fallback', () async {
+      final adapter = _LanzouAdapter(
+        folderHtml: _folderHtml(),
+        listJson: _folderListJson(),
+        filePages: {
+          'https://updates.example.test/iVlkZ3r5tkte':
+              '<html><iframe src="/fn?abc"></iframe></html>',
+          'https://updates.example.test/fn?abc': '<html>not json</html>',
+        },
+      );
+      final service = UpdateService(
+        dio: _dioWith(adapter),
+        folderUrl: 'https://updates.example.test/share-folder',
+        folderPassword: 'test-password',
+      );
+
+      final info = await service.fetchLatest();
+
+      expect(info.version, '1.0.4');
+      expect(info.metadataSource, 'apk');
+      expect(info.metadataWarning, UpdateService.updateTextUnreadableWarning);
+      expect(info.isNewerThan('1.0.3'), isTrue);
     });
 
     test('throws when folder password or list request fails', () {

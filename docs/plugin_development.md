@@ -10,6 +10,15 @@ GUETer Mod 使用 UTF-8 JSON 清单声明入口、能力和受控动作。应用
 
 也可以在“插件管理”页面导入包含 `plugin.json` 的目录，或点击“生成示例”创建安全示例 Mod。
 
+“插件管理”还提供模板库。模板库会在本地生成 `plugin.json` 和说明文件，默认不启用，适合二次修改后再手动开启。内置模板包括：
+
+- 文件预览复制路径。
+- 资料转复习卡片。
+- 打开诊断修复中心。
+- 局域网发送当前文件。
+- 保存文件备注。
+- HTTP GET 展示结果。
+
 ## Manifest 结构
 
 字段名和协议值必须使用英文，显示文本可以使用中文。
@@ -91,9 +100,9 @@ entry 可选过滤字段：
 - `showMessage`：字段 `text`，可选 `mode` 为 `snackbar` 或 `dialog`。
 - `pickFile`：让用户主动选择一个文件，可用 `then` 指定后续动作。
 - `saveTextFile`：字段 `text`，可选 `fileName`，只允许写入插件私有目录。
-- `openBuiltinTool`：字段 `tool`，支持 `fileTools`、`localTransfer`、`cloud`、`health`。
+- `openBuiltinTool`：字段 `tool`，支持 `fileTools`、`localTransfer`、`cloud`、`health`、`studyCards`。
 - `sendToLocalTransfer`：把当前文件或用户选择文件交给局域网传输。
-- `openWithFileTool`：字段 `toolAction`，支持 `preview`、`share`、`duplicateCleanup`。
+- `openWithFileTool`：字段 `toolAction`，支持 `preview`、`share`、`duplicateCleanup`、`studyCard`。
 - `copyJsonField`：字段 `json` 和 `field`，从 JSON 文本中复制指定字段。
 
 ## 模板变量

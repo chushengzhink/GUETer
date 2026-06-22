@@ -5,8 +5,10 @@ import 'package:uuid/uuid.dart';
 import '../api/tronclass_batch_sign_executor.dart';
 import '../api/tronclass_sign_api.dart';
 import '../models/user.dart';
+import '../platform.dart';
 import '../services/sign_platform_context.dart';
 import '../services/sign_run_console.dart';
+import '../session/sign_mode_settings.dart';
 import '../widgets/sign_run_console_panel.dart';
 import '../widgets/tronclass_account_selector.dart';
 import 'tronclass_number_input.dart';
@@ -146,14 +148,22 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
   }
 
   Future<void> _submitCodeBatch(String code) async {
-    if (_selectedAccounts.isEmpty) {
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.tronclass,
+      perRunSelection: _selectedAccounts,
+      perRunUsesAllWhenNoSelection: false,
+    );
+    final signAccounts = resolution.users;
+    if (signAccounts.isEmpty) {
+      if (!mounted) return;
       setState(() {
         _hasError = true;
-        _errorMessage = '请至少选择一个畅课账号';
+        _errorMessage = resolution.message ?? '请至少选择一个畅课账号';
       });
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('请至少选择一个畅课账号')));
+      ).showSnackBar(SnackBar(content: Text(_errorMessage)));
       return;
     }
 
@@ -173,14 +183,19 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
     _consoleController.clear();
 
     try {
+      if (!mounted) return;
       final result = await TronclassBatchSignExecutor().sign(
         context: context,
         courseName: widget.activityName?.trim().isNotEmpty == true
             ? widget.activityName!.trim()
             : '畅课数字签到',
         console: _consoleController,
-        users: _selectedAccounts,
+        users: signAccounts,
         isContextMounted: () => mounted,
+        networkPolicy:
+            resolution.networkPolicy == SignSubmitNetworkPolicy.direct
+            ? TronclassBatchNetworkPolicy.direct
+            : TronclassBatchNetworkPolicy.strict,
         action: (_, deviceId) => TronclassSignApi.signNumber(
           rollcallId: widget.rollcallId,
           numberCode: code,

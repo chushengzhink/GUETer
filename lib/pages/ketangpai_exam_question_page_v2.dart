@@ -70,11 +70,54 @@ class _KetangpaiExamQuestionPageV2State
       return;
     }
     _saveTimers[subjectId]?.cancel();
-    _saveTimers[subjectId] = Timer(const Duration(milliseconds: 500), () {
+    _saveTimers[subjectId] = Timer(const Duration(milliseconds: 500), () async {
       if (!mounted) return;
-      _controller.saveAnswer(subjectId, answer);
+      final saved = await _controller.saveAnswer(subjectId, answer);
       _saveTimers.remove(subjectId);
+      if (!saved && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _controller.error.value.isEmpty
+                  ? '答案保存失败'
+                  : _controller.error.value,
+            ),
+          ),
+        );
+      }
     });
+  }
+
+  Future<bool> _flushPendingSaves() async {
+    if (widget.readOnly || _saveTimers.isEmpty) {
+      return true;
+    }
+
+    final pendingIds = _saveTimers.keys.toList();
+    for (final timer in _saveTimers.values) {
+      timer.cancel();
+    }
+    _saveTimers.clear();
+
+    for (final subjectId in pendingIds) {
+      final answer = _controller.answerCache[subjectId] ?? '';
+      final saved = await _controller.saveAnswer(subjectId, answer);
+      if (!saved) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                _controller.error.value.isEmpty
+                    ? '题目 $subjectId 保存失败，已停止交卷'
+                    : _controller.error.value,
+              ),
+            ),
+          );
+        }
+        return false;
+      }
+    }
+    return true;
   }
 
   void _jumpTo(int index, int length) {
@@ -176,7 +219,17 @@ class _KetangpaiExamQuestionPageV2State
       ),
     );
     if (confirm == true) {
-      await _controller.submitExam(widget.courseId, widget.paperId);
+      final flushed = await _flushPendingSaves();
+      if (!flushed || !mounted) return;
+      final submitted = await _controller.submitExam(
+        widget.courseId,
+        widget.paperId,
+      );
+      if (submitted && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('交卷成功')));
+      }
     }
   }
 
@@ -192,6 +245,33 @@ class _KetangpaiExamQuestionPageV2State
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Obx(() {
+              final isSaving = _controller.isSaving.value;
+              final hasPending = _saveTimers.isNotEmpty;
+              final error = _controller.error.value;
+              final theme = Theme.of(context);
+              final text = isSaving
+                  ? '正在保存答案'
+                  : hasPending
+                  ? '答案待保存'
+                  : error.isNotEmpty
+                  ? '保存异常：$error'
+                  : '答案会自动保存';
+              return Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  text,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: error.isNotEmpty
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: AppSpacing.sm),
             Row(
               children: [
                 Expanded(
@@ -286,6 +366,33 @@ class _KetangpaiExamQuestionPageV2State
 
       return Column(
         children: [
+          if (_controller.error.value.isNotEmpty)
+            Material(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.lg,
+                  vertical: AppSpacing.sm,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.error_outline,
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        _controller.error.value,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           Expanded(
             child: PageView.builder(
               controller: _pageController,

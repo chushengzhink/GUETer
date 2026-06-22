@@ -180,6 +180,17 @@ class CookieInterceptor extends Interceptor {
       }
 
       if (CookieManager.isLoggingIn) {
+        if (CookieManager.isTronclassPortalSessionBootstrapUri(
+          response.requestOptions.uri,
+        )) {
+          ApiService.appendExternalConsoleLog(
+            PlatformManager().currentPlatformName,
+            '登录期间忽略业务会话 bootstrap Cookie: ${response.requestOptions.uri}',
+          );
+          handler.next(response);
+          return;
+        }
+
         final platform = PlatformManager().currentPlatformName;
         ApiService.appendExternalConsoleLog(
           platform,
@@ -521,6 +532,19 @@ class CookieManager {
   /// 获取临时 CookieJar
   static CookieJar? getTempCookieJar() {
     return _tempCookieJar;
+  }
+
+  static bool isTronclassPortalSessionBootstrapUri(Uri uri) {
+    final host = uri.host.toLowerCase();
+    if (host != TronclassGuetConstants.defaultCookieHost &&
+        host != Uri.parse(TronclassGuetConstants.portalBaseUrl).host) {
+      return false;
+    }
+    if (uri.path != '/api/login') {
+      return false;
+    }
+    final login = uri.queryParameters['login']?.toLowerCase();
+    return login == 'session_id';
   }
 
   static void clearTempCookies() {

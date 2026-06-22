@@ -9,8 +9,10 @@ import '../api/api_service.dart';
 import '../api/tronclass_batch_sign_executor.dart';
 import '../api/tronclass_sign_api.dart';
 import '../models/user.dart';
+import '../platform.dart';
 import '../services/sign_platform_context.dart';
 import '../services/sign_run_console.dart';
+import '../session/sign_mode_settings.dart';
 import '../utils/tronclass_qr_parser.dart';
 import '../widgets/sign_run_console_panel.dart';
 import '../widgets/tronclass_account_selector.dart';
@@ -32,6 +34,9 @@ class TronclassQrSignPage extends StatefulWidget {
 
 class _TronclassQrSignPageState extends State<TronclassQrSignPage>
     with WidgetsBindingObserver {
+  final SignRunConsoleController _consoleController = SignRunConsoleController(
+    platformContext: SignPlatformContext.tronclass,
+  );
   bool hasCustomVibrationsSupport = false;
   bool isFlash = false;
   MobileScannerController? controller;
@@ -42,6 +47,8 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
   final double _zoomSensitivity = 0.45;
   final double _zoomUpdateThreshold = 0.01;
   bool isProcessing = false;
+  TronclassBatchSignResult? _lastDirectResult;
+  String? _directResultMessage;
 
   @override
   void initState() {
@@ -60,6 +67,7 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
     WidgetsBinding.instance.removeObserver(this);
     controller?.removeListener(_syncZoomScaleFromController);
     controller?.dispose();
+    _consoleController.dispose();
     super.dispose();
   }
 
@@ -180,6 +188,16 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
       'tronclass',
       '[TronclassQr] qrcode parsed rollcallId=$scannedRollcallId',
     );
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.tronclass,
+      perRunUsesAllWhenNoSelection: false,
+    );
+    if (!mounted) return;
+    if (resolution.mode != SignAccountMode.perRunSelection) {
+      await _performDirectSign(data, resolution);
+      return;
+    }
+
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -197,6 +215,79 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
         '[TronclassQr] confirm page closed rollcallId=$scannedRollcallId',
       );
       _restartScan();
+    }
+  }
+
+  Future<void> _performDirectSign(
+    String data,
+    SignModeResolution resolution,
+  ) async {
+    final signAccounts = resolution.users;
+    if (signAccounts.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resolution.message ?? '请先配置畅课签到账号')),
+      );
+      _restartScan();
+      return;
+    }
+
+    setState(() {
+      isProcessing = true;
+      _lastDirectResult = null;
+      _directResultMessage = resolution.mode == SignAccountMode.manualCurrent
+          ? '模式一：当前账号直接提交'
+          : '模式二：平台所选直接批量提交';
+    });
+    await controller?.stop();
+    if (!mounted) return;
+    _consoleController.clear();
+    _consoleController.add(
+      platform: '畅课',
+      accountName: resolution.mode == SignAccountMode.manualCurrent
+          ? '模式一当前账号'
+          : '模式二平台所选账号',
+      accountId: widget.rollcallId,
+      stage: SignRunStage.queued,
+      message: _directResultMessage!,
+    );
+
+    try {
+      final result = await TronclassBatchSignExecutor().sign(
+        context: context,
+        courseName: widget.activityName?.trim().isNotEmpty == true
+            ? widget.activityName!.trim()
+            : '畅课二维码签到',
+        console: _consoleController,
+        users: signAccounts,
+        isContextMounted: () => mounted,
+        networkPolicy: TronclassBatchNetworkPolicy.direct,
+        action: (_, deviceId) => TronclassSignApi.signQr(
+          rollcallId: widget.rollcallId,
+          data: data,
+          deviceId: deviceId,
+        ),
+      );
+      if (!mounted) return;
+      final failure = result.items.where((item) => !item.success).firstOrNull;
+      final hasExpired = result.items.any(
+        (item) => item.message.contains('二维码已过期'),
+      );
+      setState(() {
+        _lastDirectResult = result;
+        _directResultMessage = hasExpired
+            ? '签到二维码已过期，请重新扫码'
+            : failure?.message ??
+                  '成功 ${result.successCount}/${result.totalCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _lastDirectResult = null;
+        _directResultMessage = e.toString().contains('timeout')
+            ? '网络连接超时，请检查网络后重试'
+            : '签到失败，请重试';
+      });
     }
   }
 
@@ -253,40 +344,63 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
         behavior: HitTestBehavior.opaque,
         onScaleStart: _handleScaleStart,
         onScaleUpdate: _handleScaleUpdate,
-        child: MobileScanner(
-          controller: controller,
-          overlayBuilder: (context, _) => _ScannerOverlay(
-            title: title,
-            isFlashOn: isFlash,
-            isProcessing: isProcessing,
-          ),
-          onDetect: (capture) async {
-            if (isProcessing) return;
+        child: Stack(
+          children: [
+            MobileScanner(
+              controller: controller,
+              overlayBuilder: (context, _) => _ScannerOverlay(
+                title: title,
+                isFlashOn: isFlash,
+                isProcessing: isProcessing,
+                directModeHint:
+                    _lastDirectResult == null && _directResultMessage == null,
+              ),
+              onDetect: (capture) async {
+                if (isProcessing) return;
 
-            setState(() {
-              isProcessing = true;
-            });
-            await controller?.stop();
+                setState(() {
+                  isProcessing = true;
+                });
+                await controller?.stop();
 
-            try {
-              if (hasCustomVibrationsSupport) {
-                await Vibration.vibrate(duration: 100);
-              } else {
-                await Vibration.vibrate();
-              }
+                try {
+                  if (hasCustomVibrationsSupport) {
+                    await Vibration.vibrate(duration: 100);
+                  } else {
+                    await Vibration.vibrate();
+                  }
 
-              await Future.delayed(const Duration(milliseconds: 100));
-              await _handleCapture(capture);
-            } catch (e) {
-              ApiService.appendExternalConsoleLog(
-                'tronclass',
-                '[TronclassQr] handle capture failed: $e',
-              );
-              if (mounted) {
-                _showErrorAndRestart('二维码处理失败：$e');
-              }
-            }
-          },
+                  await Future.delayed(const Duration(milliseconds: 100));
+                  await _handleCapture(capture);
+                } catch (e) {
+                  ApiService.appendExternalConsoleLog(
+                    'tronclass',
+                    '[TronclassQr] handle capture failed: $e',
+                  );
+                  if (mounted) {
+                    _showErrorAndRestart('二维码处理失败：$e');
+                  }
+                }
+              },
+            ),
+            if (_directResultMessage != null)
+              Positioned.fill(
+                child: _DirectQrSignResultOverlay(
+                  message: _directResultMessage!,
+                  result: _lastDirectResult,
+                  console: _consoleController,
+                  onDone: () => Navigator.pop(context),
+                  onRetry: () {
+                    setState(() {
+                      _lastDirectResult = null;
+                      _directResultMessage = null;
+                      isProcessing = false;
+                    });
+                    controller?.start();
+                  },
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -298,11 +412,13 @@ class _ScannerOverlay extends StatelessWidget {
     required this.title,
     required this.isFlashOn,
     required this.isProcessing,
+    required this.directModeHint,
   });
 
   final String title;
   final bool isFlashOn;
   final bool isProcessing;
+  final bool directModeHint;
 
   @override
   Widget build(BuildContext context) {
@@ -361,8 +477,10 @@ class _ScannerOverlay extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       isProcessing
-                          ? '正在处理二维码，准备进入账号确认页。'
-                          : '将二维码置于扫描框中央，识别后先确认账号再开始签到。',
+                          ? '正在处理二维码...'
+                          : directModeHint
+                          ? '识别后将根据签到模式直接提交或进入账号确认页。'
+                          : '将二维码置于扫描框中央。',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.86),
                         height: 1.45,
@@ -396,6 +514,79 @@ class _ScannerOverlay extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DirectQrSignResultOverlay extends StatelessWidget {
+  const _DirectQrSignResultOverlay({
+    required this.message,
+    required this.result,
+    required this.console,
+    required this.onDone,
+    required this.onRetry,
+  });
+
+  final String message;
+  final TronclassBatchSignResult? result;
+  final SignRunConsoleController console;
+  final VoidCallback onDone;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final success = result?.successCount ?? 0;
+    final total = result?.totalCount ?? 0;
+    return Container(
+      color: Colors.black.withValues(alpha: 0.72),
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: TronclassGlassCard(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '二维码已识别',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(message, style: const TextStyle(height: 1.45)),
+                  if (result != null) ...[
+                    const SizedBox(height: 12),
+                    Text('成功: $success/$total'),
+                  ],
+                  const SizedBox(height: 12),
+                  SignRunConsolePanel(controller: console, maxHeight: 200),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: onDone,
+                          child: const Text('完成'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: onRetry,
+                          child: const Text('重新扫描'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -571,11 +762,9 @@ class _TronclassQrSignConfirmPageState
     platformContext: SignPlatformContext.tronclass,
   );
   _QrSignState currentState = _QrSignState.ready;
-  String message = '请选择本次要签到的畅课账号';
+  String message = '请选择本次要签到的畅课账号，模式三将严格换网提交';
   List<User> _selectedAccounts = <User>[];
   TronclassBatchSignResult? _lastResult;
-  TronclassBatchNetworkPolicy _networkPolicy =
-      TronclassBatchNetworkPolicy.strict;
   late final DateTime _scannedAt;
   Timer? _elapsedTimer;
   int _elapsedSeconds = 0;
@@ -600,10 +789,17 @@ class _TronclassQrSignConfirmPageState
   }
 
   Future<void> _performSignIn() async {
-    if (_selectedAccounts.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('请至少选择一个畅课账号')));
+    final resolution = await SignModeSettings.resolveUsers(
+      platform: PlatformType.tronclass,
+      perRunSelection: _selectedAccounts,
+      perRunUsesAllWhenNoSelection: false,
+    );
+    final signAccounts = resolution.users;
+    if (signAccounts.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resolution.message ?? '请至少选择一个畅课账号')),
+      );
       return;
     }
 
@@ -618,20 +814,19 @@ class _TronclassQrSignConfirmPageState
       accountName: '本次二维码签到',
       accountId: widget.rollcallId,
       stage: SignRunStage.queued,
-      message: _networkPolicy == TronclassBatchNetworkPolicy.qrFastFirst
-          ? '已选择极速防过期模式'
-          : '已选择严格换网模式',
+      message: '模式三：每次选择，严格换网提交',
       detail: '扫码后已用时 $_elapsedSeconds 秒',
     );
 
     try {
+      if (!mounted) return;
       final result = await TronclassBatchSignExecutor().sign(
         context: context,
         courseName: '畅课二维码签到',
         console: _consoleController,
-        users: _selectedAccounts,
+        users: signAccounts,
         isContextMounted: () => mounted,
-        networkPolicy: _networkPolicy,
+        networkPolicy: TronclassBatchNetworkPolicy.strict,
         action: (_, deviceId) => TronclassSignApi.signQr(
           rollcallId: widget.rollcallId,
           data: widget.data,
@@ -649,11 +844,10 @@ class _TronclassQrSignConfirmPageState
         currentState = result.successCount > 0
             ? _QrSignState.success
             : _QrSignState.failure;
-        message =
-            hasExpired
+        message = hasExpired
             ? '签到二维码已过期，请重新扫码'
             : failure?.message ??
-            '成功 ${result.successCount}/${result.totalCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}';
+                  '成功 ${result.successCount}/${result.totalCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}';
       });
     } catch (e) {
       if (!mounted) return;
@@ -701,7 +895,7 @@ class _TronclassQrSignConfirmPageState
                       children: [
                         const TronclassSectionHeader(
                           title: '二维码已识别',
-                          subtitle: '确认本次参与签到的畅课账号后再提交。',
+                          subtitle: '模式三：选择本次参与签到的畅课账号，提交时严格换网。',
                         ),
                         const SizedBox(height: 12),
                         Text(
@@ -725,7 +919,7 @@ class _TronclassQrSignConfirmPageState
                         if (_elapsedSeconds >= 10) ...[
                           const SizedBox(height: 8),
                           const Text(
-                            '二维码可能即将过期，建议使用极速防过期或重新扫码。',
+                            '二维码可能即将过期，请尽快选择账号并提交，或返回重新扫码。',
                             style: TextStyle(
                               color: TronclassGlassPalette.danger,
                               height: 1.4,
@@ -734,16 +928,6 @@ class _TronclassQrSignConfirmPageState
                         ],
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  _QrNetworkPolicyCard(
-                    policy: _networkPolicy,
-                    elapsedSeconds: _elapsedSeconds,
-                    onChanged: (policy) {
-                      setState(() {
-                        _networkPolicy = policy;
-                      });
-                    },
                   ),
                   const SizedBox(height: 16),
                   TronclassAccountSelector(
@@ -937,79 +1121,6 @@ class _TronclassQrSignConfirmPageState
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _QrNetworkPolicyCard extends StatelessWidget {
-  const _QrNetworkPolicyCard({
-    required this.policy,
-    required this.elapsedSeconds,
-    required this.onChanged,
-  });
-
-  final TronclassBatchNetworkPolicy policy;
-  final int elapsedSeconds;
-  final ValueChanged<TronclassBatchNetworkPolicy> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final expiredRisk = elapsedSeconds >= 10;
-    return TronclassGlassCard(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const TronclassSectionHeader(
-            title: '二维码提交模式',
-            subtitle: '严格换网更稳妥，极速防过期会让首账号先提交。',
-          ),
-          const SizedBox(height: 12),
-          SegmentedButton<TronclassBatchNetworkPolicy>(
-            segments: const [
-              ButtonSegment(
-                value: TronclassBatchNetworkPolicy.strict,
-                icon: Icon(Icons.network_check_rounded),
-                label: Text('严格换网'),
-              ),
-              ButtonSegment(
-                value: TronclassBatchNetworkPolicy.qrFastFirst,
-                icon: Icon(Icons.bolt_rounded),
-                label: Text('极速防过期'),
-              ),
-            ],
-            selected: {policy},
-            onSelectionChanged: (values) => onChanged(values.single),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                policy == TronclassBatchNetworkPolicy.qrFastFirst
-                    ? Icons.bolt_rounded
-                    : Icons.verified_user_rounded,
-                size: 18,
-                color: expiredRisk
-                    ? TronclassGlassPalette.warning
-                    : TronclassGlassPalette.mutedText,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  policy == TronclassBatchNetworkPolicy.qrFastFirst
-                      ? '第一个选中账号会跳过换网直接提交，后续账号仍逐个换网。'
-                      : '每个账号都会先检查会话并重启移动数据，再提交签到。',
-                  style: const TextStyle(
-                    color: TronclassGlassPalette.mutedText,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }

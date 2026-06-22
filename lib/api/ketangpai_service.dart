@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
@@ -82,6 +84,137 @@ class KetangpaiService {
       ...body,
       'reqtimestamp': seconds ? now ~/ 1000 : now,
     };
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildNumberSignBody({
+    required String signId,
+    required String code,
+  }) {
+    return <String, dynamic>{'id': signId, 'code': code};
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildGpsSignBody({
+    required String signId,
+    required String latitude,
+    required String longitude,
+    String accuracy = '100',
+  }) {
+    return <String, dynamic>{
+      'id': signId,
+      'code': '',
+      'unusual': 0,
+      'latitude': latitude,
+      'longitude': longitude,
+      'accuracy': accuracy,
+      'clienttype': 1,
+    };
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildExamListBody({
+    required String courseId,
+    int page = 1,
+    int limit = 50,
+  }) {
+    return <String, dynamic>{
+      'courseid': courseId,
+      'contenttype': 6,
+      'dirid': 0,
+      'lessonlink': <dynamic>[],
+      'sort': <dynamic>[],
+      'page': page,
+      'limit': limit,
+      'desc': 3,
+      'courserole': 0,
+      'vtr_type': '',
+    };
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildSaveAnswerBody({
+    required String courseId,
+    required String testPaperId,
+    required String subjectId,
+    required String answer,
+    String attachment = '',
+  }) {
+    return <String, dynamic>{
+      'courseid': courseId,
+      'testpaperid': testPaperId,
+      'subjectid': subjectId,
+      'answer': answer,
+      'attachment': attachment,
+    };
+  }
+
+  static String _jsonSummary(Object? value) {
+    Object? sanitized(Object? input) {
+      if (input is Map) {
+        return input.map((key, value) {
+          final name = key.toString();
+          final hidden = name.toLowerCase().contains('token');
+          return MapEntry(name, hidden ? '<hidden>' : sanitized(value));
+        });
+      }
+      if (input is List) {
+        return input.map(sanitized).toList();
+      }
+      return input;
+    }
+
+    final text = jsonEncode(sanitized(value));
+    return text.length > 600 ? '${text.substring(0, 600)}...' : text;
+  }
+
+  static String _responseSummary(dynamic payload) {
+    final map = asKetangpaiMap(payload);
+    if (map == null) {
+      return 'payload=${payload.runtimeType}';
+    }
+    final dataMap = asKetangpaiMap(map['data']);
+    final keys = dataMap == null ? const <String>[] : dataMap.keys.toList();
+    return 'status=${map['status']} code=${map['code']} '
+        'message=${_messageOf(map)} listCount=${extractKetangpaiList(map).length} '
+        'dataKeys=$keys';
+  }
+
+  static void _logRequest(
+    String endpoint,
+    Map<String, dynamic> body,
+    Map<String, String>? headers,
+    PlatformRequestOptions? options,
+  ) {
+    final message =
+        '${options?.operationId ?? endpoint} request endpoint=$endpoint '
+        'body=${_jsonSummary(body)} headers=${_jsonSummary(headers)}';
+    debugPrint('[KetangpaiService] $message');
+    ApiService.appendExternalConsoleLog('ketangpai', message);
+  }
+
+  static void _logResponse(
+    String endpoint,
+    dynamic payload,
+    PlatformRequestOptions? options,
+  ) {
+    final message =
+        '${options?.operationId ?? endpoint} response endpoint=$endpoint '
+        '${_responseSummary(payload)}';
+    debugPrint('[KetangpaiService] $message');
+    ApiService.appendExternalConsoleLog('ketangpai', message);
+  }
+
+  static void _logError(
+    String endpoint,
+    Object error,
+    StackTrace stackTrace,
+    PlatformRequestOptions? options,
+  ) {
+    final message =
+        '${options?.operationId ?? endpoint} error endpoint=$endpoint error=$error';
+    debugPrint('[KetangpaiService] $message\n$stackTrace');
+    ApiService.appendExternalConsoleLog('ketangpai', message);
   }
 
   static int? _intOrNull(dynamic value) {
@@ -186,16 +319,24 @@ class KetangpaiService {
       userId: userId,
     );
 
+    final requestBody = _withTimestamp(body, seconds: timestampInSeconds);
+    _logRequest(endpoint, requestBody, headers, platformOptions);
+
     try {
-      return context.sendRequest(
+      final response = await context.sendRequest(
         endpoint,
         method: 'POST',
-        body: _withTimestamp(body, seconds: timestampInSeconds),
+        body: requestBody,
         headers: headers,
         legacyHeaders: headers,
         signProfile: signProfile,
         platformOptions: platformOptions,
       );
+      _logResponse(endpoint, response.data, platformOptions);
+      return response;
+    } catch (e, stackTrace) {
+      _logError(endpoint, e, stackTrace, platformOptions);
+      rethrow;
     } finally {
       context.dispose();
     }
@@ -262,7 +403,7 @@ class KetangpaiService {
   }) async {
     final response = await _postForCurrentUser(
       '/AttenceApi/checkin',
-      body: <String, dynamic>{'id': signId, 'code': code},
+      body: buildNumberSignBody(signId: signId, code: code),
       headers: <String, String>{'token': token},
       signProfile: SignRequestProfiles.ketangpaiAttendance(
         baseUrl: PlatformManager().ketangpaiBaseUrl,
@@ -281,15 +422,12 @@ class KetangpaiService {
   }) async {
     final response = await _postForCurrentUser(
       '/AttenceApi/checkin',
-      body: <String, dynamic>{
-        'id': signId,
-        'code': '',
-        'unusual': '',
-        'latitude': latitude,
-        'longitude': longitude,
-        'accuracy': accuracy,
-        'clienttype': 1,
-      },
+      body: buildGpsSignBody(
+        signId: signId,
+        latitude: latitude,
+        longitude: longitude,
+        accuracy: accuracy,
+      ),
       headers: <String, String>{'token': token},
       signProfile: SignRequestProfiles.ketangpaiAttendance(
         baseUrl: PlatformManager().ketangpaiBaseUrl,
@@ -303,18 +441,7 @@ class KetangpaiService {
   getExamList({required String courseId, int page = 1, int limit = 50}) async {
     final response = await _postForCurrentUser(
       '/FutureV2/CourseMeans/getCourseContent',
-      body: <String, dynamic>{
-        'courseid': courseId,
-        'contenttype': 6,
-        'dirid': 0,
-        'lessonlink': <dynamic>[],
-        'sort': <dynamic>[],
-        'page': page,
-        'limit': limit,
-        'desc': 3,
-        'courserole': 0,
-        'vtr_type': '',
-      },
+      body: buildExamListBody(courseId: courseId, page: page, limit: limit),
       platformOptions: _readOptions('ketangpai.exam.list'),
     );
     return listResult(response.data);
@@ -357,13 +484,13 @@ class KetangpaiService {
   }) async {
     final response = await _postForCurrentUser(
       '/TestpaperApi/saveAnswer',
-      body: <String, dynamic>{
-        'courseid': courseId,
-        'testpaperid': testPaperId,
-        'subjectid': subjectId,
-        'answer': answer,
-        'attachment': attachment,
-      },
+      body: buildSaveAnswerBody(
+        courseId: courseId,
+        testPaperId: testPaperId,
+        subjectId: subjectId,
+        answer: answer,
+        attachment: attachment,
+      ),
       platformOptions: _submitOptions('ketangpai.exam.saveAnswer'),
     );
     return mapResult(response.data);
