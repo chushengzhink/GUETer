@@ -1,46 +1,30 @@
-import 'dart:io';
-
+import 'package:course_helper/app_entries/app_entry_registry.dart';
+import 'package:course_helper/layout/layout_preferences.dart';
+import 'package:course_helper/pages/my_page.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('core pages embed contextual smart suggestions and help hints', () {
-    const pages = <String, String>{
-      'courses': 'lib/pages/courses.dart',
-      'todos': 'lib/pages/todos_page.dart',
-      'materials': 'lib/pages/material_search_page.dart',
-      'study': 'lib/pages/study_center_page.dart',
-      'outputs': 'lib/pages/file_output_manager_page.dart',
-      'tools': 'lib/pages/tools_page.dart',
-      'settings': 'lib/pages/settings.dart',
-    };
-
-    for (final entry in pages.entries) {
-      final source = File(entry.value).readAsStringSync();
-      expect(
-        source,
-        contains('SmartInlinePanel'),
-        reason: '${entry.key} should show page-local smart suggestions.',
-      );
-      expect(
-        source,
-        contains('ContextHelpHint'),
-        reason: '${entry.key} should expose contextual help in place.',
-      );
-    }
+  testWidgets('My groups account management, settings, help and updates', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const MaterialApp(home: MyPage()));
+    expect(find.text('Accounts'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('Help'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Updates'), 200);
+    expect(find.text('Updates'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
-
-  test('main navigation remains limited to the requested five entries', () {
-    final registry = File('lib/app_entries/app_entry_registry.dart')
-        .readAsStringSync();
-    final layout = File('lib/layout/layout_preferences.dart').readAsStringSync();
-
-    expect(registry, isNot(contains("id: 'smart-organizer'")));
-    expect(registry, isNot(contains("id: 'material-search'")));
-    expect(registry, isNot(contains("id: 'manual'")));
-    expect(layout, contains("'courses'"));
-    expect(layout, contains("'accounts'"));
-    expect(layout, contains("'todos'"));
-    expect(layout, contains("'tools'"));
-    expect(layout, contains("'settings'"));
+  test('registry retains legacy IDs with four default destinations', () {
+    final entries = buildBuiltinAppEntries();
+    expect(entries.map((e) => e.id), LayoutPreferences.defaultNavOrder);
+    expect(
+      const LayoutPreferences().visibleNavOrder(
+        entries.map((e) => e.id).toList(),
+      ),
+      ['courses', 'todos', 'tools', 'settings'],
+    );
+    expect(entries.singleWhere((e) => e.id == 'settings').titleZh, '我的');
   });
 }

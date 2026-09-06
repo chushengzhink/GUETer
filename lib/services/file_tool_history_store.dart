@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/file_tool_models.dart';
 
 class FileToolHistoryStore {
+  static final revision = ValueNotifier<int>(0);
   FileToolHistoryStore({
     Future<SharedPreferences> Function()? preferencesLoader,
     this.maxRecords = 100,
@@ -44,6 +46,7 @@ class FileToolHistoryStore {
     if (scope == null) {
       final prefs = await _preferencesLoader();
       await prefs.remove(storageKey);
+      revision.value++;
       return;
     }
     final records = await load();
@@ -77,5 +80,6 @@ class FileToolHistoryStore {
       storageKey,
       records.map((record) => record.encode()).toList(),
     );
+    revision.value++;
   }
 }

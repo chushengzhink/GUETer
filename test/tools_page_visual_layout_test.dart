@@ -1,53 +1,71 @@
-import 'dart:io';
-
+import 'package:course_helper/pages/tools_page.dart';
+import 'package:course_helper/features/tools/tool_catalog.dart';
+import 'package:course_helper/l10n/app_localizations.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  late String source;
-
-  setUpAll(() {
-    source = File('lib/pages/tools_page.dart').readAsStringSync();
-  });
-
-  // Navigation, search, direct category access and large-text layouts are
-  // covered by beta_tool_catalog_test.dart through real widget interactions.
-
-  test('pdf category exposes the seven pdf actions', () {
-    const pdfActionIds = <String>[
-      "id: 'arrange-pdf'",
-      "id: 'lightweight-to-pdf'",
-      "id: 'pdf-to-images'",
-      "id: 'images-to-pdf'",
-      "id: 'compress-pdf'",
-      "id: 'extract-pages'",
-      "id: 'watermark-pdf'",
-    ];
-
-    for (final id in pdfActionIds) {
-      expect(source, contains(id));
-    }
-    expect(source, contains("category.id == 'pdf'"));
-    expect(source, contains('_CompactPdfHelpPanel'));
-  });
-
-  test('tools page hosts removed main navigation destinations', () {
-    expect(source, contains("id: 'smart-organizer'"));
-    expect(source, contains('SmartOrganizerPage'));
-    expect(source, contains("id: 'material-search'"));
-    expect(source, contains('MaterialSearchPage'));
-    expect(source, contains("id: 'user-manual'"));
-    expect(source, contains('UserManualPage'));
-    expect(source, contains("'智能'"));
-    expect(source, contains("'资料'"));
-    expect(source, contains("'说明书'"));
-  });
-
-  test('timeline is not nested in tools page', () {
-    expect(source, isNot(contains("id: 'learning-timeline'")));
-  });
-
-  test('files category exposes output manager action', () {
-    expect(source, contains("id: 'file-output-manager'"));
-    expect(source, contains('FileOutputManagerPage'));
+  testWidgets('real tools page retains actions and searches inline', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(
+      const MaterialApp(
+        locale: Locale('zh'),
+        supportedLocales: AppLocalizations.supportedLocales,
+        localizationsDelegates: [
+          AppLocalizations.delegate,
+          ...GlobalMaterialLocalizations.delegates,
+        ],
+        home: ToolsPage(initializeServices: false),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final catalog = tester.widget<ToolCatalog>(find.byType(ToolCatalog));
+    final ids = catalog.categories
+        .expand((c) => c.actions)
+        .map((a) => a.id)
+        .toList();
+    expect(ids, hasLength(26));
+    expect(
+      ids,
+      containsAll([
+        'smart-organizer',
+        'material-search',
+        'user-manual',
+        'file-output-manager',
+      ]),
+    );
+    expect(ids, isNot(contains('apod')));
+    expect(ids, isNot(contains('ai-figure')));
+    expect(
+      catalog.categories.singleWhere((c) => c.id == 'pdf').actions,
+      hasLength(7),
+    );
+    expect(
+      ToolCatalogController()
+          .favorites(catalog.categories, [])
+          .map((a) => a.id),
+      ['material-search', 'material-ocr', 'arrange-pdf', 'file-output-manager'],
+    );
+    await tester.enterText(find.byKey(const ValueKey('tool-search')), 'PDF');
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byKey(const ValueKey('tool-arrange-pdf')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('tool-search')),
+      'nonexistent-tool',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('没有匹配的工具，换个关键词试试。'), findsOneWidget);
+    await tester.tap(find.byTooltip('清空搜索'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('category-pdf')));
+    await tester.tap(find.byKey(const ValueKey('category-pdf')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('PDF'), findsWidgets);
+    expect(tester.takeException(), isNull);
   });
 }

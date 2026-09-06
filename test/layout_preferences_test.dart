@@ -5,6 +5,42 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('layout preferences', () {
+    test(
+      'default upgrade keeps four visible tabs and allows restoring accounts',
+      () {
+        const ids = LayoutPreferences.defaultNavOrder;
+        const defaults = LayoutPreferences();
+        expect(defaults.visibleNavOrder(ids), [
+          'courses',
+          'todos',
+          'tools',
+          'settings',
+        ]);
+        final migrated = LayoutPreferences.fromJson({
+          'navOrder': ids,
+          'hiddenNavIds': <String>[],
+        });
+        expect(migrated.visibleNavOrder(ids), defaults.visibleNavOrder(ids));
+        final restored = migrated.copyWith(hiddenNavIds: []);
+        expect(
+          LayoutPreferences.fromJson(restored.toJson()).visibleNavOrder(ids),
+          ids,
+        );
+      },
+    );
+    test('custom navigation survives migration unchanged', () {
+      final value = LayoutPreferences.fromJson({
+        'navOrder': ['accounts', 'tools', 'courses', 'settings', 'todos'],
+        'hiddenNavIds': ['todos'],
+      });
+      expect(value.visibleNavOrder(LayoutPreferences.defaultNavOrder), [
+        'accounts',
+        'tools',
+        'courses',
+        'settings',
+      ]);
+    });
+
     test('empty or corrupt JSON falls back to the five-entry default', () {
       expect(
         LayoutPreferencesStore.parse(null).navOrder,

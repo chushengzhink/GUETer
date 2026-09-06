@@ -79,10 +79,18 @@ class ToolCatalogController extends ChangeNotifier {
           if (actions.containsKey(id)) actions[id]!,
       ];
     }
-    return [
+    const defaults = [
+      'material-search',
+      'material-ocr',
+      'arrange-pdf',
+      'file-output-manager',
+    ];
+    final ids = <String>{
+      ...defaults.where(actions.containsKey),
       for (final c in categories)
-        if (c.actions.isNotEmpty) c.actions.first,
-    ].take(4).toList();
+        if (c.actions.isNotEmpty) c.actions.first.id,
+    };
+    return ids.take(4).map((id) => actions[id]!).toList();
   }
 }
 
@@ -158,7 +166,7 @@ class _ToolCatalogState extends State<ToolCatalog> {
                   : (en ? 'Quick access' : '常用工具'),
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             if (actions.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -189,18 +197,32 @@ class _ToolCatalogState extends State<ToolCatalog> {
                 en ? 'All categories' : '全部分类',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
-              const SizedBox(height: 12),
-              _tiles(context, [
-                for (final category in widget.categories)
-                  _CatalogTile(
-                    key: ValueKey('category-${category.id}'),
-                    title: category.label,
-                    subtitle:
-                        '${category.actions.length} ${en ? 'tools' : '个工具'} · ${category.subtitle}',
-                    icon: category.icon,
-                    onTap: () => widget.onOpenCategory(category),
-                  ),
-              ]),
+              const SizedBox(height: 8),
+              Material(
+                color: Theme.of(context).colorScheme.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(16),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    for (final category in widget.categories)
+                      ListTile(
+                        key: ValueKey('category-${category.id}'),
+                        leading: Icon(
+                          category.icon,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        title: Text(category.label),
+                        subtitle: Text(
+                          '${category.actions.length} ${en ? 'tools' : '个工具'} · ${category.subtitle}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => widget.onOpenCategory(category),
+                      ),
+                  ],
+                ),
+              ),
             ],
           ],
         );
@@ -249,7 +271,9 @@ class _CatalogTile extends StatelessWidget {
     return Semantics(
       button: true,
       enabled: onTap != null,
-      child: Card.filled(
+      child: Card(
+        color: scheme.surfaceContainerLowest,
+        elevation: 0,
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -261,31 +285,22 @@ class _CatalogTile extends StatelessWidget {
                   onTap!();
                 },
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(icon, color: scheme.primary),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 Text(title, style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  maxLines: 3,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
-                if (badge != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    badge!,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.labelSmall?.copyWith(color: scheme.primary),
-                  ),
-                ],
               ],
             ),
           ),

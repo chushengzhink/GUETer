@@ -1,3 +1,6 @@
+import '../widgets/account_context_header.dart';
+import '../controllers/account_context_controller.dart';
+import 'courses.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -1514,8 +1517,259 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     return todos;
   }
 
+  PlatformType? _selectedPlatformFilter;
+
+  Widget _buildCompactTodo(Map<String, dynamic> todo, PlatformType platform) {
+    final deadline = _extractDeadlineFromTodo(todo, platform);
+    final owner = _platformData[platform]!.ownerUserId;
+    final title =
+        todo['title']?.toString() ?? contextText(context, '待办事项', 'To-do');
+    final course = todo['course_name']?.toString() ?? '';
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      leading: Icon(
+        _getTypeIcon(todo['type']?.toString() ?? ''),
+        color: Theme.of(context).colorScheme.primary,
+      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: Text(
+        [
+          if (course.isNotEmpty) course,
+          platformTitle(context, platform),
+          if (deadline != null)
+            '${DateFormat('MM-dd HH:mm').format(deadline.toLocal())} · ${deadline.isBefore(DateTime.now()) ? contextText(context, '已逾期', 'Overdue') : contextText(context, '待完成', 'Pending')}',
+        ].join('\n'),
+      ),
+      trailing: Icon(
+        todo['is_locked'] == true ? Icons.lock_outline : Icons.chevron_right,
+      ),
+      onTap: todo['is_locked'] == true
+          ? null
+          : () async {
+              final controller = AccountContextController.instance;
+              await controller.select(platform, accountId: owner);
+              if (!mounted ||
+                  controller.error != null ||
+                  PlatformManager().currentPlatform != platform ||
+                  (owner != null && AccountManager.currentSessionId != owner)) {
+                return;
+              }
+              if (platform == PlatformType.rainClassroom) {
+                await _openRainClassroomTodo(todo);
+              } else {
+                if (!mounted) return;
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => platform == PlatformType.tronclass
+                        ? TronclassTodoDetailPage(todo: todo)
+                        : const CoursesPage(),
+                  ),
+                );
+              }
+            },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final platforms = _platformData.keys
+        .where(
+          (platform) =>
+              _selectedPlatformFilter == null ||
+              platform == _selectedPlatformFilter,
+        )
+        .toList();
+    final entries = [
+      for (final platform in platforms)
+        for (final todo in _getFilteredTodos(platform))
+          (platform: platform, todo: todo),
+    ];
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(contextText(context, '待办', 'To-dos')),
+        actions: [
+          IconButton(
+            tooltip: contextText(context, '提醒设置', 'Reminder settings'),
+            icon: const Icon(Icons.notifications_outlined),
+            onPressed: () => showModalBottomSheet<void>(
+              context: context,
+              useSafeArea: true,
+              isScrollControlled: true,
+              builder: (context) => SingleChildScrollView(
+                child: _buildNotificationPreferenceCard(context),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: contextText(context, '刷新全部', 'Refresh all'),
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshAllPlatformAccounts,
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refreshAllPlatformAccounts,
+        child: ListView(
+          key: const PageStorageKey('todos-list'),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(
+                        contextText(context, '全部平台', 'All platforms'),
+                      ),
+                      selected: _selectedPlatformFilter == null,
+                      onSelected: (_) =>
+                          setState(() => _selectedPlatformFilter = null),
+                    ),
+                  ),
+                  for (final platform in _platformData.keys)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(platformTitle(context, platform)),
+                        selected: _selectedPlatformFilter == platform,
+                        onSelected: (_) =>
+                            setState(() => _selectedPlatformFilter = platform),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              children: [
+                Text(
+                  contextText(
+                    context,
+                    '${entries.length} 项待处理',
+                    '${entries.length} pending',
+                  ),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                TextButton.icon(
+                  icon: const Icon(Icons.date_range_outlined),
+                  label: Text(
+                    _selectedDateFilter ??
+                        contextText(context, '全部日期', 'All dates'),
+                  ),
+                  onPressed: () async {
+                    final day = await showDatePicker(
+                      context: context,
+                      initialDate: DateTime.now(),
+                      firstDate: DateTime.now().subtract(
+                        const Duration(days: 365),
+                      ),
+                      lastDate: DateTime.now().add(const Duration(days: 730)),
+                    );
+                    if (mounted && day != null) {
+                      setState(
+                        () => _selectedDateFilter = DateFormat(
+                          'yyyy-MM-dd',
+                        ).format(day),
+                      );
+                    }
+                  },
+                ),
+                if (_selectedDateFilter != null)
+                  IconButton(
+                    tooltip: contextText(
+                      context,
+                      '清除日期筛选',
+                      'Clear date filter',
+                    ),
+                    icon: const Icon(Icons.close),
+                    onPressed: () => setState(() => _selectedDateFilter = null),
+                  ),
+              ],
+            ),
+            if (_isInitializing ||
+                platforms.any((p) => _platformData[p]!.isLoading))
+              const LinearProgressIndicator(minHeight: 2),
+            for (final platform in platforms)
+              if ((!_hasPlatformAccount(platform) &&
+                      _selectedPlatformFilter == platform) ||
+                  _platformData[platform]!.refreshFailed)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.info_outline),
+                  title: Text(platformTitle(context, platform)),
+                  subtitle: Text(
+                    _hasPlatformAccount(platform)
+                        ? contextText(
+                            context,
+                            '刷新失败，已保留原有内容',
+                            'Refresh failed. Existing content retained.',
+                          )
+                        : contextText(context, '未登录', 'Not signed in'),
+                  ),
+                  trailing: TextButton(
+                    onPressed: () async {
+                      if (_hasPlatformAccount(platform)) {
+                        await _refreshSinglePlatform(platform);
+                      } else {
+                        await PlatformManager().setPlatform(platform);
+                        if (context.mounted) {
+                          Navigator.of(context).pushNamed('/accounts');
+                        }
+                      }
+                    },
+                    child: Text(
+                      _hasPlatformAccount(platform)
+                          ? contextText(context, '重试', 'Retry')
+                          : contextText(context, '登录', 'Sign in'),
+                    ),
+                  ),
+                ),
+            if (entries.isEmpty && !_isInitializing)
+              Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  children: [
+                    Icon(Icons.task_alt, size: 44, color: colors.primary),
+                    const SizedBox(height: 12),
+                    Text(
+                      contextText(
+                        context,
+                        '当前筛选下没有待办',
+                        'No to-dos for these filters',
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            for (final entry in entries)
+              Material(
+                color: colors.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(12),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildCompactTodo(entry.todo, entry.platform),
+                    const Divider(height: 1, thickness: .5),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ignore: unused_element
+  Widget _buildLegacyDashboard(BuildContext context) {
     final totalTodos = _getTotalTodos();
     final completedTodos = _getCompletedTodos();
     final palette = resolveGlobalPalette(

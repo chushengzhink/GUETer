@@ -1,3 +1,4 @@
+import 'widgets/sign_task_dock.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -392,6 +393,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                   selectedId: _selectedEntryId,
                 ),
               ),
+              const SignTaskDock(),
               AnimatedBuilder(
                 animation: _sessionHealthController,
                 builder: (context, _) {
@@ -443,7 +445,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       'todos' => l10n.appTodos,
       'material-search' => locale.languageCode == 'en' ? 'Materials' : '资料',
       'tools' => l10n.appTools,
-      'settings' => l10n.appSettings,
+      'settings' => locale.languageCode == 'en' ? 'Me' : '我的',
       _ => entry.titleFor(locale),
     };
   }

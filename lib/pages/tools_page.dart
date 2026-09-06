@@ -3,7 +3,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,19 +24,13 @@ import '../models/tool_workflow_models.dart';
 import '../features/openlist/openlist_cloud_page.dart';
 import '../features/unipus/unipus_assist_page.dart';
 import '../plugins/plugin_runtime.dart';
-import '../services/file_output_manager_service.dart';
 import '../services/file_output_share_service.dart';
 import '../services/file_tool_history_store.dart';
 import '../services/gueter_storage_service.dart';
 import '../services/lightweight_pdf_conversion_service.dart';
-import '../services/nasa_api.dart';
 import '../session/app_settings.dart';
-import '../smart/smart_models.dart';
 import '../theme/components/app_card.dart';
 import '../theme/components/dashboard_components.dart';
-import '../widgets/context_help.dart';
-import '../widgets/smart_inline_panel.dart';
-import 'apod_detail_page.dart';
 import 'academic_search_page.dart';
 import 'file_output_manager_page.dart';
 import 'file_tools_page.dart';
@@ -102,18 +95,11 @@ class _ToolsPageState extends State<ToolsPage> {
   final List<_ToolTaskRecord> _recentTasks = <_ToolTaskRecord>[];
   final ScrollController _dashboardScrollController = ScrollController();
 
-  final NasaApiService _nasaApiService = NasaApiService();
   final FileToolHistoryStore _historyStore = FileToolHistoryStore();
+  final List<FileToolHistoryRecord> _recentFiles = [];
   final FileOutputShareService _shareService = FileOutputShareService();
-  final FileOutputManagerService _outputManagerService =
-      FileOutputManagerService();
   final LightweightPdfConversionService _pdfConversionService =
       LightweightPdfConversionService();
-  NasaApodData? _apodData;
-  bool _apodLoading = false;
-  String? _apodError;
-  FileOutputManagerSummary? _outputSummary;
-  bool _outputSummaryLoading = false;
 
   static final List<Map<String, dynamic>> _watermarkColorOptions = [
     {'name': 'deep-red', 'color': PdfColor(170, 30, 30)},
@@ -462,7 +448,7 @@ class _ToolsPageState extends State<ToolsPage> {
       ToolCategorySpec(
         id: 'study',
         label: _tr('学习', 'Study'),
-        subtitle: _tr('阅读、检索、天文图', 'Reading, search, APOD'),
+        subtitle: _tr('阅读、资料与复习', 'Reading, materials and review'),
         icon: Icons.auto_stories_outlined,
         color: const Color(0xFF8B5CF6),
         actions: [
@@ -581,24 +567,6 @@ class _ToolsPageState extends State<ToolsPage> {
             },
             badge: _tr('检索', 'Search'),
           ),
-          ToolActionSpec(
-            id: 'apod',
-            title: l10n.apodCardTitle,
-            subtitle: _apodData?.title ?? l10n.apodLoadingSubtitle,
-            icon: Icons.nights_stay_rounded,
-            color: const Color(0xFF0EA5E9),
-            onTap: _apodData == null
-                ? (_apodLoading ? null : () => _refreshApod())
-                : () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ApodDetailPage(apod: _apodData!),
-                      ),
-                    );
-                  },
-            badge: 'APOD',
-          ),
         ],
       ),
       ToolCategorySpec(
@@ -696,15 +664,6 @@ class _ToolsPageState extends State<ToolsPage> {
             badge: _tr('官网', 'Web'),
           ),
           ToolActionSpec(
-            id: 'ai-figure',
-            title: l10n.aiFigureTitle,
-            subtitle: l10n.aiFigureSubtitle,
-            icon: Icons.science_outlined,
-            color: const Color(0xFFF97316),
-            onTap: () => _openExternalUrl('https://deepscientist.cc'),
-            badge: 'AI',
-          ),
-          ToolActionSpec(
             id: 'computer-help',
             title: l10n.computerHelpTitle,
             subtitle: l10n.computerHelpSubtitle,
@@ -779,10 +738,10 @@ class _ToolsPageState extends State<ToolsPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !widget.initializeServices) return;
-      _initializeApod();
       _loadPdfHistory();
       _refreshDefaultOutputDirectory();
     });
+    FileToolHistoryStore.revision.addListener(_loadPdfHistory);
     AppSettings.layoutPreferencesStore.notifier.addListener(_onRegistryChanged);
     AppSettings.pluginStore.enabledPluginsNotifier.addListener(
       _onRegistryChanged,
@@ -795,9 +754,19 @@ class _ToolsPageState extends State<ToolsPage> {
   }
 
   Future<void> _loadPdfHistory() async {
-    final records = await _historyStore.load(scope: FileToolHistoryScope.pdf);
+    final allRecords = await _historyStore.load();
+    final records = allRecords
+        .where((record) => record.scope == FileToolHistoryScope.pdf)
+        .toList();
     if (!mounted) return;
     setState(() {
+      _recentFiles
+        ..clear()
+        ..addAll(
+          allRecords
+              .where((record) => record.success && record.outputPath.isNotEmpty)
+              .take(3),
+        );
       _recentTasks
         ..clear()
         ..addAll(records.map(_ToolTaskRecord.fromHistory));
@@ -805,23 +774,33 @@ class _ToolsPageState extends State<ToolsPage> {
         _lastOutputPath = _recentTasks.first.outputPath;
       }
     });
-    unawaited(_refreshOutputSummary());
   }
 
-  Future<void> _refreshOutputSummary() async {
-    if (_outputSummaryLoading) return;
-    _outputSummaryLoading = true;
-    try {
-      final summary = await _outputManagerService.loadSummary(
-        performanceMode: _performanceMode,
-      );
-      if (!mounted) return;
-      setState(() {
-        _outputSummary = summary;
-      });
-    } finally {
-      _outputSummaryLoading = false;
+  Future<void> _openRecentOutput(String path) async {
+    if (!await File(path).exists()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _tr(
+                '文件已移动或删除，请到输出管理查看',
+                'File moved or deleted. Check output manager.',
+              ),
+            ),
+          ),
+        );
+      }
+      return;
     }
+    await OpenFilex.open(path);
+  }
+
+  Future<void> _shareRecentOutput(String path) async {
+    if (!await File(path).exists()) {
+      await _openRecentOutput(path);
+      return;
+    }
+    await _shareOutputPath(path);
   }
 
   Future<void> _refreshDefaultOutputDirectory() async {
@@ -896,59 +875,58 @@ class _ToolsPageState extends State<ToolsPage> {
             ),
           ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          sliver: const SliverToBoxAdapter(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          sliver: SliverToBoxAdapter(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SmartInlinePanel(
-                  title: '工具智能建议',
-                  types: {
-                    SmartInsightType.output,
-                    SmartInsightType.material,
-                    SmartInsightType.pluginSystem,
-                  },
+                if (_recentFiles.isNotEmpty) ...[
+                  Text(
+                    _tr('最近文件', 'Recent files'),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  for (final record in _recentFiles)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.insert_drive_file_outlined),
+                      title: Text(
+                        p.basename(record.outputPath),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(record.toolName),
+                      onTap: () => _openRecentOutput(record.outputPath),
+                      trailing: IconButton(
+                        tooltip: _tr('分享', 'Share'),
+                        icon: const Icon(Icons.ios_share),
+                        onPressed: () => _shareRecentOutput(record.outputPath),
+                      ),
+                    ),
+                ],
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(_tr('文件记录与输出管理', 'File history & outputs')),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openOutputManager,
                 ),
-                SizedBox(height: 8),
-                ContextHelpHint(
-                  title: '工具页帮助',
-                  tips: [
-                    'PDF、文件、OCR、网页归档和输出管理都在工具页按分类进入。',
-                    '工具产物默认写入公共输出目录，可在输出文件管家集中查看。',
-                    '资料搜索、复习中心和说明入口保留在工具页，不再占用主导航。',
-                    '大文件处理和缩略图渲染会遵守低算力模式设置。',
-                  ],
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(_tr('工作流', 'Workflows')),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => showModalBottomSheet<void>(
+                    context: context,
+                    isScrollControlled: true,
+                    useSafeArea: true,
+                    builder: (context) => SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: _RecommendedWorkflowPanel(
+                        recipes: _recommendedRecipes(categories),
+                      ),
+                    ),
+                  ),
                 ),
               ],
-            ),
-          ),
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-          sliver: SliverToBoxAdapter(
-            child: _ToolEfficiencyOverview(
-              busy: _busy,
-              outputSummary: _outputSummary,
-              recentTasks: _recentTasks,
-              lastOutputPath: _lastOutputPath,
-              onOpenOutputManager: _openOutputManager,
-              onOpenLastOutput:
-                  _lastOutputPath == null || _lastOutputPath!.isEmpty
-                  ? null
-                  : _openOutputFile,
-              onShareLastOutput:
-                  _lastOutputPath == null || _lastOutputPath!.isEmpty
-                  ? null
-                  : _shareOutputFile,
-              onRefresh: _refreshOutputSummary,
-            ),
-          ),
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-          sliver: SliverToBoxAdapter(
-            child: _RecommendedWorkflowPanel(
-              recipes: _recommendedRecipes(categories),
             ),
           ),
         ),
@@ -1131,149 +1109,6 @@ class _ToolsPageState extends State<ToolsPage> {
     );
   }
 
-  Widget _buildApodCompactCard() {
-    final title = _apodData?.title.isNotEmpty == true
-        ? _apodData!.title
-        : l10n.apodCardTitle;
-    final subtitle = _apodData == null
-        ? (_apodError ?? l10n.apodLoadingSubtitle)
-        : (_apodData!.isImage
-              ? _apodData!.explanation
-              : l10n.apodUnavailableSubtitle);
-    final canOpenDetail = _apodData != null;
-
-    Widget image;
-    if (_apodData?.isImage == true) {
-      image = CachedNetworkImage(
-        imageUrl: _apodData!.url,
-        fit: BoxFit.cover,
-        placeholder: (context, progress) => Container(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-          alignment: Alignment.center,
-          child: const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
-        errorWidget: (context, url, error) =>
-            Image.asset('images/placeholder.png', fit: BoxFit.cover),
-      );
-    } else {
-      image = Stack(
-        fit: StackFit.expand,
-        children: [
-          Image.asset('images/placeholder.png', fit: BoxFit.cover),
-          Container(
-            color: Colors.black.withValues(alpha: 0.12),
-            alignment: Alignment.center,
-            child: Icon(
-              _apodLoading
-                  ? Icons.hourglass_top_rounded
-                  : Icons.nights_stay_rounded,
-              color: Colors.white.withValues(alpha: 0.92),
-              size: 28,
-            ),
-          ),
-        ],
-      );
-    }
-
-    final theme = Theme.of(context);
-
-    return AppCard(
-      elevation: 0,
-      radius: 20,
-      border: Border.all(
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
-      ),
-      color: _dashboardSurface(context, Theme.of(context).colorScheme.primary),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: SizedBox(width: 108, height: 108, child: image),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _DashboardPill(
-                      label: _tr('APOD', 'APOD'),
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    if (_apodData?.date.isNotEmpty == true)
-                      _DashboardPill(
-                        label: _apodData!.date,
-                        color: Theme.of(context).colorScheme.secondary,
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  subtitle,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton.tonalIcon(
-                      onPressed: canOpenDetail
-                          ? () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      ApodDetailPage(apod: _apodData!),
-                                ),
-                              );
-                            }
-                          : null,
-                      icon: Icon(Icons.open_in_new_rounded, size: 18),
-                      label: Text(_tr('查看详情', '查看详情')),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _apodLoading ? null : _refreshApod,
-                      icon: _apodLoading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Icon(Icons.refresh_rounded, size: 18),
-                      label: Text(_tr('刷新', 'Refresh')),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   String _shortPathLabel(String? path, {required String emptyLabel}) {
     if (path == null || path.trim().isEmpty) {
       return emptyLabel;
@@ -1284,6 +1119,7 @@ class _ToolsPageState extends State<ToolsPage> {
 
   @override
   void dispose() {
+    FileToolHistoryStore.revision.removeListener(_loadPdfHistory);
     AppSettings.layoutPreferencesStore.notifier.removeListener(
       _onRegistryChanged,
     );
@@ -1291,53 +1127,7 @@ class _ToolsPageState extends State<ToolsPage> {
       _onRegistryChanged,
     );
     _dashboardScrollController.dispose();
-    _nasaApiService.dispose();
     super.dispose();
-  }
-
-  Future<void> _initializeApod() async {
-    final cached = await _nasaApiService.loadCachedApod();
-    if (!mounted) return;
-
-    if (cached != null) {
-      setState(() {
-        _apodData = cached;
-      });
-    }
-
-    final shouldRefresh = await _nasaApiService.shouldAutoRefreshToday();
-    if (!mounted) return;
-
-    if (cached == null || shouldRefresh) {
-      await _refreshApod(markDailyRefresh: shouldRefresh);
-    }
-  }
-
-  Future<void> _refreshApod({bool markDailyRefresh = false}) async {
-    setState(() {
-      _apodLoading = true;
-      _apodError = null;
-    });
-
-    final data = await _nasaApiService.fetchApod();
-    if (!mounted) return;
-
-    if (data != null) {
-      if (markDailyRefresh) {
-        await _nasaApiService.markAutoRefreshedToday();
-      }
-      setState(() {
-        _apodData = data;
-        _apodLoading = false;
-        _apodError = null;
-      });
-      return;
-    }
-
-    setState(() {
-      _apodLoading = false;
-      _apodError = l10n.apodErrorSubtitle;
-    });
   }
 
   Future<void> _pickOutputDirectory() async {
@@ -1498,7 +1288,6 @@ class _ToolsPageState extends State<ToolsPage> {
         ),
       ),
     );
-    unawaited(_refreshOutputSummary());
   }
 
   String _formatTime(DateTime t) {
@@ -2046,113 +1835,6 @@ class _ToolsPageState extends State<ToolsPage> {
     );
   }
 
-  Widget _buildApodHeroHeader() {
-    final title = _apodData?.title.isNotEmpty == true
-        ? _apodData!.title
-        : l10n.apodCardTitle;
-    final subtitle = _apodData == null
-        ? (_apodError ?? l10n.apodLoadingSubtitle)
-        : (_apodData!.isImage
-              ? _apodData!.explanation
-              : l10n.apodUnavailableSubtitle);
-
-    return _TabHeroHeader(
-      eyebrow: '${l10n.toolsTabReading} / ${l10n.apodCardTitle}',
-      title: title,
-      subtitle: subtitle,
-      accentColor: Colors.indigo,
-      icon: Icons.nights_stay_rounded,
-      media: _buildApodHeroMedia(),
-      height: 340,
-      onTap: _apodData == null
-          ? null
-          : () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ApodDetailPage(apod: _apodData!),
-                ),
-              );
-            },
-      trailing: IconButton(
-        tooltip: l10n.apodRefreshTooltip,
-        onPressed: _apodLoading ? null : _refreshApod,
-        style: IconButton.styleFrom(
-          backgroundColor: Colors.black.withValues(alpha: 0.28),
-          foregroundColor: Colors.white,
-        ),
-        icon: _apodLoading
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
-              )
-            : Icon(Icons.refresh_rounded),
-      ),
-      footnotes: [
-        if (_apodData?.date.isNotEmpty == true)
-          '${l10n.apodDateLabel}: ${_apodData!.date}',
-        if (_apodData == null && _apodLoading) l10n.apodLoadingSubtitle,
-        if (_apodData != null && !_apodData!.isImage) l10n.apodNonImageNotice,
-      ],
-    );
-  }
-
-  Widget _buildApodHeroMedia() {
-    if (_apodData?.isImage == true) {
-      return CachedNetworkImage(
-        imageUrl: _apodData!.url,
-        fit: BoxFit.cover,
-        placeholder: (context, progress) => Container(
-          color: Colors.indigo.withValues(alpha: 0.15),
-          alignment: Alignment.center,
-          child: const CircularProgressIndicator(strokeWidth: 2),
-        ),
-        errorWidget: (context, url, error) =>
-            Image.asset('images/placeholder.png', fit: BoxFit.cover),
-      );
-    }
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Image.asset('images/placeholder.png', fit: BoxFit.cover),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.indigo.withValues(alpha: 0.18),
-          ),
-        ),
-        Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.28),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: _apodLoading
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : Icon(
-                    _apodError != null
-                        ? Icons.error_outline_rounded
-                        : Icons.play_circle_outline_rounded,
-                    size: 34,
-                    color: Colors.white.withValues(alpha: 0.95),
-                  ),
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildEditorialActionGrid(List<Widget> children) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2188,7 +1870,6 @@ class _ToolsPageState extends State<ToolsPage> {
     return _buildTabScrollView(
       totalBottomPadding: totalBottomPadding,
       children: [
-        _buildApodHeroHeader(),
         const SizedBox(height: 28),
         _SectionHeader(
           eyebrow: _tr('第一组', 'Group 01'),
@@ -2598,7 +2279,6 @@ class _ToolsPageState extends State<ToolsPage> {
           ),
         ]),
         const SizedBox(height: 28),
-        _buildApodHeroHeader(),
         const SizedBox(height: 28),
         _SectionHeader(
           eyebrow: _tr('Workbench', 'Workbench'),

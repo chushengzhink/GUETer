@@ -1,0 +1,141 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:course_helper/api/api_service.dart';
+import 'package:course_helper/controllers/account_context_controller.dart';
+import 'package:course_helper/controllers/sign_task_controller.dart';
+import 'package:course_helper/l10n/app_localizations.dart';
+import 'package:course_helper/models/user.dart';
+import 'package:course_helper/pages/beta2_fixture_before_courses.dart' as before_courses;
+import 'package:course_helper/pages/beta2_fixture_after_courses.dart' as after_courses;
+import 'package:course_helper/pages/beta2_fixture_before_accounts.dart' as before_accounts;
+import 'package:course_helper/pages/beta2_fixture_before_number.dart' as before_number;
+import 'package:course_helper/pages/beta2_fixture_before_todos.dart' as before_todos;
+import 'package:course_helper/pages/beta2_fixture_after_todos.dart' as after_todos;
+import 'package:course_helper/pages/tronclass_number_sign_page.dart';
+import 'package:course_helper/pages/tronclass_qr_sign_page.dart';
+import 'package:course_helper/pages/tronclass_radar_sign_page.dart';
+import 'package:course_helper/pages/tools_page.dart';
+import 'package:course_helper/pages/my_page.dart';
+import 'package:course_helper/platform.dart';
+import 'package:course_helper/session/account.dart';
+import 'package:course_helper/session/cookie.dart';
+import 'package:course_helper/session/sign_execution_context.dart';
+import 'package:course_helper/theme/app_theme.dart';
+import 'package:course_helper/theme/beta2_fixture_before_theme.dart' as before_theme;
+import 'package:course_helper/theme/theme_style.dart';
+import 'package:course_helper/widgets/account_context_header.dart';
+import 'package:course_helper/widgets/sign_task_dock.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+void main() {
+  setUpAll(() async {
+    SharedPreferences.setMockInitialValues({'current_platform': 'chaoxing'});
+    ApiService.resetForTests(); CookieManager.resetForTests();
+    await ApiService.initialize(); await PlatformManager().initialize(); await AccountManager.initialize(); await CookieManager.initialize();
+    for (final (id, name, platform) in [('A', '林同学', 'chaoxing'), ('B', '陈同学', 'chaoxing'), ('C', '周同学', 'chaoxing'), ('T', '林同学', 'tronclass')]) {
+      await AccountManager.addAccountForPlatformName(platform, User(uid: id, name: name, studentId: '20230108', avatar: '', phone: '', school: '桂林电子科技大学', platform: platform), notify: false, migrateTempCookies: false);
+    }
+    await AccountManager.setCurrentSessionForPlatformName('chaoxing', 'A', notify: false);
+    await AccountManager.setCurrentSessionForPlatformName('tronclass', 'T', notify: false);
+    for (final (family, path) in [('BetaUI', 'C:/Windows/Fonts/msyh.ttc'), ('MaterialIcons', 'E:/Flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf')]) {
+      await (FontLoader(family)..addFont(Future.value(ByteData.sublistView(await File(path).readAsBytes())))).load();
+    }
+  });
+  final pages = <String, Widget Function()>{
+    'courses-before': () => const before_courses.CoursesPage(),
+    'courses-after': () => const after_courses.CoursesPage(),
+    'accounts-before': () => const before_accounts.AccountsPage(),
+    'accounts-after': () => const after_courses.CoursesPage(),
+    'number-before': () => const before_number.TronclassNumberSignPage(rollcallId: 'fixture', activityName: '计算机网络'),
+    'number-after': () => const TronclassNumberSignPage(rollcallId: 'fixture', activityName: '计算机网络'),
+    'radar-after': () => const TronclassRadarSignPage(rollcallId: 'fixture', activityName: '计算机网络'),
+    'qr-confirm-after': () => const TronclassQrSignConfirmPage(rollcallId: 'fixture', data: 'fixture'),
+    'todos-before': () => const before_todos.TodosPage(),
+    'todos-after': () => const after_todos.TodosPage(),
+    'tools-after': () => const ToolsPage(initializeServices: false),
+    'my-after': () => const MyPage(),
+    'task-after': () => const Scaffold(body: MyPage(), bottomNavigationBar: SignTaskDock()),
+  };
+  for (final entry in pages.entries) {
+    for (final dark in [false, true]) {
+      testWidgets('fixture ${entry.key} dark=$dark', (tester) async {
+        final oldShadows = debugDisableShadows;
+        debugDisableShadows = false;
+        addTearDown(() => debugDisableShadows = oldShadows);
+        tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(412, 915);
+        addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetDevicePixelRatio);
+        final isSign = entry.key.startsWith('number') || entry.key.startsWith('radar') || entry.key.startsWith('qr-');
+        await AccountContextController.instance.select(isSign ? PlatformType.tronclass : PlatformType.chaoxing);
+        if (entry.key == 'task-after') {
+          await SignTaskController.instance.run(identity: SignExecutionContext.capture(), operation: 'fixture', label: '计算机网络', action: () async {
+            SignTaskController.currentTask!.accounts = ['林同学 · 20230108', '陈同学 · 20230109'];
+            SignTaskController.instance.record('林同学 · 签到成功');
+            SignTaskController.instance.record('陈同学 · 会话已到期，请重新登录');
+          });
+        }
+        final scheme = ColorScheme.fromSeed(seedColor: Colors.teal, brightness: dark ? Brightness.dark : Brightness.light);
+        final baseTheme = entry.key.endsWith('before') ? before_theme.buildAppTheme(scheme, 'default', ThemeStyleData.modern) : buildAppTheme(scheme, 'default', ThemeStyleData.modern);
+        final boundary = GlobalKey();
+        await tester.pumpWidget(RepaintBoundary(key: boundary, child: MaterialApp(
+          debugShowCheckedModeBanner: false, locale: const Locale('zh'), supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const [AppLocalizations.delegate, ...GlobalMaterialLocalizations.delegates],
+          theme: baseTheme.copyWith(textTheme: ThemeData(brightness: scheme.brightness, fontFamily: 'BetaUI').textTheme,
+            appBarTheme: AppBarTheme(titleTextStyle: TextStyle(fontFamily: 'BetaUI', fontSize: 20, color: scheme.onSurface))),
+          home: entry.value(),
+        )));
+        await tester.pump(); await tester.pump(const Duration(seconds: 1)); await tester.pump();
+        if (entry.key == 'accounts-after') {
+          await tester.tap(find.byKey(const ValueKey('current-account'))); await tester.pumpAndSettle();
+        }
+        if (entry.key == 'task-after') {
+          await tester.tap(find.text('查看签到结果')); await tester.pumpAndSettle();
+        }
+        expect(tester.takeException(), isNull);
+        await tester.runAsync(() async {
+          final render = boundary.currentContext!.findRenderObject() as RenderRepaintBoundary;
+          final image = await render.toImage(pixelRatio: 2);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          await File('docs/beta2/screenshots/${entry.key}-${dark ? "dark" : "light"}.png').writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+        await tester.pumpWidget(const SizedBox()); await tester.pump(const Duration(seconds: 1));
+        SignTaskController.instance.dismissCompleted();
+        debugDisableShadows = oldShadows;
+      });
+    }
+  }
+  for (final width in [360.0, 412.0, 600.0]) {
+    for (final dark in [false, true]) {
+      for (final en in [false, true]) {
+        for (final scale in [1.0, 2.0]) {
+          testWidgets('core matrix $width dark=$dark en=$en scale=$scale', (tester) async {
+            tester.view.devicePixelRatio = 1; tester.view.physicalSize = Size(width, 800);
+            addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetViewInsets);
+            for (final name in ['courses-after', 'number-after', 'radar-after', 'qr-confirm-after', 'todos-after', 'tools-after', 'my-after']) {
+              await AccountContextController.instance.select(['number-after', 'radar-after', 'qr-confirm-after'].contains(name) ? PlatformType.tronclass : PlatformType.chaoxing);
+              await tester.pumpWidget(MaterialApp(locale: Locale(en ? 'en' : 'zh'), supportedLocales: AppLocalizations.supportedLocales,
+                localizationsDelegates: const [AppLocalizations.delegate, ...GlobalMaterialLocalizations.delegates],
+                theme: buildAppTheme(ColorScheme.fromSeed(seedColor: Colors.teal, brightness: dark ? Brightness.dark : Brightness.light), 'default', ThemeStyleData.modern),
+                builder: (context, child) => MediaQuery(data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale)), child: child!),
+                home: pages[name]!()));
+              await tester.pump(); await tester.pump(const Duration(milliseconds: 400)); await tester.pump();
+              expect(tester.takeException(), isNull, reason: name);
+              if (name == 'courses-after') {
+                expect(tester.getBottomRight(find.byKey(const ValueKey('workspace-scan'))).dy, lessThan(800));
+                await tester.tap(find.byKey(const ValueKey('current-account'))); await tester.pumpAndSettle();
+                tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+                await tester.pump(); expect(tester.takeException(), isNull, reason: 'account picker keyboard');
+              }
+              await tester.pumpWidget(const SizedBox()); tester.view.resetViewInsets(); await tester.pump();
+            }
+          });
+        }
+      }
+    }
+  }
+}

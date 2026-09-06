@@ -11,6 +11,11 @@ ThemeData buildAppTheme(
   return ThemeData(
     useMaterial3: true,
     colorScheme: colorScheme,
+    dividerTheme: DividerThemeData(
+      color: colorScheme.outlineVariant.withValues(alpha: .65),
+      thickness: .5,
+    ),
+    listTileTheme: const ListTileThemeData(minVerticalPadding: 12),
     visualDensity: VisualDensity.standard,
     materialTapTargetSize: MaterialTapTargetSize.padded,
     snackBarTheme: SnackBarThemeData(
@@ -25,7 +30,9 @@ ThemeData buildAppTheme(
         scheme == AppSettings.colorSchemeNight &&
             colorScheme.brightness == Brightness.dark
         ? const Color(0xFF0F1512)
-        : null,
+        : colorScheme.brightness == Brightness.dark
+        ? const Color(0xFF101114)
+        : const Color(0xFFF3F4F6),
     cardTheme: CardThemeData(
       elevation: style.cardElevation,
       shape: RoundedRectangleBorder(
@@ -100,7 +107,7 @@ ThemeData buildAppTheme(
       titleTextStyle: TextStyle(
         color: colorScheme.onSurface,
         fontSize: 18,
-        fontWeight: FontWeight.w800,
+        fontWeight: FontWeight.w600,
       ),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(

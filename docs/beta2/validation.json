@@ -1,0 +1,71 @@
+{
+  "branch": "beta",
+  "baselineCommit": "4277305",
+  "coreCommits": ["86e1d6b", "04826cf"],
+  "uiCommitSubject": "feat: simplify beta navigation and everyday workflows",
+  "analysis": {
+    "command": "flutter analyze --no-pub",
+    "result": "No issues found",
+    "durationSeconds": 8.2,
+    "log": "_tmp/beta2-analyze.txt"
+  },
+  "tests": {
+    "command": "flutter test --no-pub",
+    "baselinePassed": 539,
+    "passed": 572,
+    "failed": 0,
+    "log": "_tmp/beta2-all-tests.txt"
+  },
+  "rendering": {
+    "command": "python docs/beta2/render.py E:/Flutter/bin/flutter.bat",
+    "testGroupsPassed": 50,
+    "failed": 0,
+    "screenshotScenarios": 26,
+    "layoutCombinations": 24,
+    "widthsDp": [360, 412, 600],
+    "themes": ["light", "dark"],
+    "locales": ["zh", "en"],
+    "textScales": [1, 2],
+    "pagesPerCombination": 7,
+    "accountSheetKeyboardSpaceChecked": true,
+    "pngFiles": 28,
+    "generatedPngFiles": 26,
+    "archivedBaselinePngFiles": 2,
+    "evidenceType": "Flutter page builds with fictional fixture data; not device screenshots",
+    "log": "_tmp/beta2-render.txt"
+  },
+  "androidBuild": {
+    "command": "flutter build apk --release --target-platform android-arm64 --split-per-abi --no-pub",
+    "result": "success",
+    "durationSeconds": 124.2,
+    "log": "_tmp/beta2-build.txt",
+    "artifact": "build/app/outputs/flutter-apk/GUETer-beta2-1.0.14-arm64.apk",
+    "bytes": 90084676,
+    "sha256": "190DA68FF2C9EB1564470358F19ACB9C87A9C14D64F1F5CF54008986004AF977",
+    "packageName": "com.gueter.cszm",
+    "versionName": "1.0.14",
+    "versionCode": 2015,
+    "abi": "arm64-v8a",
+    "minSdk": 29,
+    "targetSdk": 36,
+    "signatureV2Verified": true,
+    "signerCount": 1,
+    "certificateSha256": "1a969155682a962575a3be308b1050ee52b09ace241223448a000436c7c49ccf",
+    "signatureLog": "_tmp/beta2-apk-signature.txt"
+  },
+  "physicalDeviceTested": false,
+  "realAccountTested": false,
+  "notMeasured": [
+    "Real platform check-in success and expired QR codes",
+    "Real network interruption and partial server failures",
+    "Real login recovery and upgrade session preservation",
+    "Camera/location permission denial and system-settings recovery",
+    "TalkBack, system keyboard/back behavior and system sharing",
+    "Foreground/background transitions and process death",
+    "Two-device transfer",
+    "Same-device startup, navigation, scrolling and request-count comparison"
+  ],
+  "taskLifetime": "In-memory during the application process; submitted requests are not replayed after process death",
+  "pushed": false,
+  "published": false
+}

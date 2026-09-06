@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../pages/accounts.dart';
 import '../pages/courses.dart';
-import '../pages/settings.dart';
+import '../pages/my_page.dart';
 import '../pages/todos_page.dart';
 import '../pages/tools_page.dart';
 import 'app_entry.dart';
@@ -39,9 +39,9 @@ List<AppEntry> buildBuiltinAppEntries() {
     ),
     const AppEntry(
       id: 'settings',
-      titleZh: '设置',
-      titleEn: 'Settings',
-      icon: Icons.settings_rounded,
+      titleZh: '我的',
+      titleEn: 'Me',
+      icon: Icons.person_outline_rounded,
       builder: _buildSettingsPage,
     ),
   ];
@@ -50,4 +50,4 @@ List<AppEntry> buildBuiltinAppEntries() {
 Widget _buildAccountsPage(BuildContext context) => const AccountsPage();
 Widget _buildTodosPage(BuildContext context) => const TodosPage();
 Widget _buildToolsPage(BuildContext context) => const ToolsPage();
-Widget _buildSettingsPage(BuildContext context) => const SettingsPage();
+Widget _buildSettingsPage(BuildContext context) => const MyPage();

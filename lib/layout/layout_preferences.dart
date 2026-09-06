@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class LayoutPreferences {
   const LayoutPreferences({
     this.navOrder = defaultNavOrder,
-    this.hiddenNavIds = const <String>[],
+    this.hiddenNavIds = const <String>['accounts'],
     this.pinnedNavIds = const <String>[],
     this.toolCategoryOrder = const <String>[],
     this.toolActionOrder = const <String>[],
@@ -33,9 +33,19 @@ class LayoutPreferences {
   final List<String> pinnedToolActionIds;
 
   factory LayoutPreferences.fromJson(Map<String, dynamic> json) {
+    final oldDefault =
+        json['layoutVersion'] != 2 &&
+        listEquals(
+          _readStringList(json['navOrder'], defaultNavOrder),
+          defaultNavOrder,
+        ) &&
+        _readStringList(json['hiddenNavIds']).isEmpty &&
+        _readStringList(json['pinnedNavIds']).isEmpty;
     return LayoutPreferences(
       navOrder: _readStringList(json['navOrder'], defaultNavOrder),
-      hiddenNavIds: _readStringList(json['hiddenNavIds']),
+      hiddenNavIds: oldDefault
+          ? const ['accounts']
+          : _readStringList(json['hiddenNavIds']),
       pinnedNavIds: _readStringList(json['pinnedNavIds']),
       toolCategoryOrder: _readStringList(json['toolCategoryOrder']),
       toolActionOrder: _readStringList(json['toolActionOrder']),
@@ -46,6 +56,7 @@ class LayoutPreferences {
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
+      'layoutVersion': 2,
       'navOrder': navOrder,
       'hiddenNavIds': hiddenNavIds,
       'pinnedNavIds': pinnedNavIds,
