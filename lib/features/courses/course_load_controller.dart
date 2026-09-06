@@ -1,7 +1,7 @@
 import '../../models/course.dart';
 import '../../platform.dart';
 
-typedef CourseContext = (PlatformType, String);
+typedef CourseContext = (PlatformType, String, String);
 
 /// Owns per-account caches and request generations. A superseded request may
 /// finish, but cannot publish data or clear the newer request's busy state.

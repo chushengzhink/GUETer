@@ -1,3 +1,4 @@
+import '../controllers/sign_task_controller.dart';
 import 'package:flutter/foundation.dart';
 
 import '../api/api_service.dart';
@@ -73,6 +74,10 @@ class SignRunConsoleController extends ChangeNotifier {
   SignRunConsoleController({SignPlatformContext? platformContext})
     : _platformContext = platformContext;
 
+  bool _disposed = false;
+  @override
+  void dispose() { _disposed = true; super.dispose(); }
+
   SignPlatformContext? _platformContext;
   final List<SignRunEvent> _events = <SignRunEvent>[];
 
@@ -120,17 +125,18 @@ class SignRunConsoleController extends ChangeNotifier {
       timestamp: DateTime.now(),
     );
     _events.add(event);
+    SignTaskController.instance.record(event.toLine());
     if (mirrorToRequestConsole) {
       ApiService.appendExternalConsoleLog(platformKey, event.toLine());
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   String copyText() => _events.map((event) => event.toLine()).join('\n');
 
   void clear() {
     _events.clear();
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   void resetForPlatform(SignPlatformContext context) {

@@ -1,3 +1,7 @@
+import '../../../widgets/account_context_header.dart';
+import '../../../widgets/sign_task_dock.dart';
+import '../../../session/sign_execution_context.dart';
+import '../../../controllers/sign_task_controller.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
@@ -131,6 +135,8 @@ class SignInPage extends StatefulWidget {
 }
 
 class SignInPageState extends State<SignInPage> {
+  late final SignExecutionContext executionIdentity;
+  bool get signing => _isMultiSigning;
   static const String _networkSkippedResultPrefix = '__network_skipped__:';
 
   // 签到策略
@@ -204,6 +210,7 @@ class SignInPageState extends State<SignInPage> {
   @override
   void initState() {
     super.initState();
+    executionIdentity = SignExecutionContext.capture();
     final currentSessionId = AccountManager.currentSessionId!;
     _currentUser = AccountManager.getAccountById(currentSessionId);
 
@@ -374,7 +381,8 @@ class SignInPageState extends State<SignInPage> {
             padding: const EdgeInsets.all(20),
             child: Column(
               children: [
-                const SizedBox(height: 20),
+                SignIdentityLabel(identity: executionIdentity),
+                const SizedBox(height: 8),
 
                 // 签到操作区域 - 根据策略动态显示
                 if (_currentStrategy != null) _buildSignOperationArea(),
@@ -386,6 +394,7 @@ class SignInPageState extends State<SignInPage> {
                   key: _accountsSelectorKey,
                   signModePlatform: PlatformType.chaoxing,
                   onSelectionChanged: (selected) {
+                    if (_isMultiSigning) return;
                     setState(() {
                       _selectedAccounts = selected;
                     });
@@ -407,12 +416,16 @@ class SignInPageState extends State<SignInPage> {
           ),
 
           // 加载指示器
-          if (_isLoading) _buildLoadingOverlay(),
+          if (_isLoading) Positioned(left: 12, right: 12, bottom: 12, child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const SignTaskDock(),
+            TextButton(onPressed: () => Navigator.pop(context), child: Text(contextText(context, '收起，后台继续', 'Minimize'))),
+          ])),
         ],
       ),
     );
   }
 
+  // ignore: unused_element
   Widget _buildLoadingOverlay() {
     return Container(
       color: Colors.black54,
@@ -455,6 +468,12 @@ class SignInPageState extends State<SignInPage> {
   }
 
   Future<void> _performMultiSign() async {
+    if (SignTaskController.currentTask == null) {
+      return SignTaskController.instance.run(
+        identity: executionIdentity, operation: 'chaoxing:${widget.active.id}',
+        label: widget.active.name, action: _performMultiSign,
+      );
+    }
     final resolution = await SignModeSettings.resolveUsers(
       platform: PlatformType.chaoxing,
       perRunSelection: _selectedAccounts,
@@ -486,9 +505,8 @@ class SignInPageState extends State<SignInPage> {
     // 除二维码签到以外 其他签到预先处理验证码
     if (_needCaptcha && !isQrCodeSign) {
       for (var user in _selectedAccounts) {
-        AccountManager.setCurrentSessionTemp(user.uid);
 
-        if (!await _handleCaptcha(user.uid)) {
+        if (!await SignExecutionContext.capture(account: user).run(() => _handleCaptcha(user.uid))) {
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -499,7 +517,6 @@ class SignInPageState extends State<SignInPage> {
           return;
         }
       }
-      AccountManager.setCurrentSessionTemp(_currentUser!.uid);
     }
 
     final results = <String?>[];
@@ -622,7 +639,7 @@ class SignInPageState extends State<SignInPage> {
         }
         final enc2 = parts[1];
         (_userCaptchaValidate[user.uid] ??= {})['enc2'] = enc2;
-        if (!await _handleCaptcha(user.uid)) {
+        if (!await SignExecutionContext.capture(account: user).run(() => _handleCaptcha(user.uid))) {
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -712,34 +729,11 @@ class SignInPageState extends State<SignInPage> {
   }
 
   void _showMultiSignResult(int totalCount, List<String> failedAccounts) {
-    if (!mounted) return;
-
-    final successCount = totalCount - failedAccounts.length;
-    String message = '签到完成！\n成功: $successCount/$totalCount';
-    if (failedAccounts.isNotEmpty) {
-      message += '\n\n失败账号:\n${failedAccounts.join('\n')}';
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          successCount == totalCount ? '全部签到成功' : '部分失败',
-          style: TextStyle(
-            color: successCount == totalCount ? Colors.green : Colors.orange,
-          ),
-        ),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('签到结束：${totalCount - failedAccounts.length}/$totalCount'),
+      action: SnackBarAction(label: contextText(context, '查看结果', 'Results'), onPressed: () => showSignTasks(context)),
+    ));
   }
 
   void _showSuccessMessage(String message) {

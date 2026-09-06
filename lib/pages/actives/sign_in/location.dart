@@ -1,9 +1,9 @@
+import '../../../session/sign_execution_context.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_baidu_mapapi_base/flutter_baidu_mapapi_base.dart';
 
-import '../../../../models/user.dart';
-import '../../../../session/account.dart';
-import '../../../../api/chaoxing_sign_api.dart';
+import '../../../models/user.dart';
+import '../../../api/chaoxing_sign_api.dart';
 import '../../widget/baidu_map.dart';
 import 'sign_in.dart';
 
@@ -19,11 +19,11 @@ class LocationSign implements SignStrategy {
 
   @override
   Future<String?> signForAccount(User user, SignParams params, SignInPageState state) async {
+    return SignExecutionContext.capture(account: user).run(() async {
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
     try {
-      AccountManager.setCurrentSessionTemp(user.uid);
 
       String? faceId;
       if (state.needFace) {
@@ -46,6 +46,7 @@ class LocationSign implements SignStrategy {
     } catch (e) {
       return null;
     }
+    });
   }
 
   static Widget buildSignArea(SignInPageState state) {

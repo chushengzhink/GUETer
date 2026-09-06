@@ -1,3 +1,5 @@
+import 'dart:async';
+import '../controllers/sign_task_controller.dart';
 import 'package:flutter/material.dart';
 
 import '../models/user.dart';
@@ -28,7 +30,41 @@ class SignNetworkGate {
 
   final MobileDataReconnectService _service;
 
+  static Future<void>? _networkTail;
+
   Future<SignNetworkGateResult<T>> run<T>({
+    required BuildContext context, required String platformLabel,
+    required User user, required SignRunConsoleController console,
+    required Future<T> Function() action,
+  }) async {
+    final previous = _networkTail;
+    final release = Completer<void>();
+    _networkTail = release.future;
+    if (previous != null) await previous;
+    try {
+      final task = SignTaskController.currentTask;
+      if (task == null) {
+        if (!context.mounted) return const SignNetworkGateResult(decision: SignNetworkDecision.skipped, reason: '页面已关闭');
+        return await _runLegacy(context: context, platformLabel: platformLabel, user: user, console: console, action: action);
+      }
+      console.add(platform: platformLabel, accountName: user.name, accountId: user.uid,
+        stage: SignRunStage.networkStart, message: '检查签到网络 / Checking network');
+      final result = await _service.restartForSign();
+      if (!result.success || (!result.ipChanged && result.ipBefore != null && result.ipAfter != null)) {
+        final proceed = await task.ask('$platformLabel · ${user.name}\n${result.message}',
+          settings: () => unawaited(_service.openNetworkSettings()));
+        if (!proceed) return SignNetworkGateResult(decision: SignNetworkDecision.skipped, reason: '用户跳过 / Skipped', networkResult: result);
+      }
+      console.add(platform: platformLabel, accountName: user.name, accountId: user.uid,
+        stage: SignRunStage.signStart, message: '开始提交签到 / Submitting check-in');
+      return SignNetworkGateResult(decision: SignNetworkDecision.proceed, value: await action(), networkResult: result);
+    } finally {
+      if (identical(_networkTail, release.future)) _networkTail = null;
+      release.complete();
+    }
+  }
+
+  Future<SignNetworkGateResult<T>> _runLegacy<T>({
     required BuildContext context,
     required String platformLabel,
     required User user,

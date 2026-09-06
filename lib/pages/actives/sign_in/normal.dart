@@ -1,12 +1,12 @@
+import '../../../session/sign_execution_context.dart';
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../../../../models/user.dart';
-import '../../../../session/account.dart';
-import '../../../../api/chaoxing_sign_api.dart';
+import '../../../models/user.dart';
+import '../../../api/chaoxing_sign_api.dart';
 import 'sign_in.dart';
 
 
@@ -22,13 +22,13 @@ class NormalSign implements SignStrategy {
 
   @override
   Future<String?> signForAccount(User user, SignParams params, SignInPageState state) async {
+    return SignExecutionContext.capture(account: user).run(() async {
     final objectId = params.getUserObjectId(user.uid);
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
     try {
       // 临时切换到该用户的会话
-      AccountManager.setCurrentSessionTemp(user.uid);
 
       final response = await ChaoxingSignApi.signNormal(
         activeId: params.active.id,
@@ -43,6 +43,7 @@ class NormalSign implements SignStrategy {
     } catch (e) {
       return null;
     }
+    });
   }
 
   static Widget buildSignArea(SignInPageState state) {
@@ -186,7 +187,7 @@ class NormalSign implements SignStrategy {
     for (int i = 0; i < selectedAccounts.length; i++) {
       final user = selectedAccounts[i];
 
-      AccountManager.setCurrentSessionTemp(user.uid);
+
       state.showProgressSnackBar('正在为账号 ${user.name} ${source == ImageSource.camera ? '拍照' : '选择图片'} (${i + 1}/${selectedAccounts.length})');
 
       try {
@@ -199,7 +200,7 @@ class NormalSign implements SignStrategy {
 
         if (pickedFile != null) {
           final File imageFile = File(pickedFile.path);
-          final String? objectId = await ChaoxingSignApi.uploadImage(imageFile, user.uid);
+          final String? objectId = await SignExecutionContext.capture(account: user).run(() => ChaoxingSignApi.uploadImage(imageFile, user.uid));
           if (objectId != null) {
             state.signParams.setUserObjectId(user.uid, objectId);
             state.updatePhotoProgress(i + 1);
@@ -217,9 +218,7 @@ class NormalSign implements SignStrategy {
     }
 
     // 恢复原账号
-    if (state.currentUser != null) {
-      AccountManager.setCurrentSessionTemp(state.currentUser!.uid);
-    }
+
 
     state.updateMultiSignStatus(false);
     state.showPhotoResult(state.signParams.photoCount, selectedAccounts.length);

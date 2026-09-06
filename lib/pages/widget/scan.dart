@@ -1,3 +1,6 @@
+import '../../session/sign_execution_context.dart';
+import '../../widgets/account_context_header.dart';
+import '../../widgets/sign_task_dock.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:image_picker/image_picker.dart';
@@ -15,6 +18,8 @@ class ScanPage extends StatefulWidget {
 }
 
 class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
+  late final SignExecutionContext _identity;
+  Object? _cameraError;
   MobileScannerController? _controller;
   String? scanResult;
   StreamSubscription<Object?>? _subscription;
@@ -34,6 +39,7 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _identity = SignExecutionContext.capture();
     _initializeScanner();
   }
 
@@ -63,6 +69,7 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
       setState(() {
         _isInitializing = true;
       });
+      _cameraError = null;
       _controller = MobileScannerController(
         autoStart: false,
         detectionSpeed: DetectionSpeed.normal,
@@ -82,6 +89,7 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
         startScan();
       }
     } catch (error) {
+      _cameraError = error;
       if (mounted) {
         setState(() {
           _isInitializing = false;
@@ -96,6 +104,7 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
   }
 
   void _initAnimation() {
+    if (MediaQuery.of(context).disableAnimations) return;
     _animationController ??=
         AnimationController(
             vsync: this,
@@ -241,6 +250,18 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
                     }
                   },
                 ),
+                Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: Material(
+                  color: Colors.black87, child: ListTile(
+                    title: Text('${platformTitle(context, _identity.platform)} · ${_identity.account?.name ?? contextText(context, '请选择账号', 'Choose an account')}', style: const TextStyle(color: Colors.white)),
+                    subtitle: Text(contextText(context, '请将签到二维码放入框内', 'Place the check-in QR code inside the frame'), style: const TextStyle(color: Colors.white70)),
+                  )))),
+                if (_cameraError != null) Center(child: Material(color: Colors.black87, child: Padding(
+                  padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.no_photography_outlined, color: Colors.white, size: 40),
+                    const SizedBox(height: 16),
+                    Text(contextText(context, '无法打开相机，请检查相机权限', 'Camera unavailable. Check camera permission.'), style: const TextStyle(color: Colors.white)),
+                    TextButton(onPressed: _initializeScanner, child: Text(contextText(context, '重试', 'Retry'))),
+                  ])))),
                 // 在初始化期间显示加载指示器
                 if (_isInitializing)
                   const Center(
@@ -281,6 +302,7 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
                     child: SizedBox(width: qrScanSize, height: qrScanSize),
                   ),
                 ),
+                if (_isHandlingResult) Positioned(left: 12, right: 12, bottom: 90, child: const SignTaskDock()),
                 Positioned(
                   width: constraints.maxWidth,
                   bottom: constraints.maxHeight == mediaQuery.size.height
@@ -291,7 +313,8 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       IconButton(
-                        onPressed: () async {
+                        tooltip: contextText(context, '从相册识别', 'Scan from gallery'),
+                        onPressed: _isHandlingResult ? null : () async {
                           final XFile? image = await ImagePicker().pickImage(
                             source: ImageSource.gallery,
                           );
@@ -309,8 +332,8 @@ class _ScanPageState extends State<ScanPage> with TickerProviderStateMixin {
                           stop();
                           Navigator.of(context).pop();
                         },
-                        child: const Text(
-                          '取消',
+                        child: Text(
+                          _isHandlingResult ? contextText(context, '收起，后台继续', 'Minimize') : contextText(context, '返回', 'Back'),
                           style: TextStyle(color: Colors.white, fontSize: 18),
                         ),
                       ),

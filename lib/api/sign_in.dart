@@ -1,3 +1,4 @@
+import '../session/sign_execution_context.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:dio/dio.dart';
@@ -17,12 +18,13 @@ class SignInApi{
   static String _userId = '';
   static User? _user;
 
-  static String get userId => _userId;
-  static User? get user => _user;
-  static String get userName => _user?.name ?? '';
+  static String get userId => SignExecutionContext.current?.account?.uid ?? AccountManager.currentSessionId ?? _userId;
+  static User? get user => SignExecutionContext.current?.account ?? AccountManager.currentAccount ?? _user;
+  static String get userName => user?.name ?? '';
 
   /// 更新当前用户信息（从会话管理器获取）
   static void updateUser() {
+    if (SignExecutionContext.current != null) return;
     String? currentUid = AccountManager.currentSessionId;
     if (currentUid != null) {
       User? currentUser = AccountManager.getAccountById(currentUid);

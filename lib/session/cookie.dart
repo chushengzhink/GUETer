@@ -1,3 +1,4 @@
+import 'sign_execution_context.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -47,7 +48,7 @@ class CookieInterceptor extends Interceptor {
       final uri = options.uri;
       List<Cookie> cookies = [];
       CookieJar? cookieJar = loginContext?.tempCookieJar;
-      cookieJar ??= CookieManager.isLoggingIn
+      cookieJar ??= CookieManager.isLoggingIn && SignExecutionContext.current == null
           ? CookieManager.getTempCookieJar()
           : CookieManager.getCurrentUserCookieJar();
       if (cookieJar != null) {
@@ -179,7 +180,7 @@ class CookieInterceptor extends Interceptor {
         return;
       }
 
-      if (CookieManager.isLoggingIn) {
+      if (CookieManager.isLoggingIn && SignExecutionContext.current == null) {
         if (CookieManager.isTronclassPortalSessionBootstrapUri(
           response.requestOptions.uri,
         )) {

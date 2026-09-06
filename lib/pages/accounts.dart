@@ -1108,14 +1108,7 @@ class _AccountsPageState extends State<AccountsPage>
 
     try {
       // 用户主动点击平台切换按钮，设置 2 秒超时
-      await PlatformManager()
-          .setPlatform(platform, userInitiated: true)
-          .timeout(
-            const Duration(seconds: 2),
-            onTimeout: () {
-              debugPrint('[PlatformSwitch] 切换超时，强制完成 UI 更新');
-            },
-          );
+      await PlatformManager().setPlatform(platform, userInitiated: true);
     } catch (e) {
       debugPrint('[PlatformSwitch] 切换失败: $e');
     } finally {

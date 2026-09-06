@@ -7,8 +7,8 @@ void main() {
     'switching accounts invalidates stale responses including A to B to A',
     () {
       final controller = CourseLoadController();
-      const a = (PlatformType.chaoxing, 'a');
-      const b = (PlatformType.chaoxing, 'b');
+      const a = (PlatformType.chaoxing, 'a', 'https://example.test');
+      const b = (PlatformType.chaoxing, 'b', 'https://example.test');
       final first = controller.begin(a)!;
       expect(controller.begin(a), isNull);
       final second = controller.begin(b)!;

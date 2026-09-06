@@ -221,7 +221,7 @@ void main() {
     expect(response.data, 'success');
   });
 
-  test('executor falls back once for 403 response', () async {
+  test('read request falls back once for 403 response', () async {
     var calls = 0;
     final response = await SignRequestExecutor.run(
       profile: SignRequestProfiles.tronclassRollcall(
@@ -232,8 +232,8 @@ void main() {
       operation: 'rollcall',
       context: const SignRequestContext(
         platform: PlatformType.tronclass,
-        url: 'https://courses.guet.edu.cn/api/rollcall/1/answer',
-        method: 'PUT',
+        url: 'https://courses.guet.edu.cn/api/rollcall/1',
+        method: 'GET',
         baseUrl: 'https://courses.guet.edu.cn',
         contentKind: SignRequestContentKind.json,
       ),
@@ -263,7 +263,7 @@ void main() {
     expect(response.data, {'status': 'on_call'});
   });
 
-  test('executor logs sanitized fallback errors', () async {
+  test('read fallback logs sanitize credentials', () async {
     final logs = <String>[];
     var calls = 0;
 
@@ -278,8 +278,8 @@ void main() {
       context: const SignRequestContext(
         platform: PlatformType.weizhuojiao,
         url:
-            'https://v18.teachermate.cn/wechat-api/v1/class-attendance/student-sign-in',
-        method: 'POST',
+            'https://v18.teachermate.cn/wechat-api/v1/class-attendance/status',
+        method: 'GET',
         baseUrl: 'https://v18.teachermate.cn',
         referer:
             'https://v18.teachermate.cn/wechat/wechat/guide/signin?openid=secret-openid',

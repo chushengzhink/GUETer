@@ -1,3 +1,5 @@
+import '../session/sign_execution_context.dart';
+import '../controllers/sign_task_controller.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
@@ -72,10 +74,18 @@ class TronclassBatchSignExecutor {
     TronclassBatchNetworkPolicy networkPolicy =
         TronclassBatchNetworkPolicy.strict,
   }) async {
-    final accounts =
-        users ?? AccountManager.getAccountsForPlatform(PlatformType.tronclass);
+    final identity = SignExecutionContext.capture();
+    if (SignTaskController.currentTask == null) {
+      return SignTaskController.instance.run(
+        identity: identity, operation: 'tronclass:$courseName', label: courseName,
+        action: () => sign(context: context, courseName: courseName, console: console,
+          action: action, users: users == null ? null : List.of(users),
+          networkPolicy: networkPolicy, isContextMounted: isContextMounted),
+      );
+    }
+    final accounts = List<User>.of(
+        users ?? AccountManager.getAccountsForPlatform(PlatformType.tronclass));
     console.resetForPlatform(SignPlatformContext.tronclass);
-    final originalSession = AccountManager.currentSessionId;
     final results = <TronclassBatchSignItemResult>[];
     var qrCodeExpired = false;
 
@@ -103,6 +113,7 @@ class TronclassBatchSignExecutor {
           continue;
         }
 
+        await identity.withAccount(user).run(() async {
         console.add(
           platform: '畅课',
           accountName: user.name,
@@ -129,26 +140,12 @@ class TronclassBatchSignExecutor {
               message: message,
             ),
           );
-          continue;
-        }
-
-        AccountManager.setCurrentSessionTemp(user.uid);
-        if (!context.mounted ||
-            (isContextMounted != null && !isContextMounted())) {
-          const message = '页面已关闭';
-          await _appendRecord(courseName, user, false, message);
-          results.add(
-            TronclassBatchSignItemResult(
-              user: user,
-              success: false,
-              skipped: true,
-              message: message,
-            ),
-          );
-          continue;
+          return;
         }
 
         final response = await _runAction(
+          // The task path does not dereference this route; legacy calls check mounted.
+          // ignore: use_build_context_synchronously
           context: context,
           user: user,
           console: console,
@@ -171,7 +168,7 @@ class TronclassBatchSignExecutor {
               message: response.message,
             ),
           );
-          continue;
+          return;
         }
 
         final signResponse = response.response;
@@ -199,11 +196,10 @@ class TronclassBatchSignExecutor {
         if (!success && signResponse != null) {
           qrCodeExpired = TronclassSignApi.isQrCodeExpired(signResponse.data);
         }
+        });
       }
     } finally {
-      if (originalSession != null && originalSession.isNotEmpty) {
-        AccountManager.setCurrentSessionTemp(originalSession);
-      }
+      // Identity is scoped to the task; there is no UI session to restore.
     }
 
     return TronclassBatchSignResult(items: results);

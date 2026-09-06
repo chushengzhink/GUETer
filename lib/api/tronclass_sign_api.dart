@@ -250,6 +250,8 @@ class TronclassSignApi {
     send,
   }) async {
     final response = await SignRequestExecutor.run(
+      context: SignRequestContext(platform: PlatformType.tronclass,
+        url: PlatformManager().tronclassBaseUrl, method: 'PUT', contentKind: SignRequestContentKind.json),
       profile: profile,
       headers: headers.map((key, value) => MapEntry(key, value.toString())),
       legacyHeaders: headers.map(

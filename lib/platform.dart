@@ -1,3 +1,5 @@
+import 'controllers/account_context_controller.dart';
+import 'session/sign_execution_context.dart';
 import 'package:course_helper/session/cookie.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -45,15 +47,15 @@ class PlatformManager {
   Stream<PlatformType> get platformChanges => _platformChangeController.stream;
 
   /// 获取当前平台
-  PlatformType get currentPlatform => _currentPlatform;
+  PlatformType get currentPlatform => SignExecutionContext.current?.platform ?? _currentPlatform;
 
-  bool get isChaoxing => _currentPlatform == PlatformType.chaoxing;
-  bool get isRainClassroom => _currentPlatform == PlatformType.rainClassroom;
-  bool get isTronclass => _currentPlatform == PlatformType.tronclass;
-  bool get isKetangpai => _currentPlatform == PlatformType.ketangpai;
-  bool get isWeizhuojiao => _currentPlatform == PlatformType.weizhuojiao;
-  String get tronclassBaseUrl => _tronclassBaseUrl;
-  String get ketangpaiBaseUrl => _ketangpaiBaseUrl;
+  bool get isChaoxing => currentPlatform == PlatformType.chaoxing;
+  bool get isRainClassroom => currentPlatform == PlatformType.rainClassroom;
+  bool get isTronclass => currentPlatform == PlatformType.tronclass;
+  bool get isKetangpai => currentPlatform == PlatformType.ketangpai;
+  bool get isWeizhuojiao => currentPlatform == PlatformType.weizhuojiao;
+  String get tronclassBaseUrl => SignExecutionContext.current?.tronclassBaseUrl ?? _tronclassBaseUrl;
+  String get ketangpaiBaseUrl => SignExecutionContext.current?.ketangpaiBaseUrl ?? _ketangpaiBaseUrl;
 
   /// 同步切换平台（不触发异步操作）
   void setPlatformSync(PlatformType platform) {
@@ -83,11 +85,11 @@ class PlatformManager {
   }
 
   /// 获取当前雨课堂服务器
-  RainClassroomServerType get currentServer => _currentServer;
+  RainClassroomServerType get currentServer => SignExecutionContext.current?.server ?? _currentServer;
 
   /// 获取雨课堂服务器名称
   String get serverName {
-    switch (_currentServer) {
+    switch (currentServer) {
       case RainClassroomServerType.yuketang:
         return 'yuketang';
       case RainClassroomServerType.pro:
@@ -165,52 +167,28 @@ class PlatformManager {
   }
 
   /// 设置平台（唯一写入口，仅由用户主动操作触发）
-  Future<void> setPlatform(
-    PlatformType platform, {
-    bool userInitiated = true,
-  }) async {
-    final oldPlatform = _currentPlatform;
+  Future<void> setPlatform(PlatformType platform, {bool userInitiated = true}) async {
+    if (!userInitiated) return;
+    await AccountContextController.instance.select(platform);
+  }
 
-    if (oldPlatform != platform) {
-      // 记录平台切换日志和调用堆栈
-      debugPrint(
-        '[Platform] Switch: $oldPlatform -> $platform (userInitiated: $userInitiated)',
-      );
-      if (kDebugMode) {
-        debugPrint('[Platform] Stack trace:\n${StackTrace.current}');
-      }
-
-      // 非用户主动触发的切换一律拒绝
-      if (!userInitiated) {
-        debugPrint(
-          '[Platform] REJECTED: Non-user-initiated platform switch blocked',
-        );
-        return;
-      }
-
-      _currentPlatform = platform;
-      try {
-        await _prefs.setString(_platformKey, currentPlatformName);
-      } catch (e) {
-        debugPrint('保存平台失败：$e');
-      }
-
-      // 先切换账号和刷新数据，再通知UI更新
-      await AccountManager.switchToPlatformAccount();
-      await AccountManager.refreshAccounts();
-      await CookieManager.loadAllCookies(refreshOnlineState: false);
-
-      // 通知API服务平台已切换
+  /// Only the account context coordinator calls this local commit operation.
+  Future<void> applyPlatformSelection(PlatformType platform) async {
+    if (_currentPlatform == platform) return;
+    final previous = _currentPlatform;
+    _currentPlatform = platform;
+    try {
+      await _prefs.setString(_platformKey, currentPlatformName);
+      await AccountManager.switchToPlatformAccount(refreshFromStorage: false);
+      final userId = AccountManager.currentSessionId;
+      if (userId != null) await CookieManager.getCookieJarForUser(userId);
       ApiService.onPlatformChange?.call();
-
-      // 通知UI平台已切换（此时数据已准备好）
       _platformChangeController.add(platform);
-
-      // DO NOT notify account change here - it causes cascade refresh loops
-      // AccountsPage and CoursesPage will reload via platformChanges listener
-
-      // 后台刷新Cookie状态
-      unawaited(CookieManager.refreshAccountsInBackground());
+    } catch (_) {
+      _currentPlatform = previous;
+      await AccountManager.switchToPlatformAccount(refreshFromStorage: false);
+      ApiService.onPlatformChange?.call();
+      rethrow;
     }
   }
 
@@ -275,7 +253,7 @@ class PlatformManager {
 
   /// 获取平台字符串标识
   String get currentPlatformName {
-    switch (_currentPlatform) {
+    switch (currentPlatform) {
       case PlatformType.chaoxing:
         return 'chaoxing';
       case PlatformType.rainClassroom:

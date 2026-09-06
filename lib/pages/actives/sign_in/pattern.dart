@@ -1,9 +1,9 @@
+import '../../../session/sign_execution_context.dart';
 import 'package:flutter/material.dart';
 import 'package:pattern_lock/pattern_lock.dart';
 
-import '../../../../models/user.dart';
-import '../../../../session/account.dart';
-import '../../../../api/chaoxing_sign_api.dart';
+import '../../../models/user.dart';
+import '../../../api/chaoxing_sign_api.dart';
 import 'sign_in.dart';
 
 class PatternSign implements SignStrategy {
@@ -17,11 +17,11 @@ class PatternSign implements SignStrategy {
 
   @override
   Future<String?> signForAccount(User user, SignParams params, SignInPageState state) async {
+    return SignExecutionContext.capture(account: user).run(() async {
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
     try {
-      AccountManager.setCurrentSessionTemp(user.uid);
 
       final response = await ChaoxingSignApi.signCode(
         activeId: params.active.id,
@@ -36,6 +36,7 @@ class PatternSign implements SignStrategy {
     } catch (e) {
       return null;
     }
+    });
   }
 
   static Widget buildSignArea(SignInPageState state) {

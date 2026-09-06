@@ -1,3 +1,5 @@
+import '../controllers/account_context_controller.dart';
+import 'sign_execution_context.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -268,7 +270,8 @@ class AccountManager {
     return null;
   }
 
-  static String? get currentSessionId => _currentSessionId;
+  static String? get currentSessionId => SignExecutionContext.current != null
+      ? SignExecutionContext.current!.account?.uid : _currentSessionId;
 
   /// Read a platform's selected session without switching the global platform.
   static String? currentSessionForPlatform(PlatformType platform) {
@@ -279,6 +282,7 @@ class AccountManager {
   }
 
   static User? get currentAccount {
+    if (SignExecutionContext.current != null) return SignExecutionContext.current!.account;
     final userId = _currentSessionId;
     if (userId == null || userId.isEmpty) {
       return null;
@@ -287,6 +291,7 @@ class AccountManager {
   }
 
   static Future<String?> getCurrentSession() async {
+    if (SignExecutionContext.current != null) return currentSessionId;
     _currentSessionId = _prefs.getString(_sessionKey);
     return _currentSessionId;
   }
@@ -369,7 +374,7 @@ class AccountManager {
   }
 
   static bool hasActiveSession() {
-    return _currentSessionId != null && _currentSessionId!.isNotEmpty;
+    return currentSessionId != null && currentSessionId!.isNotEmpty;
   }
 
   static Future<String?> getCookieForPlatform(
@@ -700,6 +705,11 @@ class AccountManager {
   }
 
   static Future<bool> switchAccount(String userId) async {
+    await AccountContextController.instance.select(PlatformManager().currentPlatform, accountId: userId);
+    return AccountContextController.instance.error == null && currentSessionId == userId;
+  }
+
+  static Future<bool> applyAccountSelection(String userId) async {
     final normalized = userId.trim();
     if (normalized.isEmpty) {
       return false;
@@ -725,6 +735,7 @@ class AccountManager {
       return true;
     }
 
+    await CookieManager.getCookieJarForUser(normalized);
     await setCurrentSession(normalized);
     return true;
   }

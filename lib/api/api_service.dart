@@ -1,3 +1,4 @@
+import '../session/sign_execution_context.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -54,7 +55,7 @@ class HeadersManager {
 
   static late String _cxUserAgent;
 
-  static late Map<String, String> _cxHeaders;
+  static Map<String, String> _cxHeaders = {};
 
   static final Map<String, String> _rcHeaders = {
     'user-agent': 'Android',
@@ -652,6 +653,24 @@ class ApiService {
     SignRequestProfile? signProfile,
     PlatformRequestOptions? platformOptions,
   }) async {
+    if (SignExecutionContext.current == null && loginContext == null) {
+      return SignExecutionContext.capture().run(() => sendRequest(
+        url, method: method, params: params, headers: headers,
+        legacyHeaders: legacyHeaders, body: body, responseType: responseType,
+        allowRedirects: allowRedirects, skipCredentialValidation: skipCredentialValidation,
+        signProfile: signProfile, platformOptions: platformOptions,
+      ));
+    }
+    final requestIdentity = SignExecutionContext.current;
+    final requestBaseUrl = requestIdentity?.endpoint ?? _dio.options.baseUrl;
+    final requestHeaders = requestIdentity == null ? _dio.options.headers : switch (requestIdentity.platform) {
+      PlatformType.chaoxing => HeadersManager.chaoxingHeaders,
+      PlatformType.rainClassroom => HeadersManager.rainClassroomHeaders,
+      PlatformType.tronclass => HeadersManager.tronclassHeaders,
+      PlatformType.ketangpai => HeadersManager.ketangpaiHeaders,
+      PlatformType.weizhuojiao => HeadersManager._wzjHeaders,
+    };
+    final requestOptions = _dio.options.copyWith(baseUrl: requestBaseUrl, headers: requestHeaders);
     // Validate credential before request (skip during login)
     if (!skipCredentialValidation && !CookieManager.isLoggingIn) {
       final currentUserId = AccountManager.currentSessionId;
@@ -676,16 +695,16 @@ class ApiService {
 
     final isAbsoluteUrl =
         url.startsWith('http://') || url.startsWith('https://');
-    final fullUrl = isAbsoluteUrl || _dio.options.baseUrl.isEmpty
+    final fullUrl = isAbsoluteUrl || requestBaseUrl.isEmpty
         ? url
-        : '${_dio.options.baseUrl}$url';
+        : '$requestBaseUrl$url';
     _logRequest(
       'request',
       url,
       extra:
           'method=${method.toUpperCase()} platform=${PlatformManager().currentPlatformName} '
           'server=${PlatformManager().isRainClassroom ? PlatformManager().serverName : '-'} '
-          'baseUrl=${_dio.options.baseUrl.isEmpty ? '<relative>' : _dio.options.baseUrl} '
+          'baseUrl=${requestBaseUrl.isEmpty ? '<relative>' : requestBaseUrl} '
           'fullUrl=$fullUrl',
     );
 
@@ -708,7 +727,7 @@ class ApiService {
             platform: PlatformManager().currentPlatform,
             url: fullUrl,
             method: method,
-            baseUrl: _dio.options.baseUrl.isEmpty ? null : _dio.options.baseUrl,
+            baseUrl: requestBaseUrl.isEmpty ? null : requestBaseUrl,
             referer: _headerValue(headers, 'Referer'),
             contentKind: SignRequestContext.inferContentKind(
               method: method,
@@ -723,7 +742,7 @@ class ApiService {
       platform: PlatformManager().currentPlatform,
       url: fullUrl,
       method: method,
-      baseUrl: _dio.options.baseUrl.isEmpty ? null : _dio.options.baseUrl,
+      baseUrl: requestBaseUrl.isEmpty ? null : requestBaseUrl,
       headers: headers,
       body: body,
     );
@@ -772,6 +791,7 @@ class ApiService {
             body: body,
             options: options,
             cancelToken: cancelToken,
+            baseOptions: requestOptions,
           );
         }
 
@@ -836,6 +856,7 @@ class ApiService {
         );
         response = await _requestWithRetry(
           locationUrl,
+          baseOptions: requestOptions,
           options: Options(
             method: 'GET',
             headers: redirectHeaders,
@@ -1051,6 +1072,7 @@ class ApiService {
     dynamic body,
     required Options options,
     CancelToken? cancelToken,
+    required BaseOptions baseOptions,
   }) async {
     Response? lastResponse;
     Object? lastError;
@@ -1058,7 +1080,11 @@ class ApiService {
     final isAbsoluteUrl =
         url.startsWith('http://') || url.startsWith('https://');
 
-    for (var attempt = 0; attempt <= _maxRetryCount; attempt++) {
+    final readOnly = (options.method == 'GET' || options.method == 'HEAD') && _requestBucket(url, options.method ?? 'GET') == null;
+    final maxAttempts = readOnly ? _maxRetryCount : 0;
+    final dioInstance = Dio(baseOptions.copyWith(baseUrl: isAbsoluteUrl ? '' : baseOptions.baseUrl));
+    dioInstance.interceptors.addAll(_dio.interceptors);
+    for (var attempt = 0; attempt <= maxAttempts; attempt++) {
       await _throttleRequest(url, options.method ?? 'GET');
       try {
         _logRequest(
@@ -1067,12 +1093,6 @@ class ApiService {
           extra:
               'try=${attempt + 1}/${_maxRetryCount + 1} method=${options.method ?? 'GET'}',
         );
-
-        Dio dioInstance = _dio;
-        if (isAbsoluteUrl && _dio.options.baseUrl.isNotEmpty) {
-          dioInstance = Dio(_dio.options.copyWith(baseUrl: ''));
-          dioInstance.interceptors.addAll(_dio.interceptors);
-        }
 
         final response = await dioInstance.request(
           url,
@@ -1083,7 +1103,7 @@ class ApiService {
         );
 
         if (_shouldRetryByStatus(response.statusCode) &&
-            attempt < _maxRetryCount) {
+            attempt < maxAttempts) {
           _logRequest(
             'retry-status',
             url,
@@ -1097,7 +1117,7 @@ class ApiService {
         return response;
       } catch (e) {
         lastError = e;
-        if (attempt >= _maxRetryCount || !_shouldRetryByError(e)) {
+        if (attempt >= maxAttempts || !_shouldRetryByError(e)) {
           _logRequest('fail', url, extra: 'attempt=${attempt + 1} error=$e');
           rethrow;
         }

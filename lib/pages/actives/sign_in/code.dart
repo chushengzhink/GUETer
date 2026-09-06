@@ -1,9 +1,9 @@
+import '../../../session/sign_execution_context.dart';
 import 'package:flutter/material.dart';
 import 'package:pinput/pinput.dart';
 
-import '../../../../models/user.dart';
-import '../../../../session/account.dart';
-import '../../../../api/chaoxing_sign_api.dart';
+import '../../../models/user.dart';
+import '../../../api/chaoxing_sign_api.dart';
 import 'sign_in.dart';
 
 class CodeSign implements SignStrategy {
@@ -17,11 +17,11 @@ class CodeSign implements SignStrategy {
 
   @override
   Future<String?> signForAccount(User user, SignParams params, SignInPageState state) async {
+    return SignExecutionContext.capture(account: user).run(() async {
     final userValidate = state.getUserCaptchaValidate(user.uid);
     final validate = userValidate?['validate'];
 
     try {
-      AccountManager.setCurrentSessionTemp(user.uid);
 
       final response = await ChaoxingSignApi.signCode(
         activeId: params.active.id,
@@ -36,6 +36,7 @@ class CodeSign implements SignStrategy {
     } catch (e) {
       return null;
     }
+    });
   }
 
   static Widget buildSignArea(SignInPageState state) {
@@ -54,7 +55,7 @@ class CodeSign implements SignStrategy {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: state.getCodeInput().length == state.signParams.numberCount
+                    onPressed: !state.signing && state.signParams.code.length == state.signParams.numberCount
                         ? () => _verifyAndSign(state)
                         : null,
                     style: ElevatedButton.styleFrom(
@@ -77,10 +78,10 @@ class CodeSign implements SignStrategy {
     final code = state.signParams.code;
 
     // 验证签到码是否正确
-    bool isValid = await ChaoxingSignApi.checkSignCode(
-      activeId: state.widget.active.id,
-      signCode: code,
-    );
+    if (state.signing) return;
+    bool isValid = await state.executionIdentity.run(() => ChaoxingSignApi.checkSignCode(
+      activeId: state.widget.active.id, signCode: code,
+    ));
 
     if (isValid) {
       // 验证通过，执行签到
@@ -88,7 +89,7 @@ class CodeSign implements SignStrategy {
     } else {
       // 验证失败，清空输入并提示错误
       state.showErrorMessage('签到码不正确，请重新输入');
-      state.signParams.code = '';
+
 
       // 刷新UI，清除输入框
       if (state.mounted) {
@@ -115,6 +116,7 @@ class _CodeInputFieldState extends State<_CodeInputField> {
   void initState() {
     super.initState();
     // 监听输入变化
+    _pinController.text = widget.state.signParams.code;
     _pinController.addListener(_onPinChanged);
   }
 
@@ -128,6 +130,7 @@ class _CodeInputFieldState extends State<_CodeInputField> {
 
   void _onPinChanged() {
     widget.state.signParams.code = _pinController.text;
+    if (widget.state.mounted) widget.state.setState(() {});
   }
 
   @override

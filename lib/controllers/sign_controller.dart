@@ -1,3 +1,5 @@
+import '../session/sign_execution_context.dart';
+import 'sign_task_controller.dart';
 import 'package:get/get.dart';
 
 import '../api/ketangpai_service.dart';
@@ -202,7 +204,13 @@ class SignController extends GetxController {
     )
     request,
   }) async {
-    final account = _accountProvider();
+    final account = SignExecutionContext.current?.account ?? _accountProvider();
+    if (SignTaskController.currentTask == null) {
+      return SignTaskController.instance.run(
+        identity: SignExecutionContext.capture(account: account), operation: '$type:$signId', label: type,
+        action: () => _runSign(type: type, signId: signId, request: request),
+      );
+    }
     final token = account?.token.trim() ?? '';
     if (token.isEmpty) {
       return _fail(type: type, signId: signId, message: '未登录课堂派账号');
@@ -237,7 +245,7 @@ class SignController extends GetxController {
     required String signId,
     required String message,
   }) async {
-    final account = _accountProvider();
+    final account = SignExecutionContext.current?.account ?? _accountProvider();
     final record = KtSignRecord(
       type: type,
       signId: signId,
@@ -255,6 +263,7 @@ class SignController extends GetxController {
     signStatus.value = record.status;
     error.value = record.success ? '' : record.message;
     records.insert(0, record);
+    SignTaskController.instance.record("${record.account}: ${record.message}");
     await _recordAppender(record);
     _notifier(record.type, record.message, record.success);
   }

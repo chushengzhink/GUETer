@@ -464,6 +464,12 @@ class SignRequestExecutor {
     }
 
     final enhancedHeaders = profile.mergeHeaders(headers, context: context);
+    // A submission with an unknown outcome must never be sent a second time
+    // merely to try another header profile.
+    if (context != null && (context.method.toUpperCase() != 'GET' ||
+        RegExp(r'stusignajax|/newsign/|/checkin').hasMatch(context.url.toLowerCase()))) {
+      return send(enhancedHeaders);
+    }
     try {
       final response = await send(enhancedHeaders);
       final reason = fallbackReasonForResponse(response);
