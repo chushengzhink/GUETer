@@ -224,17 +224,20 @@ void main() {
   });
 
   group('Chaoxing Dio manager', () {
-    test('recreates cached Dio for chaoxing user', () async {
-      final first = await PlatformDioManager.getDioForUser(
-        platform: PlatformType.chaoxing,
-        userId: '403701235',
-      );
-      final second = await PlatformDioManager.getDioForUser(
-        platform: PlatformType.chaoxing,
-        userId: '403701235',
-      );
+    test(
+      'reuses account Dio without closing another in-flight request',
+      () async {
+        final first = await PlatformDioManager.getDioForUser(
+          platform: PlatformType.chaoxing,
+          userId: '403701235',
+        );
+        final second = await PlatformDioManager.getDioForUser(
+          platform: PlatformType.chaoxing,
+          userId: '403701235',
+        );
 
-      expect(identical(first, second), isFalse);
-    });
+        expect(identical(first, second), isTrue);
+      },
+    );
   });
 }

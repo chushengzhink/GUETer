@@ -10,16 +10,20 @@ import '../models/user.dart';
 import '../session/account.dart';
 import '../session/cookie.dart';
 
-
-class SignInApi{
-  static const String _signUrl = 'https://mobilelearn.chaoxing.com/pptSign/stuSignajax';
+class SignInApi {
+  static const String _signUrl =
+      'https://mobilelearn.chaoxing.com/pptSign/stuSignajax';
   static String get _deviceCode => EncryptionUtil.getDeviceCode();
 
   static String _userId = '';
   static User? _user;
 
-  static String get userId => SignExecutionContext.current?.account?.uid ?? AccountManager.currentSessionId ?? _userId;
-  static User? get user => SignExecutionContext.current?.account ?? AccountManager.currentAccount ?? _user;
+  static String get userId => SignExecutionContext.current != null
+      ? SignExecutionContext.current!.account?.uid ?? ''
+      : AccountManager.currentSessionId ?? _userId;
+  static User? get user => SignExecutionContext.current != null
+      ? SignExecutionContext.current!.account
+      : AccountManager.currentAccount ?? _user;
   static String get userName => user?.name ?? '';
 
   /// 更新当前用户信息（从会话管理器获取）
@@ -55,7 +59,10 @@ class SignInApi{
   static Future<String?> uploadImage(File imageFile) async {
     try {
       final tokenUrl = 'https://pan-yz.chaoxing.com/api/token/uservalid';
-      final tokenResponse = await ApiService.sendRequest(tokenUrl, method: "GET");
+      final tokenResponse = await ApiService.sendRequest(
+        tokenUrl,
+        method: "GET",
+      );
 
       if (tokenResponse.data == null) {
         debugPrint('Failed to get token');
@@ -66,27 +73,31 @@ class SignInApi{
       final crcUrl = 'https://pan-yz.chaoxing.com/api/crcStorageStatus';
 
       final crc = await EncryptionUtil.getCRC(imageFile);
-      final crcParams = {
-        'puid': userId,
-        'crc': crc,
-        '_token': token
-      };
+      final crcParams = {'puid': userId, 'crc': crc, '_token': token};
 
       await ApiService.sendRequest(crcUrl, method: "GET", params: crcParams);
 
       DateTime now = DateTime.now();
-      String timestamp = "${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}";
-      final milliseconds = DateTime.now().millisecond.toString().padLeft(3, '0');
+      String timestamp =
+          "${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}";
+      final milliseconds = DateTime.now().millisecond.toString().padLeft(
+        3,
+        '0',
+      );
       String formattedTime = '$timestamp$milliseconds';
       String fileName = "$formattedTime.jpg";
       // 20260205191805009.jpg
 
       FormData formData = FormData.fromMap({
-        'file': await MultipartFile.fromFile(imageFile.path, filename: fileName),
-        'puid': userId
+        'file': await MultipartFile.fromFile(
+          imageFile.path,
+          filename: fileName,
+        ),
+        'puid': userId,
       });
 
-      String uploadUrl = 'https://pan-yz.chaoxing.com/upload?_from=mobilelearn&_token=$token';
+      String uploadUrl =
+          'https://pan-yz.chaoxing.com/upload?_from=mobilelearn&_token=$token';
 
       final uploadResponse = await ApiService.sendRequest(
         uploadUrl,
@@ -104,8 +115,13 @@ class SignInApi{
   }
 
   /// 普通签到（可带照片）
-  static Future<String?> normalSign(String courseId, String activeId, User user,
-      {String? objectId, String? validate}) async {
+  static Future<String?> normalSign(
+    String courseId,
+    String activeId,
+    User user, {
+    String? objectId,
+    String? validate,
+  }) async {
     try {
       Map<String, String> params = {
         'activeId': activeId,
@@ -119,7 +135,7 @@ class SignInApi{
         'objectId': '',
         'name': user.name,
         'validate': '',
-        'deviceCode': _deviceCode
+        'deviceCode': _deviceCode,
       };
       if (objectId == null) {
         params.remove('objectId');
@@ -154,14 +170,16 @@ class SignInApi{
   /// 检查手势 签到码
   static Future<bool?> checkSignCode(String activeId, String signCode) async {
     try {
-      String url = 'https://mobilelearn.chaoxing.com/widget/sign/pcStuSignController/checkSignCode';
+      String url =
+          'https://mobilelearn.chaoxing.com/widget/sign/pcStuSignController/checkSignCode';
 
-      final params = {
-        'activeId': activeId,
-        'signCode': signCode
-      };
+      final params = {'activeId': activeId, 'signCode': signCode};
 
-      final response = await ApiService.sendRequest(url, method: "GET", params: params);
+      final response = await ApiService.sendRequest(
+        url,
+        method: "GET",
+        params: params,
+      );
       return response.data['result'] == 1;
       // {"result":1,"msg":"验证成功","data":null,"errorMsg":null}
       // {"result":0,"msg":null,"data":null,"errorMsg":"手势不正确"}
@@ -172,8 +190,13 @@ class SignInApi{
   }
 
   /// 手势 签到码签到
-  static Future<String?> codeSign(String courseId, String activeId, String signCode,
-      User user, {String? validate}) async {
+  static Future<String?> codeSign(
+    String courseId,
+    String activeId,
+    String signCode,
+    User user, {
+    String? validate,
+  }) async {
     try {
       final params = {
         'activeId': activeId,
@@ -187,7 +210,7 @@ class SignInApi{
         'name': user.name,
         'signCode': signCode,
         'validate': '',
-        'deviceCode': _deviceCode
+        'deviceCode': _deviceCode,
       };
       if (validate == null) {
         params.remove('validate');
@@ -218,7 +241,8 @@ class SignInApi{
     try {
       const getFaceSalt = 'Qcloudcos@2017';
       final enc = EncryptionUtil.md5Hash(user.uid + getFaceSalt);
-      final url = 'https://passport2-api.chaoxing.com/api/getUserFaceid?enc=$enc';
+      final url =
+          'https://passport2-api.chaoxing.com/api/getUserFaceid?enc=$enc';
 
       final cookieStr = await _getUserCookie(user.uid) ?? '';
       final headers = {'Cookie': cookieStr};
@@ -235,8 +259,16 @@ class SignInApi{
   }
 
   /// 位置签到
-  static Future<String?> locationSign(String courseId, String activeId, String address,
-      double latitude, double longitude, User user, {String? validate, String? faceId}) async {
+  static Future<String?> locationSign(
+    String courseId,
+    String activeId,
+    String address,
+    double latitude,
+    double longitude,
+    User user, {
+    String? validate,
+    String? faceId,
+  }) async {
     try {
       Map<String, String> params = {
         'name': user.name,
@@ -255,7 +287,7 @@ class SignInApi{
         'vpProbability': '-1',
         'vpStrategy': '',
         'currentFaceId': '',
-        'ifCFP': '0'
+        'ifCFP': '0',
       };
 
       if (validate == null) {
@@ -264,7 +296,7 @@ class SignInApi{
         params['validate'] = validate;
       }
 
-      if (faceId != null){
+      if (faceId != null) {
         params['currentFaceId'] = faceId;
       }
 
@@ -288,9 +320,13 @@ class SignInApi{
 
   /// 获取签到详细
   // 经测试 所有签到可用
-  static Future<Map<String, dynamic>?> getSignDetail(String activeId, [String? code]) async {
+  static Future<Map<String, dynamic>?> getSignDetail(
+    String activeId, [
+    String? code,
+  ]) async {
     try {
-      String url = 'https://mobilelearn.chaoxing.com/newsign/signDetail?activePrimaryId=$activeId&type=1';
+      String url =
+          'https://mobilelearn.chaoxing.com/newsign/signDetail?activePrimaryId=$activeId&type=1';
       if (code != null) {
         url += '&msg=$code';
       }
@@ -306,8 +342,18 @@ class SignInApi{
   /// 二维码签到（可带定位）
   /// 需要验证码时第一次发送会返回validate_${enc2}
   /// enc2用于固定enc
-  static Future<String?> qrCodeSign(String courseId, String activeId, String enc, User user,
-      {String? address, double? latitude, double? longitude, String? enc2, String? validate, String? faceId}) async {
+  static Future<String?> qrCodeSign(
+    String courseId,
+    String activeId,
+    String enc,
+    User user, {
+    String? address,
+    double? latitude,
+    double? longitude,
+    String? enc2,
+    String? validate,
+    String? faceId,
+  }) async {
     try {
       Map<String, String> params = {
         'enc': enc,
@@ -327,11 +373,12 @@ class SignInApi{
         'validate': '',
         'currentFaceId': '',
         'ifCFP': '0',
-        'courseId': courseId
+        'courseId': courseId,
       };
 
       if (address != null && latitude != null && longitude != null) {
-        String locationJson = '{"result":1,"latitude":$latitude,"longitude":$longitude,"mockData":{"strategy":0,"probability":-1},"address":"$address"}';
+        String locationJson =
+            '{"result":1,"latitude":$latitude,"longitude":$longitude,"mockData":{"strategy":0,"probability":-1},"address":"$address"}';
         params['location'] = locationJson;
       }
 
@@ -343,7 +390,7 @@ class SignInApi{
         params['validate'] = validate;
       }
 
-      if (faceId != null){
+      if (faceId != null) {
         params['currentFaceId'] = faceId;
       }
 
@@ -368,7 +415,8 @@ class SignInApi{
   /// 签到回执
   static Future<Map<String, dynamic>?> getSignReceipt(String activeId) async {
     try {
-      final url = 'https://mobilelearn.chaoxing.com/sign/signReceipt2?activeId=$activeId';
+      final url =
+          'https://mobilelearn.chaoxing.com/sign/signReceipt2?activeId=$activeId';
 
       final response = await ApiService.sendRequest(url);
       return response.data;
@@ -381,10 +429,11 @@ class SignInApi{
   /// 获取活动详细
   static Future<Map<String, dynamic>?> getActiveInfoWeb(String activeId) async {
     try {
-      final url = 'https://mobilelearn.chaoxing.com/v2/apis/active/getPPTActiveInfo?activeId=$activeId';
+      final url =
+          'https://mobilelearn.chaoxing.com/v2/apis/active/getPPTActiveInfo?activeId=$activeId';
       final response = await ApiService.sendRequest(url);
       final data = response.data;
-      if (data['result'] == 1){
+      if (data['result'] == 1) {
         return data['data'];
       }
     } catch (e) {
@@ -396,11 +445,12 @@ class SignInApi{
   /// 获取签到详细
   static Future<Map<String, dynamic>?> getAttendInfoWeb(String activeId) async {
     try {
-      final url = 'https://mobilelearn.chaoxing.com/v2/apis/sign/getAttendInfo?activeId=$activeId&moreClassAttendEnc=';
+      final url =
+          'https://mobilelearn.chaoxing.com/v2/apis/sign/getAttendInfo?activeId=$activeId&moreClassAttendEnc=';
 
       final response = await ApiService.sendRequest(url);
       final data = response.data;
-      if (data['result'] == 1){
+      if (data['result'] == 1) {
         return data['data'];
       }
     } catch (e) {
@@ -408,6 +458,7 @@ class SignInApi{
     }
     return null;
   }
+
   // https://mobilelearn.chaoxing.com/widget/sign/pcTeaSignController/getAttendList
   // 存在权鉴
 }

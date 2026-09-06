@@ -54,15 +54,17 @@ class _AccountsSelectorState extends State<AccountsSelector> {
 
   Future<void> _loadAccounts() async {
     try {
-      _allAccounts = AccountManager.getCurrentPlatformAccounts();
+      final currentUserId = AccountManager.currentSessionId;
+      _allAccounts = AccountManager.getAccountsForPlatform(
+        widget.signModePlatform ?? PlatformManager().currentPlatform,
+      );
       final signModePlatform = widget.signModePlatform;
       _mode = signModePlatform == null
           ? SignAccountMode.perRunSelection
           : await SignModeSettings.getMode(signModePlatform);
-      final currentUserId = AccountManager.currentSessionId;
       _currentUser = currentUserId == null
           ? null
-          : AccountManager.getAccountById(currentUserId);
+          : _allAccounts.where((user) => user.uid == currentUserId).firstOrNull;
 
       if (_mode == SignAccountMode.manualCurrent) {
         _selectedAccounts = _currentUser == null

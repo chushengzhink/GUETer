@@ -25,11 +25,28 @@ class SignExecutionContext {
   final String tronclassBaseUrl;
   final String ketangpaiBaseUrl;
 
-  factory SignExecutionContext.capture({User? account}) {
+  factory SignExecutionContext.capture({
+    User? account,
+    PlatformType? platform,
+  }) {
     final manager = PlatformManager();
+    final targetPlatform = platform ?? manager.currentPlatform;
+    final targetAccount =
+        account ??
+        (targetPlatform == manager.currentPlatform
+            ? AccountManager.currentAccount
+            : AccountManager.getAccountsForPlatform(targetPlatform)
+                  .where(
+                    (user) =>
+                        user.uid ==
+                        AccountManager.currentSessionForPlatform(
+                          targetPlatform,
+                        ),
+                  )
+                  .firstOrNull);
     return SignExecutionContext(
-      platform: manager.currentPlatform,
-      account: account ?? AccountManager.currentAccount,
+      platform: targetPlatform,
+      account: targetAccount,
       server: manager.currentServer,
       tronclassBaseUrl: manager.tronclassBaseUrl,
       ketangpaiBaseUrl: manager.ketangpaiBaseUrl,

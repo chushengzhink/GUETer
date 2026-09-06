@@ -47,15 +47,18 @@ class PlatformManager {
   Stream<PlatformType> get platformChanges => _platformChangeController.stream;
 
   /// 获取当前平台
-  PlatformType get currentPlatform => SignExecutionContext.current?.platform ?? _currentPlatform;
+  PlatformType get currentPlatform =>
+      SignExecutionContext.current?.platform ?? _currentPlatform;
 
   bool get isChaoxing => currentPlatform == PlatformType.chaoxing;
   bool get isRainClassroom => currentPlatform == PlatformType.rainClassroom;
   bool get isTronclass => currentPlatform == PlatformType.tronclass;
   bool get isKetangpai => currentPlatform == PlatformType.ketangpai;
   bool get isWeizhuojiao => currentPlatform == PlatformType.weizhuojiao;
-  String get tronclassBaseUrl => SignExecutionContext.current?.tronclassBaseUrl ?? _tronclassBaseUrl;
-  String get ketangpaiBaseUrl => SignExecutionContext.current?.ketangpaiBaseUrl ?? _ketangpaiBaseUrl;
+  String get tronclassBaseUrl =>
+      SignExecutionContext.current?.tronclassBaseUrl ?? _tronclassBaseUrl;
+  String get ketangpaiBaseUrl =>
+      SignExecutionContext.current?.ketangpaiBaseUrl ?? _ketangpaiBaseUrl;
 
   /// 同步切换平台（不触发异步操作）
   void setPlatformSync(PlatformType platform) {
@@ -63,29 +66,18 @@ class PlatformManager {
   }
 
   Future<void> activatePlatformForLoginCompletion(PlatformType platform) async {
-    final oldPlatform = _currentPlatform;
-    _currentPlatform = platform;
-    try {
-      await _prefs.setString(_platformKey, currentPlatformName);
-    } catch (e) {
-      debugPrint('[Platform] Failed to persist login-completion platform: $e');
-    }
-
-    await AccountManager.switchToPlatformAccount();
-    await AccountManager.refreshAccounts();
-    await CookieManager.loadAllCookies(refreshOnlineState: false);
-    ApiService.onPlatformChange?.call();
-
-    if (oldPlatform != platform) {
-      debugPrint(
-        '[Platform] Login completion activated platform: $oldPlatform -> $platform',
-      );
-      _platformChangeController.add(platform);
+    await AccountContextController.instance.select(
+      platform,
+      accountId: AccountManager.currentSessionForPlatform(platform),
+    );
+    if (AccountContextController.instance.error != null) {
+      throw StateError('Unable to restore login context');
     }
   }
 
   /// 获取当前雨课堂服务器
-  RainClassroomServerType get currentServer => SignExecutionContext.current?.server ?? _currentServer;
+  RainClassroomServerType get currentServer =>
+      SignExecutionContext.current?.server ?? _currentServer;
 
   /// 获取雨课堂服务器名称
   String get serverName {
@@ -167,13 +159,19 @@ class PlatformManager {
   }
 
   /// 设置平台（唯一写入口，仅由用户主动操作触发）
-  Future<void> setPlatform(PlatformType platform, {bool userInitiated = true}) async {
+  Future<void> setPlatform(
+    PlatformType platform, {
+    bool userInitiated = true,
+  }) async {
     if (!userInitiated) return;
     await AccountContextController.instance.select(platform);
   }
 
   /// Only the account context coordinator calls this local commit operation.
-  Future<void> applyPlatformSelection(PlatformType platform) async {
+  Future<void> applyPlatformSelection(
+    PlatformType platform, {
+    bool notify = true,
+  }) async {
     if (_currentPlatform == platform) return;
     final previous = _currentPlatform;
     _currentPlatform = platform;
@@ -183,60 +181,56 @@ class PlatformManager {
       final userId = AccountManager.currentSessionId;
       if (userId != null) await CookieManager.getCookieJarForUser(userId);
       ApiService.onPlatformChange?.call();
-      _platformChangeController.add(platform);
+      if (notify) _platformChangeController.add(platform);
     } catch (_) {
       _currentPlatform = previous;
+      await _prefs.setString(_platformKey, currentPlatformName);
       await AccountManager.switchToPlatformAccount(refreshFromStorage: false);
       ApiService.onPlatformChange?.call();
       rethrow;
     }
   }
 
-  /// 设置雨课堂服务器
-  Future<void> setServer(RainClassroomServerType server) async {
+  Future<void> setServer(RainClassroomServerType server) =>
+      AccountContextController.instance.select(currentPlatform, server: server);
+
+  Future<void> setTronclassBaseUrl(String baseUrl) => AccountContextController
+      .instance
+      .select(currentPlatform, tronclassBaseUrl: _normalizeBaseUrl(baseUrl));
+
+  Future<void> setKetangpaiBaseUrl(String baseUrl) => AccountContextController
+      .instance
+      .select(currentPlatform, ketangpaiBaseUrl: _normalizeBaseUrl(baseUrl));
+
+  /// The coordinator serializes site changes with platform/account commits.
+  Future<void> applySiteSelection({
+    required RainClassroomServerType server,
+    required String tronclassBaseUrl,
+    required String ketangpaiBaseUrl,
+  }) async {
     if (_currentServer != server) {
-      final oldServer = _currentServer;
-      _currentServer = server;
-      try {
-        await _prefs.setString(_serverKey, serverName);
-      } catch (e) {
-        debugPrint('保存服务器失败：$e');
+      if (!await _prefs.setString(_serverKey, server.name)) {
+        throw StateError('Unable to save server');
       }
-      ApiService.onPlatformChange?.call();
-      debugPrint(
-        '[Platform] rainclassroom server switched $oldServer -> $_currentServer',
-      );
-      // Reuse platform change stream to force page-level refresh after server switch.
-      _platformChangeController.add(_currentPlatform);
+      _currentServer = server;
+    }
+    if (_tronclassBaseUrl != tronclassBaseUrl) {
+      if (!await _prefs.setString(_tronclassBaseUrlKey, tronclassBaseUrl)) {
+        throw StateError('Unable to save site');
+      }
+      _tronclassBaseUrl = tronclassBaseUrl;
+    }
+    if (_ketangpaiBaseUrl != ketangpaiBaseUrl) {
+      if (!await _prefs.setString(_ketangpaiBaseUrlKey, ketangpaiBaseUrl)) {
+        throw StateError('Unable to save site');
+      }
+      _ketangpaiBaseUrl = ketangpaiBaseUrl;
     }
   }
 
-  /// 设置畅课服务器地址
-  Future<void> setTronclassBaseUrl(String baseUrl) async {
-    final normalized = _normalizeBaseUrl(baseUrl);
-    if (_tronclassBaseUrl == normalized) return;
-
-    _tronclassBaseUrl = normalized;
-    try {
-      await _prefs.setString(_tronclassBaseUrlKey, normalized);
-    } catch (e) {
-      debugPrint('保存畅课服务器失败：$e');
-    }
+  void notifyContextChanged() {
     ApiService.onPlatformChange?.call();
-  }
-
-  /// 设置课堂派服务器地址
-  Future<void> setKetangpaiBaseUrl(String baseUrl) async {
-    final normalized = _normalizeBaseUrl(baseUrl);
-    if (_ketangpaiBaseUrl == normalized) return;
-
-    _ketangpaiBaseUrl = normalized;
-    try {
-      await _prefs.setString(_ketangpaiBaseUrlKey, normalized);
-    } catch (e) {
-      debugPrint('保存课堂派服务器失败：$e');
-    }
-    ApiService.onPlatformChange?.call();
+    _platformChangeController.add(_currentPlatform);
   }
 
   String _normalizeBaseUrl(String input) {

@@ -67,6 +67,7 @@ class TronclassBatchSignExecutor {
   Future<TronclassBatchSignResult> sign({
     required BuildContext context,
     required String courseName,
+    String? operationId,
     required SignRunConsoleController console,
     required TronclassSignAction action,
     List<User>? users,
@@ -74,17 +75,56 @@ class TronclassBatchSignExecutor {
     TronclassBatchNetworkPolicy networkPolicy =
         TronclassBatchNetworkPolicy.strict,
   }) async {
-    final identity = SignExecutionContext.capture();
+    final identity = SignExecutionContext.capture(
+      platform: PlatformType.tronclass,
+      account: SignExecutionContext.current?.account ?? users?.firstOrNull,
+    );
+    final accounts = List<User>.of(
+      users ?? AccountManager.getAccountsForPlatform(PlatformType.tronclass),
+    );
+    final target = operationId ?? courseName;
+    final accountKey = (accounts.map((u) => u.uid).toList()..sort()).join(',');
     if (SignTaskController.currentTask == null) {
       return SignTaskController.instance.run(
-        identity: identity, operation: 'tronclass:$courseName', label: courseName,
-        action: () => sign(context: context, courseName: courseName, console: console,
-          action: action, users: users == null ? null : List.of(users),
-          networkPolicy: networkPolicy, isContextMounted: isContextMounted),
+        identity: identity,
+        operation: 'tronclass:$target:$accountKey',
+        label: courseName,
+        action: () => sign(
+          context: context,
+          courseName: courseName,
+          console: console,
+          action: action,
+          users: accounts,
+          operationId: operationId,
+          networkPolicy: networkPolicy,
+          isContextMounted: isContextMounted,
+        ),
       );
     }
-    final accounts = List<User>.of(
-        users ?? AccountManager.getAccountsForPlatform(PlatformType.tronclass));
+    final task = SignTaskController.currentTask;
+    if (task != null) {
+      task.resultContexts = accounts.map(identity.withAccount).toList();
+      task.accounts = accounts
+          .map((user) => '${user.name} · ${user.studentId ?? user.uid}')
+          .toList();
+      if (operationId != null) {
+        task.queryResult = () async {
+          final lines = <String>[];
+          for (final user in accounts) {
+            final result = await identity
+                .withAccount(user)
+                .run(TronclassSignApi.getRollcalls);
+            final match = result.rollcalls
+                .where((r) => r.rollcallId.toString() == operationId)
+                .firstOrNull;
+            lines.add(
+              '${user.name}: ${match == null ? "未返回该活动，请到平台查看 / Activity not returned" : match.status}',
+            );
+          }
+          return lines.join('\n');
+        };
+      }
+    }
     console.resetForPlatform(SignPlatformContext.tronclass);
     final results = <TronclassBatchSignItemResult>[];
     var qrCodeExpired = false;
@@ -114,88 +154,94 @@ class TronclassBatchSignExecutor {
         }
 
         await identity.withAccount(user).run(() async {
-        console.add(
-          platform: '畅课',
-          accountName: user.name,
-          accountId: user.uid,
-          stage: SignRunStage.sessionCheck,
-          message: '检查畅课会话',
-        );
-
-        final health = await _checkSessionHealth(user);
-        if (!health.healthy) {
-          final message = health.message;
           console.add(
             platform: '畅课',
             accountName: user.name,
             accountId: user.uid,
-            stage: SignRunStage.signFailure,
+            stage: SignRunStage.sessionCheck,
+            message: '检查畅课会话',
+          );
+
+          final health = await _checkSessionHealth(user);
+          if (!health.healthy) {
+            final message = health.message;
+            console.add(
+              platform: '畅课',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.signFailure,
+              message: message,
+            );
+            await _appendRecord(courseName, user, false, message);
+            results.add(
+              TronclassBatchSignItemResult(
+                user: user,
+                success: false,
+                message: message,
+              ),
+            );
+            return;
+          }
+
+          final response = await SignTaskController.instance.deduplicate(
+            identity: identity.withAccount(user),
+            operation: 'tronclass:$target',
+            action: () => _runAction(
+              // The task path does not dereference this route; legacy calls check mounted.
+              // ignore: use_build_context_synchronously
+              context: context,
+              user: user,
+              console: console,
+              action: action,
+              skipNetworkGate:
+                  networkPolicy == TronclassBatchNetworkPolicy.direct ||
+                  (networkPolicy == TronclassBatchNetworkPolicy.qrFastFirst &&
+                      index == 0),
+              directMessage: networkPolicy == TronclassBatchNetworkPolicy.direct
+                  ? '平台所选：直接提交'
+                  : '极速防过期：首账号跳过换网直接提交',
+            ),
+          );
+          if (response.skipped) {
+            await _appendRecord(courseName, user, false, response.message);
+            results.add(
+              TronclassBatchSignItemResult(
+                user: user,
+                success: false,
+                skipped: true,
+                message: response.message,
+              ),
+            );
+            return;
+          }
+
+          final signResponse = response.response;
+          final success =
+              signResponse != null &&
+              TronclassSignApi.isSignSuccess(signResponse);
+          final message = signResponse == null
+              ? '签到无响应'
+              : TronclassSignApi.getSignMessage(signResponse.data);
+          console.add(
+            platform: '畅课',
+            accountName: user.name,
+            accountId: user.uid,
+            stage: success
+                ? SignRunStage.signSuccess
+                : SignRunStage.signFailure,
             message: message,
           );
-          await _appendRecord(courseName, user, false, message);
+          await _appendRecord(courseName, user, success, message);
           results.add(
             TronclassBatchSignItemResult(
               user: user,
-              success: false,
+              success: success,
               message: message,
             ),
           );
-          return;
-        }
-
-        final response = await _runAction(
-          // The task path does not dereference this route; legacy calls check mounted.
-          // ignore: use_build_context_synchronously
-          context: context,
-          user: user,
-          console: console,
-          action: action,
-          skipNetworkGate:
-              networkPolicy == TronclassBatchNetworkPolicy.direct ||
-              (networkPolicy == TronclassBatchNetworkPolicy.qrFastFirst &&
-                  index == 0),
-          directMessage: networkPolicy == TronclassBatchNetworkPolicy.direct
-              ? '平台所选：直接提交'
-              : '极速防过期：首账号跳过换网直接提交',
-        );
-        if (response.skipped) {
-          await _appendRecord(courseName, user, false, response.message);
-          results.add(
-            TronclassBatchSignItemResult(
-              user: user,
-              success: false,
-              skipped: true,
-              message: response.message,
-            ),
-          );
-          return;
-        }
-
-        final signResponse = response.response;
-        final success =
-            signResponse != null &&
-            TronclassSignApi.isSignSuccess(signResponse);
-        final message = signResponse == null
-            ? '签到无响应'
-            : TronclassSignApi.getSignMessage(signResponse.data);
-        console.add(
-          platform: '畅课',
-          accountName: user.name,
-          accountId: user.uid,
-          stage: success ? SignRunStage.signSuccess : SignRunStage.signFailure,
-          message: message,
-        );
-        await _appendRecord(courseName, user, success, message);
-        results.add(
-          TronclassBatchSignItemResult(
-            user: user,
-            success: success,
-            message: message,
-          ),
-        );
-        if (!success && signResponse != null) {
-          qrCodeExpired = TronclassSignApi.isQrCodeExpired(signResponse.data);
-        }
+          if (!success && signResponse != null) {
+            qrCodeExpired = TronclassSignApi.isQrCodeExpired(signResponse.data);
+          }
         });
       }
     } finally {

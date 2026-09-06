@@ -1,3 +1,6 @@
+import '../session/sign_execution_context.dart';
+import '../widgets/account_context_header.dart';
+import '../widgets/sign_task_dock.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -34,6 +37,8 @@ class TronclassQrSignPage extends StatefulWidget {
 
 class _TronclassQrSignPageState extends State<TronclassQrSignPage>
     with WidgetsBindingObserver {
+  late final SignExecutionContext _identity;
+  bool _handlingCapture = false;
   final SignRunConsoleController _consoleController = SignRunConsoleController(
     platformContext: SignPlatformContext.tronclass,
   );
@@ -53,6 +58,7 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
   @override
   void initState() {
     super.initState();
+    _identity = SignExecutionContext.capture(platform: PlatformType.tronclass);
     WidgetsBinding.instance.addObserver(this);
     controller = MobileScannerController(
       cameraResolution: const Size(1080, 1920),
@@ -160,6 +166,16 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
   }
 
   Future<void> _handleCapture(BarcodeCapture capture) async {
+    if (_handlingCapture) return;
+    _handlingCapture = true;
+    try {
+      await _identity.run(() => _handleCaptureScoped(capture));
+    } finally {
+      _handlingCapture = false;
+    }
+  }
+
+  Future<void> _handleCaptureScoped(BarcodeCapture capture) async {
     final raw = capture.barcodes.firstOrNull?.rawValue;
     if (raw == null) {
       _showErrorAndRestart('未识别到二维码');
@@ -202,6 +218,7 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
       context,
       MaterialPageRoute(
         builder: (_) => TronclassQrSignConfirmPage(
+          identity: _identity,
           rollcallId: widget.rollcallId,
           data: data,
           onBack: _restartScan,
@@ -255,6 +272,7 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
     try {
       final result = await TronclassBatchSignExecutor().sign(
         context: context,
+        operationId: widget.rollcallId,
         courseName: widget.activityName?.trim().isNotEmpty == true
             ? widget.activityName!.trim()
             : '畅课二维码签到',
@@ -285,8 +303,8 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
       setState(() {
         _lastDirectResult = null;
         _directResultMessage = e.toString().contains('timeout')
-            ? '网络连接超时，请检查网络后重试'
-            : '签到失败，请重试';
+            ? '提交结果未确认，请先查询签到结果'
+            : '提交结果未确认，请查看任务详情';
       });
     }
   }
@@ -298,6 +316,7 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
         : '二维码签到';
 
     return Scaffold(
+      bottomNavigationBar: const SafeArea(top: false, child: SignTaskDock()),
       extendBodyBehindAppBar: true,
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -319,8 +338,8 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
                   });
                 },
                 child: Ink(
-                  width: 42,
-                  height: 42,
+                  width: 48,
+                  height: 48,
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.16),
                     shape: BoxShape.circle,
@@ -382,6 +401,18 @@ class _TronclassQrSignPageState extends State<TronclassQrSignPage>
                   }
                 }
               },
+            ),
+            Positioned(
+              top: MediaQuery.paddingOf(context).top + kToolbarHeight,
+              left: 0,
+              right: 0,
+              child: Theme(
+                data: ThemeData.dark(),
+                child: Material(
+                  color: Colors.black87,
+                  child: SignIdentityLabel(identity: _identity),
+                ),
+              ),
             ),
             if (_directResultMessage != null)
               Positioned.fill(
@@ -745,11 +776,13 @@ class TronclassQrSignConfirmPage extends StatefulWidget {
     required this.rollcallId,
     required this.data,
     this.onBack,
+    this.identity,
   });
 
   final String rollcallId;
   final String data;
   final VoidCallback? onBack;
+  final SignExecutionContext? identity;
 
   @override
   State<TronclassQrSignConfirmPage> createState() =>
@@ -758,6 +791,8 @@ class TronclassQrSignConfirmPage extends StatefulWidget {
 
 class _TronclassQrSignConfirmPageState
     extends State<TronclassQrSignConfirmPage> {
+  late final SignExecutionContext _identity;
+  bool _submitting = false;
   final SignRunConsoleController _consoleController = SignRunConsoleController(
     platformContext: SignPlatformContext.tronclass,
   );
@@ -772,6 +807,9 @@ class _TronclassQrSignConfirmPageState
   @override
   void initState() {
     super.initState();
+    _identity =
+        widget.identity ??
+        SignExecutionContext.capture(platform: PlatformType.tronclass);
     _scannedAt = DateTime.now();
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted || currentState != _QrSignState.ready) return;
@@ -789,6 +827,23 @@ class _TronclassQrSignConfirmPageState
   }
 
   Future<void> _performSignIn() async {
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    try {
+      await _identity.run(_performSignInScoped);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          currentState = _QrSignState.failure;
+          message = '$error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _performSignInScoped() async {
     final resolution = await SignModeSettings.resolveUsers(
       platform: PlatformType.tronclass,
       perRunSelection: _selectedAccounts,
@@ -822,6 +877,7 @@ class _TronclassQrSignConfirmPageState
       if (!mounted) return;
       final result = await TronclassBatchSignExecutor().sign(
         context: context,
+        operationId: widget.rollcallId,
         courseName: '畅课二维码签到',
         console: _consoleController,
         users: signAccounts,
@@ -855,8 +911,8 @@ class _TronclassQrSignConfirmPageState
         currentState = _QrSignState.failure;
         _lastResult = null;
         message = e.toString().contains('timeout')
-            ? '网络连接超时，请检查网络后重试'
-            : '签到失败，请重试';
+            ? '提交结果未确认，请先查询签到结果'
+            : '提交结果未确认，请查看任务详情';
       });
     }
   }
@@ -871,7 +927,56 @@ class _TronclassQrSignConfirmPageState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: Text(contextText(context, '二维码签到', 'QR check-in'))),
+    bottomNavigationBar: const SafeArea(top: false, child: SignTaskDock()),
+    body: SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          SignIdentityLabel(identity: _identity),
+          if (currentState == _QrSignState.ready) ...[
+            Text(
+              contextText(
+                context,
+                '已识别二维码，选择本次签到账号',
+                'QR code ready. Choose check-in accounts.',
+              ),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 16),
+            TronclassAccountSelector(
+              identity: _identity,
+              enabled: !_submitting,
+              onSelectionChanged: (users) =>
+                  setState(() => _selectedAccounts = users),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _submitting || _selectedAccounts.isEmpty
+                  ? null
+                  : _performSignIn,
+              icon: const Icon(Icons.check_circle_outline),
+              label: Text(contextText(context, '开始签到', 'Check in')),
+            ),
+          ] else ...[
+            if (currentState == _QrSignState.loading)
+              const LinearProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(message),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(contextText(context, '返回，任务保留', 'Back · keep task')),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+
+  // ignore: unused_element
+  Widget _buildLegacyPage(BuildContext context) {
     if (currentState == _QrSignState.ready) {
       return PopScope(
         canPop: true,
@@ -931,6 +1036,7 @@ class _TronclassQrSignConfirmPageState
                   ),
                   const SizedBox(height: 16),
                   TronclassAccountSelector(
+                    identity: _identity,
                     onSelectionChanged: (users) {
                       setState(() {
                         _selectedAccounts = users;
@@ -1037,6 +1143,7 @@ class _TronclassQrSignConfirmPageState
 
     final success = currentState == _QrSignState.success;
     return Scaffold(
+      bottomNavigationBar: const SafeArea(top: false, child: SignTaskDock()),
       backgroundColor: TronclassGlassPalette.surface,
       appBar: AppBar(title: const Text('二维码签到结果')),
       body: TronclassGlassBackground(

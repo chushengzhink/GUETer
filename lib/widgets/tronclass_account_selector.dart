@@ -1,3 +1,5 @@
+import '../session/sign_execution_context.dart';
+import 'account_context_header.dart';
 import 'package:flutter/material.dart';
 
 import '../models/user.dart';
@@ -10,12 +12,14 @@ class TronclassAccountSelector extends StatefulWidget {
     super.key,
     required this.onSelectionChanged,
     this.enabled = true,
+    this.identity,
     this.title = '选择畅课签到账号',
     this.initiallyExpanded = true,
   });
 
   final ValueChanged<List<User>> onSelectionChanged;
   final bool enabled;
+  final SignExecutionContext? identity;
   final String title;
   final bool initiallyExpanded;
 
@@ -43,7 +47,8 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
 
   Future<void> _loadAccounts() async {
     _accounts = AccountManager.getAccountsForPlatform(PlatformType.tronclass);
-    _currentUserId = AccountManager.currentSessionId;
+    _currentUserId =
+        widget.identity?.account?.uid ?? AccountManager.currentSessionId;
     _mode = await SignModeSettings.getMode(PlatformType.tronclass);
 
     final currentAccount = _accounts
@@ -68,10 +73,9 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
       _lockedMessage = null;
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      widget.onSelectionChanged(_selectedUsers());
-    });
+    if (!mounted) return;
+    setState(() {});
+    widget.onSelectionChanged(_selectedUsers());
   }
 
   List<User> _selectedUsers() {
@@ -126,6 +130,7 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final enabled = widget.enabled;
+    final en = Localizations.localeOf(context).languageCode == 'en';
 
     return Card(
       elevation: 0,
@@ -144,14 +149,18 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
             });
           },
           title: Text(
-            widget.title,
+            en && widget.title == '选择畅课签到账号'
+                ? 'Check-in accounts'
+                : widget.title,
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
           subtitle: Text(
-            _lockedMessage ??
-                (_accounts.isEmpty
-                    ? '未找到已绑定畅课账号'
-                    : '已选 ${_selectedIds.length}/${_accounts.length}'),
+            en
+                ? '${_selectedIds.length} / ${_accounts.length} accounts · ${_isLockedMode ? (_mode == SignAccountMode.manualCurrent ? "Current account" : "Saved selection") : "Choose for this check-in"}'
+                : _lockedMessage ??
+                      (_accounts.isEmpty
+                          ? '未找到已绑定畅课账号'
+                          : '已选 ${_selectedIds.length}/${_accounts.length}'),
           ),
           childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
           children: [
@@ -164,29 +173,30 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
                 ),
               )
             else ...[
-              Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: enabled && !_isLockedMode ? _selectAll : null,
-                    icon: const Icon(Icons.done_all_rounded, size: 18),
-                    label: const Text('全选'),
-                  ),
-                  TextButton.icon(
-                    onPressed: enabled && !_isLockedMode
-                        ? _invertSelection
-                        : null,
-                    icon: const Icon(Icons.swap_horiz_rounded, size: 18),
-                    label: const Text('反选'),
-                  ),
-                  TextButton.icon(
-                    onPressed: enabled && !_isLockedMode
-                        ? _clearSelection
-                        : null,
-                    icon: const Icon(Icons.clear_rounded, size: 18),
-                    label: const Text('清空'),
-                  ),
-                ],
-              ),
+              if (!_isLockedMode)
+                Wrap(
+                  children: [
+                    TextButton.icon(
+                      onPressed: enabled && !_isLockedMode ? _selectAll : null,
+                      icon: const Icon(Icons.done_all_rounded, size: 18),
+                      label: Text(contextText(context, '全选', 'All')),
+                    ),
+                    TextButton.icon(
+                      onPressed: enabled && !_isLockedMode
+                          ? _invertSelection
+                          : null,
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                      label: Text(contextText(context, '反选', 'Invert')),
+                    ),
+                    TextButton.icon(
+                      onPressed: enabled && !_isLockedMode
+                          ? _clearSelection
+                          : null,
+                      icon: const Icon(Icons.clear_rounded, size: 18),
+                      label: Text(contextText(context, '清空', 'Clear')),
+                    ),
+                  ],
+                ),
               for (final user in _accounts)
                 CheckboxListTile(
                   value: _selectedIds.contains(user.uid),
@@ -210,7 +220,7 @@ class _TronclassAccountSelectorState extends State<TronclassAccountSelector> {
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
-                            '当前',
+                            contextText(context, '当前', 'Current'),
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.onPrimary,
                               fontWeight: FontWeight.w800,

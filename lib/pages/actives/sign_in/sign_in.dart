@@ -11,7 +11,6 @@ import '../../../api/api_service.dart';
 import '../../../models/user.dart';
 import '../../../models/active.dart';
 import '../../../platform.dart';
-import '../../../session/account.dart';
 import '../../../session/sign_record_store.dart';
 import '../../../session/sign_mode_settings.dart';
 import '../../../services/sign_network_gate.dart';
@@ -210,9 +209,10 @@ class SignInPageState extends State<SignInPage> {
   @override
   void initState() {
     super.initState();
-    executionIdentity = SignExecutionContext.capture();
-    final currentSessionId = AccountManager.currentSessionId!;
-    _currentUser = AccountManager.getAccountById(currentSessionId);
+    executionIdentity = SignExecutionContext.capture(
+      platform: PlatformType.chaoxing,
+    );
+    _currentUser = executionIdentity.account;
 
     _signParams = SignParams(
       active: widget.active,
@@ -416,10 +416,22 @@ class SignInPageState extends State<SignInPage> {
           ),
 
           // 加载指示器
-          if (_isLoading) Positioned(left: 12, right: 12, bottom: 12, child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const SignTaskDock(),
-            TextButton(onPressed: () => Navigator.pop(context), child: Text(contextText(context, '收起，后台继续', 'Minimize'))),
-          ])),
+          if (_isLoading)
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 12,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SignTaskDock(),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(contextText(context, '收起，后台继续', 'Minimize')),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -470,10 +482,25 @@ class SignInPageState extends State<SignInPage> {
   Future<void> _performMultiSign() async {
     if (SignTaskController.currentTask == null) {
       return SignTaskController.instance.run(
-        identity: executionIdentity, operation: 'chaoxing:${widget.active.id}',
-        label: widget.active.name, action: _performMultiSign,
+        identity: executionIdentity,
+        operation: 'chaoxing:${widget.active.id}',
+        label: widget.active.name,
+        action: _performMultiSign,
       );
     }
+    try {
+      await _performMultiSignScoped();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isMultiSigning = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _performMultiSignScoped() async {
     final resolution = await SignModeSettings.resolveUsers(
       platform: PlatformType.chaoxing,
       perRunSelection: _selectedAccounts,
@@ -487,14 +514,34 @@ class SignInPageState extends State<SignInPage> {
       }
       return;
     }
-    _selectedAccounts = resolution.users;
+    _selectedAccounts = List.of(resolution.users);
+    final accounts = List<User>.unmodifiable(_selectedAccounts);
+    final task = SignTaskController.currentTask!;
+    task.resultContexts = accounts.map(executionIdentity.withAccount).toList();
+    task.accounts = accounts
+        .map((user) => '${user.name} · ${user.studentId ?? user.uid}')
+        .toList();
+    task.queryResult = () async {
+      final results = <String>[];
+      for (final user in accounts) {
+        final receipt = await executionIdentity
+            .withAccount(user)
+            .run(() => ChaoxingSignApi.getSignReceipt(widget.active.id));
+        results.add(
+          '${user.name}: ${receipt == null ? "未能查询，请到平台核实 / Please verify on the platform" : (receipt['message'] ?? receipt['msg'] ?? receipt['signStatus'] ?? '平台已响应，请在课程签到记录核实 / Open platform attendance records')}',
+        );
+      }
+      return results.join('\n');
+    };
     if (_selectedAccounts.isEmpty || _currentStrategy == null) return;
     if (_isMultiSigning) return;
 
-    setState(() {
-      _isLoading = true;
-      _isMultiSigning = true;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _isMultiSigning = true;
+      });
+    }
     _consoleController.resetForPlatform(SignPlatformContext.chaoxing);
 
     final failedAccounts = <String>[];
@@ -505,8 +552,9 @@ class SignInPageState extends State<SignInPage> {
     // 除二维码签到以外 其他签到预先处理验证码
     if (_needCaptcha && !isQrCodeSign) {
       for (var user in _selectedAccounts) {
-
-        if (!await SignExecutionContext.capture(account: user).run(() => _handleCaptcha(user.uid))) {
+        if (!await SignExecutionContext.capture(
+          account: user,
+        ).run(() => _handleCaptcha(user.uid))) {
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -519,19 +567,20 @@ class SignInPageState extends State<SignInPage> {
       }
     }
 
-    final results = <String?>[];
-    for (var user in _selectedAccounts) {
-      final result = resolution.networkPolicy == SignSubmitNetworkPolicy.direct
-          ? await _signAccountDirect(user)
-          : await _signAccountWithNetworkGate(user);
-      results.add(result);
-    }
-
-    // 统一处理所有签到结果
-    for (int i = 0; i < _selectedAccounts.length; i++) {
-      final user = _selectedAccounts[i];
-      final result = results[i];
+    for (final user in accounts) {
+      final result = await SignTaskController.instance.deduplicate(
+        identity: executionIdentity.withAccount(user),
+        operation: 'chaoxing:${widget.active.id}',
+        action: () => resolution.networkPolicy == SignSubmitNetworkPolicy.direct
+            ? _signAccountDirect(user)
+            : _signAccountWithNetworkGate(user),
+      );
       await _handleSignResult(result, user, failedAccounts);
+      if (result == null) {
+        throw StateError(
+          '提交结果未确认，后续账号暂停。请先查询平台结果 / Outcome unconfirmed; remaining accounts paused.',
+        );
+      }
     }
 
     if (mounted) {
@@ -548,7 +597,7 @@ class SignInPageState extends State<SignInPage> {
 
   Future<String?> _signAccountWithNetworkGate(User user) async {
     final gateResult = await SignNetworkGate().run<String?>(
-      context: context,
+      context: mounted ? context : null,
       platformLabel: '学习通',
       user: user,
       console: _consoleController,
@@ -603,7 +652,7 @@ class SignInPageState extends State<SignInPage> {
         accountName: user.name,
         accountId: user.uid,
         stage: SignRunStage.signFailure,
-        message: '签到无响应',
+        message: '提交结果未确认，请查询平台结果',
       );
       await recordStore.append(
         platform: '学习通',
@@ -611,7 +660,7 @@ class SignInPageState extends State<SignInPage> {
         courseName: widget.active.name,
         account: user.name,
         status: '失败',
-        detail: '无响应',
+        detail: '提交结果未确认',
       );
       return;
     }
@@ -639,7 +688,9 @@ class SignInPageState extends State<SignInPage> {
         }
         final enc2 = parts[1];
         (_userCaptchaValidate[user.uid] ??= {})['enc2'] = enc2;
-        if (!await SignExecutionContext.capture(account: user).run(() => _handleCaptcha(user.uid))) {
+        if (!await SignExecutionContext.capture(
+          account: user,
+        ).run(() => _handleCaptcha(user.uid))) {
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -710,6 +761,20 @@ class SignInPageState extends State<SignInPage> {
   }
 
   Future<bool> _handleCaptcha(String userId) async {
+    final task = SignTaskController.currentTask;
+    if ((!mounted || ModalRoute.of(context)?.isCurrent != true) &&
+        task != null) {
+      final identity = executionIdentity.withAccount(
+        _selectedAccounts.firstWhere((user) => user.uid == userId),
+      );
+      return task.requestChallenge(
+        (context) => identity.run(() => _resolveCaptcha(context, userId)),
+      );
+    }
+    return _resolveCaptcha(context, userId);
+  }
+
+  Future<bool> _resolveCaptcha(BuildContext context, String userId) async {
     try {
       final validate = await CaptchaPage.showSlideCaptchaDialog(
         context,
@@ -730,10 +795,15 @@ class SignInPageState extends State<SignInPage> {
 
   void _showMultiSignResult(int totalCount, List<String> failedAccounts) {
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('签到结束：${totalCount - failedAccounts.length}/$totalCount'),
-      action: SnackBarAction(label: contextText(context, '查看结果', 'Results'), onPressed: () => showSignTasks(context)),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('签到结束：${totalCount - failedAccounts.length}/$totalCount'),
+        action: SnackBarAction(
+          label: contextText(context, '查看结果', 'Results'),
+          onPressed: () => showSignTasks(context),
+        ),
+      ),
+    );
   }
 
   void _showSuccessMessage(String message) {
@@ -750,7 +820,14 @@ class SignInPageState extends State<SignInPage> {
     );
   }
 
-  void performMultiSign() => _performMultiSign();
+  void performMultiSign() {
+    _performMultiSign().catchError((Object error) {
+      _showErrorMessage(
+        '提交结果未确认，请查看任务详情 / Check task details before submitting again',
+      );
+    });
+  }
+
   void showErrorMessage(String message) => _showErrorMessage(message);
   String getCodeInput() => _codeControllers.map((c) => c.text).join('');
   void checkCodeCompletion() {

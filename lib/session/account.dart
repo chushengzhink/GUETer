@@ -271,7 +271,8 @@ class AccountManager {
   }
 
   static String? get currentSessionId => SignExecutionContext.current != null
-      ? SignExecutionContext.current!.account?.uid : _currentSessionId;
+      ? SignExecutionContext.current!.account?.uid
+      : _currentSessionId;
 
   /// Read a platform's selected session without switching the global platform.
   static String? currentSessionForPlatform(PlatformType platform) {
@@ -282,7 +283,9 @@ class AccountManager {
   }
 
   static User? get currentAccount {
-    if (SignExecutionContext.current != null) return SignExecutionContext.current!.account;
+    if (SignExecutionContext.current != null) {
+      return SignExecutionContext.current!.account;
+    }
     final userId = _currentSessionId;
     if (userId == null || userId.isEmpty) {
       return null;
@@ -313,8 +316,10 @@ class AccountManager {
     _lastLoggedOutUserId = null;
     _lastLogoutTimestamp = null;
 
+    if (!await _prefs.setString(_sessionKey, normalized)) {
+      throw StateError('Unable to save account selection');
+    }
     _currentSessionId = normalized;
-    await _prefs.setString(_sessionKey, normalized);
     if (notify) {
       _notifyAccountState();
     }
@@ -416,6 +421,13 @@ class AccountManager {
     }
 
     if (platform == PlatformType.rainClassroom) {
+      final scoped = SignExecutionContext.current;
+      if (scoped != null) {
+        final cookies = await cookieJar.loadForRequest(
+          Uri.parse(scoped.endpoint),
+        );
+        return cookies.isEmpty ? null : CookieManager.stringifyCookies(cookies);
+      }
       final probeUris = [
         Uri.parse('https://www.yuketang.cn'),
         Uri.parse('https://pro.yuketang.cn'),
@@ -705,8 +717,12 @@ class AccountManager {
   }
 
   static Future<bool> switchAccount(String userId) async {
-    await AccountContextController.instance.select(PlatformManager().currentPlatform, accountId: userId);
-    return AccountContextController.instance.error == null && currentSessionId == userId;
+    await AccountContextController.instance.select(
+      PlatformManager().currentPlatform,
+      accountId: userId,
+    );
+    return AccountContextController.instance.error == null &&
+        currentSessionId == userId;
   }
 
   static Future<bool> applyAccountSelection(String userId) async {
@@ -779,6 +795,8 @@ class AccountManager {
   }) async {
     if (refreshFromStorage) {
       await refreshAccounts();
+    } else {
+      _accounts = getAccountsForPlatform(PlatformManager().currentPlatform);
     }
 
     final currentPlatformName = PlatformManager().currentPlatformName

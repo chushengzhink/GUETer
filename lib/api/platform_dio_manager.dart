@@ -34,24 +34,14 @@ class PlatformDioManager {
     required PlatformType platform,
     required String userId,
   }) async {
-    final key = '${_getPlatformName(platform)}_$userId';
-
-    if (platform == PlatformType.chaoxing && _dioInstances.containsKey(key)) {
-      _dioInstances[key]?.close();
-      _dioInstances.remove(key);
-      _cookieJars.remove(key);
-      ApiService.appendExternalConsoleLog(
-        'chaoxing',
-        '[PlatformDioManager] discarded cached chaoxing Dio before recreate userId=$userId',
-      );
-    }
+    final baseUrl = _getBaseUrl(platform);
+    final key = '${_getPlatformName(platform)}_$userId|$baseUrl';
 
     // 如果实例已存在，直接返回
     if (_dioInstances.containsKey(key)) {
       return _dioInstances[key]!;
     }
 
-    final baseUrl = _getBaseUrl(platform);
     final platformName = _getPlatformName(platform);
     ApiService.logStartupRecovery(
       '[PlatformDioManager] create dio begin platform=$platformName userId=$userId',
@@ -113,9 +103,13 @@ class PlatformDioManager {
     required String userId,
   }) {
     final key = '${_getPlatformName(platform)}_$userId';
-    _dioInstances[key]?.close();
-    _dioInstances.remove(key);
-    _cookieJars.remove(key);
+    for (final cacheKey
+        in _dioInstances.keys
+            .where((value) => value.startsWith('$key|'))
+            .toList()) {
+      _dioInstances.remove(cacheKey)?.close();
+      _cookieJars.remove(cacheKey);
+    }
     debugPrint('[PlatformDioManager] Cleared Dio instance: $key');
   }
 
@@ -190,11 +184,17 @@ class PlatformDioManager {
       case PlatformType.chaoxing:
         return 'https://www.chaoxing.com';
       case PlatformType.rainClassroom:
-        return 'https://www.yuketang.cn';
+        return switch (PlatformManager().currentServer) {
+          RainClassroomServerType.yuketang => 'https://www.yuketang.cn',
+          RainClassroomServerType.pro => 'https://pro.yuketang.cn',
+          RainClassroomServerType.changjiang =>
+            'https://changjiang.yuketang.cn',
+          RainClassroomServerType.huanghe => 'https://huanghe.yuketang.cn',
+        };
       case PlatformType.tronclass:
-        return 'https://courses.guet.edu.cn';
+        return PlatformManager().tronclassBaseUrl;
       case PlatformType.ketangpai:
-        return 'https://openapiv5.ketangpai.com';
+        return PlatformManager().ketangpaiBaseUrl;
       case PlatformType.weizhuojiao:
         return 'https://v18.teachermate.cn';
     }
@@ -267,11 +267,14 @@ class _PlatformCookieInterceptor extends Interceptor {
           '已注入 Cookie (长度=${cookieStr.length}) userId=$userId',
         );
       } else if (platform == PlatformType.rainClassroom) {
-        final cookieStr = await AccountManager.getCookieForPlatform(
-          platform,
+        final accountJar = await CookieManager.getCookieJarForUser(
           userId,
+          platformName: platformName,
         );
-        if (cookieStr == null || cookieStr.isEmpty) {
+        final cookieStr = CookieManager.stringifyCookies(
+          await accountJar.loadForRequest(options.uri),
+        );
+        if (cookieStr.isEmpty) {
           ApiService.appendExternalConsoleLog(
             '雨课堂',
             'Cookie为空，请检查登录状态 userId=$userId',
@@ -333,9 +336,10 @@ class _PlatformCookieInterceptor extends Interceptor {
 
       if (platform == PlatformType.tronclass) {
         final url = options.uri.toString();
-        if (url.contains('https://courses.guet.edu.cn/')) {
+        if (options.uri.origin == Uri.parse(options.baseUrl).origin) {
           final sessionId = await TronclassAuthManager.getSessionIdForUser(
             userId,
+            baseUrl: options.uri.origin,
           );
           if (sessionId != null && sessionId.isNotEmpty) {
             options.headers['x-session-id'] = sessionId;
@@ -353,7 +357,9 @@ class _PlatformCookieInterceptor extends Interceptor {
       }
 
       if (platform == PlatformType.ketangpai) {
-        final account = AccountManager.getAccountById(userId);
+        final account = AccountManager.getAccountsForPlatform(
+          platform,
+        ).where((u) => u.uid == userId).firstOrNull;
         if (account != null && account.token.isNotEmpty) {
           options.headers['token'] = account.token;
           ApiService.appendExternalConsoleLog(
@@ -502,21 +508,9 @@ class _PlatformCookieInterceptor extends Interceptor {
       '登录已过期，请重新登录 (userId=$userId)',
     );
 
-    // 清除该用户的 Cookie
-    await CookieManager.clearCookiesForUser(userId);
-
-    // 清除畅课的 SessionId
-    if (platform == PlatformType.tronclass) {
-      await TronclassAuthManager.clearSessionIdForUser(userId);
-    }
-
-    // 如果是当前会话用户，清除会话
-    if (AccountManager.currentSessionId == userId) {
-      await AccountManager.clearCurrentSession();
-    }
-
-    // 通知账号页刷新
-    AccountManager.notifyStateChanged();
+    // A late failure belongs to this request's platform/account. It must not
+    // log out the UI's newer selection or erase another site's saved session.
+    AccountManager.notifyStateChangedForPlatform(platform);
   }
 }
 
@@ -564,6 +558,20 @@ class _RetryInterceptor extends Interceptor {
   }
 
   bool _shouldRetry(DioException error) {
+    final method = error.requestOptions.method.toUpperCase();
+    final url = error.requestOptions.uri.toString().toLowerCase();
+    if ((method != 'GET' && method != 'HEAD') ||
+        [
+          'stusignajax',
+          'answer_qr_rollcall',
+          'answer_number_rollcall',
+          '/rollcall/',
+          'sign_in',
+          'scantosign',
+          'groupsign',
+        ].any(url.contains)) {
+      return false;
+    }
     if (error.type == DioExceptionType.connectionTimeout ||
         error.type == DioExceptionType.sendTimeout ||
         error.type == DioExceptionType.receiveTimeout ||

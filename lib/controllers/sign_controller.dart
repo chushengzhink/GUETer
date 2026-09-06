@@ -207,7 +207,12 @@ class SignController extends GetxController {
     final account = SignExecutionContext.current?.account ?? _accountProvider();
     if (SignTaskController.currentTask == null) {
       return SignTaskController.instance.run(
-        identity: SignExecutionContext.capture(account: account), operation: '$type:$signId', label: type,
+        identity: SignExecutionContext.capture(
+          account: account,
+          platform: PlatformType.ketangpai,
+        ),
+        operation: '$type:$signId',
+        label: type,
         action: () => _runSign(type: type, signId: signId, request: request),
       );
     }

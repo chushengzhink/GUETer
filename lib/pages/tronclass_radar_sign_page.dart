@@ -1,3 +1,6 @@
+import '../session/sign_execution_context.dart';
+import '../widgets/account_context_header.dart';
+import '../widgets/sign_task_dock.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -36,6 +39,7 @@ class TronclassRadarSignPage extends StatefulWidget {
 class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
     with SingleTickerProviderStateMixin {
   _RadarSignState _currentState = _RadarSignState.radar;
+  late final SignExecutionContext _identity;
   bool _isScanning = false;
   String _errorMessage = '';
   List<User> _selectedAccounts = <User>[];
@@ -48,10 +52,11 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
   @override
   void initState() {
     super.initState();
+    _identity = SignExecutionContext.capture(platform: PlatformType.tronclass);
     _radarAnimationController = AnimationController(
       duration: const Duration(seconds: 3),
       vsync: this,
-    )..repeat();
+    );
     _radarRotation = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(parent: _radarAnimationController, curve: Curves.linear),
     );
@@ -64,7 +69,10 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
     super.dispose();
   }
 
-  Future<void> _openLocationPicker() async {
+  Future<void> _openLocationPicker() =>
+      _identity.run(_openLocationPickerScoped);
+
+  Future<void> _openLocationPickerScoped() async {
     final resolution = await SignModeSettings.resolveUsers(
       platform: PlatformType.tronclass,
       perRunSelection: _selectedAccounts,
@@ -94,6 +102,10 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
                       '纬度：${selectedCoordinate!.latitude.toStringAsFixed(6)}  经度：${selectedCoordinate!.longitude.toStringAsFixed(6)}';
 
             return Scaffold(
+              bottomNavigationBar: const SafeArea(
+                top: false,
+                child: SignTaskDock(),
+              ),
               backgroundColor: Colors.transparent,
               body: Stack(
                 children: [
@@ -246,6 +258,32 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
     required double accuracy,
   }) async {
     if (_isScanning) return;
+    setState(() => _isScanning = true);
+    try {
+      await _identity.run(
+        () => _performRollcallScoped(
+          latitude: latitude,
+          longitude: longitude,
+          accuracy: accuracy,
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = '$error';
+          _currentState = _RadarSignState.failure;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
+  Future<void> _performRollcallScoped({
+    required double latitude,
+    required double longitude,
+    required double accuracy,
+  }) async {
     final resolution = await SignModeSettings.resolveUsers(
       platform: PlatformType.tronclass,
       perRunSelection: _selectedAccounts,
@@ -270,6 +308,7 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
       _consoleController.clear();
       final result = await TronclassBatchSignExecutor().sign(
         context: context,
+        operationId: widget.rollcallId,
         courseName: widget.activityName?.trim().isNotEmpty == true
             ? widget.activityName!.trim()
             : '畅课雷达签到',
@@ -304,7 +343,7 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = '签到失败，请重试';
+        _errorMessage = '提交结果未确认，请查看任务详情';
         _currentState = _RadarSignState.failure;
       });
     } finally {
@@ -561,10 +600,90 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: Text(contextText(context, '位置签到', 'Location check-in')),
+    ),
+    bottomNavigationBar: const SafeArea(top: false, child: SignTaskDock()),
+    body: SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          SignIdentityLabel(identity: _identity),
+          if (widget.activityName?.isNotEmpty == true)
+            ListTile(title: Text(widget.activityName!)),
+          TronclassAccountSelector(
+            identity: _identity,
+            enabled: !_isScanning,
+            initiallyExpanded: false,
+            onSelectionChanged: (users) =>
+                setState(() => _selectedAccounts = users),
+          ),
+          const SizedBox(height: 20),
+          Icon(
+            Icons.location_on_outlined,
+            size: 56,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            contextText(
+              context,
+              '确认签到位置后提交',
+              'Confirm your location to check in',
+            ),
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: _isScanning ? null : _openLocationPicker,
+            icon: const Icon(Icons.map_outlined),
+            label: Text(
+              contextText(context, '选择位置并签到', 'Choose location & check in'),
+            ),
+          ),
+          if (_isScanning) ...[
+            const SizedBox(height: 16),
+            const LinearProgressIndicator(),
+            Text(
+              contextText(
+                context,
+                '正在处理，可返回课程页，任务将继续',
+                'In progress. You can return to courses.',
+              ),
+            ),
+          ],
+          if (_currentState == _RadarSignState.success)
+            ListTile(
+              leading: const Icon(Icons.check_circle_outline),
+              title: Text(
+                contextText(
+                  context,
+                  '签到已完成，请查看逐账号结果',
+                  'Check-in finished. See results for each account.',
+                ),
+              ),
+            ),
+          if (_errorMessage.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Text(
+                _errorMessage,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  // ignore: unused_element
+  Widget _buildLegacyPage(BuildContext context) {
     final stateData = _stateData();
 
     return Scaffold(
+      bottomNavigationBar: const SafeArea(top: false, child: SignTaskDock()),
       backgroundColor: Colors.transparent,
       body: TronclassGlassBackground(
         child: SafeArea(
@@ -634,6 +753,7 @@ class _TronclassRadarSignPageState extends State<TronclassRadarSignPage>
                 _buildBottomPanel(),
                 const SizedBox(height: 12),
                 TronclassAccountSelector(
+                  identity: _identity,
                   enabled:
                       !_isScanning && _currentState == _RadarSignState.radar,
                   initiallyExpanded: false,

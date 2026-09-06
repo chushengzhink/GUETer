@@ -1,3 +1,4 @@
+import '../models/user.dart';
 import '../controllers/account_context_controller.dart';
 import '../features/courses/course_workspace.dart';
 import '../widgets/account_context_header.dart';
@@ -295,7 +296,16 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   List<Course> _onlineCourses = [];
   List<Course> _offlineCourses = [];
   bool _isLoading = true;
-  bool _showOnlineOnly = true;
+  bool get _showOnlineOnly => _workspaceMemory
+      .putIfAbsent(_courseContext, CourseWorkspaceMemory.new)
+      .onlineOnly;
+  set _showOnlineOnly(bool value) =>
+      _workspaceMemory
+              .putIfAbsent(_courseContext, CourseWorkspaceMemory.new)
+              .onlineOnly =
+          value;
+  String _snapshotPage(CourseContext context) =>
+      'courses@${context.$3}${context.$1 == PlatformType.rainClassroom ? (_showOnlineOnly ? ":online" : ":offline") : ""}';
   String? _emptyHint;
   Map<String, dynamic>? _rainCourseDebugSummary;
   StreamSubscription? _accountChangeSubscription;
@@ -327,6 +337,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   final SignRunConsoleController _scanConsoleController =
       SignRunConsoleController();
   _RainClassroomScanExecution? _pendingRainScanExecution;
+  bool _chooseRainScanRoute = false;
 
   Future<void> refreshCourses() {
     return _refreshCourses();
@@ -366,7 +377,9 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshCourses({bool showFeedback = false}) async {
+    final refreshedContext = _courseContext;
     await _loadCourses(forceNetwork: true);
+    if (!mounted || refreshedContext != _courseContext) return;
     if (mounted) {
       _lastRefreshAt = DateTime.now();
       _lastRefreshMessage = _courses.isEmpty
@@ -382,7 +395,19 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
-          content: Text('课程已刷新：${_formatClock(DateTime.now())}'),
+          content: Text(
+            _snapshotRefreshFailed
+                ? contextText(
+                    context,
+                    '刷新失败，已保留原有内容',
+                    'Refresh failed. Existing content retained.',
+                  )
+                : contextText(
+                    context,
+                    '课程已刷新：${_formatClock(DateTime.now())}',
+                    'Courses refreshed: ${_formatClock(DateTime.now())}',
+                  ),
+          ),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -1206,10 +1231,17 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   void _openCourseForCurrentPlatform(Course course) {
     if (PlatformManager().isTronclass) {
       final account = AccountManager.currentAccount;
-      Navigator.push(context, MaterialPageRoute(builder: (_) => TronclassWebLoginPage(
-        accountName: account?.name ?? '', accountId: account?.uid ?? '',
-        initialUrl: Uri.parse(PlatformManager().tronclassBaseUrl),
-        autoCloseOnAuthSuccess: false)));
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => TronclassWebLoginPage(
+            accountName: account?.name ?? '',
+            accountId: account?.uid ?? '',
+            initialUrl: Uri.parse(PlatformManager().tronclassBaseUrl),
+            autoCloseOnAuthSuccess: false,
+          ),
+        ),
+      );
       return;
     }
     if (PlatformManager().isChaoxing) {
@@ -2191,7 +2223,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       final snapshot = await _snapshotStore.readList(
         platform: platform,
         userId: userId,
-        page: 'courses@${SignExecutionContext.capture().endpoint}',
+        page: _snapshotPage((platform, userId, endpoint)),
       );
       if (mounted &&
           readVersion == _snapshotReadVersion &&
@@ -2237,9 +2269,16 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       _isLoading = _courses.isEmpty && !PlatformManager().isRainClassroom;
     });
     final cachedAt = _cacheTimestamps[next];
-    if (_courses.isNotEmpty && cachedAt != null && DateTime.now().difference(cachedAt) < const Duration(minutes: 5)) return;
-    if (_courses.isNotEmpty) { unawaited(_loadCourses()); }
-    else { unawaited(_loadCourseSnapshotThenRefresh(next.$1)); }
+    if (_courses.isNotEmpty &&
+        cachedAt != null &&
+        DateTime.now().difference(cachedAt) < const Duration(minutes: 5)) {
+      return;
+    }
+    if (_courses.isNotEmpty) {
+      unawaited(_loadCourses());
+    } else {
+      unawaited(_loadCourseSnapshotThenRefresh(next.$1));
+    }
   }
 
   Future<void> _loadCourses({
@@ -2307,29 +2346,28 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       List<Course>? offlineData;
 
       await identity.run(() async {
-      if (PlatformManager().isChaoxing) {
-        coursesData = await CXCourseApi.getCoursesList().timeout(
-          const Duration(seconds: 20),
-          onTimeout: () {
-            ApiService.appendExternalConsoleLog('学习通', '课程列表加载超时，结束加载状态');
-            return null;
-          },
-        );
-      } else if (PlatformManager().isRainClassroom) {
-        // 雨课堂课程分在线和离线两路拉取。
-        final results = await Future.wait([
-          RCCourseApi.getOnlineCoursesList(),
-          RCCourseApi.getOfflineCoursesList(),
-        ]);
-        onlineData = results[0];
-        offlineData = results[1];
-        coursesData = _showOnlineOnly ? onlineData : offlineData;
-      } else if (PlatformManager().isTronclass) {
-        coursesData = await TCCourseApi.getCoursesList();
-      } else if (PlatformManager().isKetangpai) {
-        coursesData = await KTCourseApi.getCoursesList();
-      }
-
+        if (PlatformManager().isChaoxing) {
+          coursesData = await CXCourseApi.getCoursesList().timeout(
+            const Duration(seconds: 20),
+            onTimeout: () {
+              ApiService.appendExternalConsoleLog('学习通', '课程列表加载超时，结束加载状态');
+              return null;
+            },
+          );
+        } else if (PlatformManager().isRainClassroom) {
+          // 雨课堂课程分在线和离线两路拉取。
+          final results = await Future.wait([
+            RCCourseApi.getOnlineCoursesList(),
+            RCCourseApi.getOfflineCoursesList(),
+          ]);
+          onlineData = results[0];
+          offlineData = results[1];
+          coursesData = _showOnlineOnly ? onlineData : offlineData;
+        } else if (PlatformManager().isTronclass) {
+          coursesData = await TCCourseApi.getCoursesList();
+        } else if (PlatformManager().isKetangpai) {
+          coursesData = await KTCourseApi.getCoursesList();
+        }
       });
 
       if (!isCurrent()) {
@@ -2350,7 +2388,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           await _snapshotStore.writeList(
             platform: requestPlatform,
             userId: userId,
-            page: 'courses@${SignExecutionContext.capture().endpoint}',
+            page: _snapshotPage(requestContext),
             data: coursesData!.map((course) => course.toJson()).toList(),
             updatedAt: _snapshotUpdatedAt,
           );
@@ -2391,7 +2429,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           }
           _isLoading = false;
           _isRefreshingCoursesInBackground = false;
-          _snapshotRefreshFailed = hasCachedCourses;
+          _snapshotRefreshFailed = true;
           _emptyHint = hasCachedCourses
               ? '正在显示缓存课程，后台刷新未获得新数据'
               : PlatformManager().isRainClassroom
@@ -2415,7 +2453,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         }
         _isLoading = false;
         _isRefreshingCoursesInBackground = false;
-        _snapshotRefreshFailed = hasCachedCourses;
+        _snapshotRefreshFailed = true;
         _emptyHint = hasCachedCourses
             ? '正在显示缓存课程，后台刷新失败'
             : PlatformManager().isRainClassroom
@@ -2633,18 +2671,36 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> handleScanContent(String result) async {
+  Future<void> handleScanContent(String result, {SignExecutionContext? sourceIdentity,
+    ValueChanged<SignExecutionContext>? onResolvedIdentity}) async {
     try {
       final uri = Uri.tryParse(result);
       final detectedPlatform = _detectScanPlatform(result, uri);
+      var identity = sourceIdentity ?? SignExecutionContext.capture();
+      final rainServer = detectedPlatform == PlatformType.rainClassroom ? switch (uri?.host) {
+        'www.yuketang.cn' => RainClassroomServerType.yuketang,
+        'pro.yuketang.cn' => RainClassroomServerType.pro,
+        'changjiang.yuketang.cn' => RainClassroomServerType.changjiang,
+        'huanghe.yuketang.cn' => RainClassroomServerType.huanghe,
+        _ => identity.server,
+      } : identity.server;
       if (detectedPlatform != null &&
-          (detectedPlatform != PlatformManager().currentPlatform || !AccountManager.hasActiveSession())) {
-        final selected = await showAccountPicker(context, platform: detectedPlatform);
+          (detectedPlatform != identity.platform || identity.account == null || rainServer != identity.server)) {
+        final selected = await showAccountPicker(
+          context,
+          platform: detectedPlatform,
+          site: detectedPlatform == PlatformType.rainClassroom ? uri?.host : null,
+        );
         if (selected == null || !mounted) return;
-        await AccountContextController.instance.select(detectedPlatform, accountId: selected.uid);
+        await AccountContextController.instance.select(
+          detectedPlatform,
+          accountId: selected.uid,
+          server: rainServer,
+        );
         if (!mounted || AccountContextController.instance.error != null) return;
+        identity = SignExecutionContext.capture();
       }
-      final identity = SignExecutionContext.capture();
+      onResolvedIdentity?.call(identity);
 
       if (detectedPlatform == PlatformType.chaoxing) {
         await identity.run(() => _handleChaoxingScan(result, uri));
@@ -2886,6 +2942,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       );
       final result = await TronclassBatchSignExecutor().sign(
         context: context,
+        operationId: rollcallId,
         courseName: '畅课二维码签到',
         console: _scanConsoleController,
         users: resolution.users,
@@ -2918,8 +2975,11 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) =>
-            TronclassQrSignConfirmPage(rollcallId: rollcallId, data: qrPayload),
+        builder: (_) => TronclassQrSignConfirmPage(
+          rollcallId: rollcallId,
+          data: qrPayload,
+          identity: SignExecutionContext.capture(),
+        ),
       ),
     );
     ApiService.appendExternalConsoleLog(
@@ -3093,11 +3153,18 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       return;
     }
 
-    final execution = await _showRainClassroomScanRoutePicker(
-      raw: raw,
-      resolvedUri: extractedUri,
-      target: target,
-    );
+    final execution = _chooseRainScanRoute
+        ? await _showRainClassroomScanRoutePicker(
+            raw: raw,
+            resolvedUri: extractedUri,
+            target: target,
+          )
+        : _RainClassroomScanExecution(
+            kind: target.kind,
+            url: target.uri.toString(),
+            lessonId: target.lessonId,
+          );
+    _chooseRainScanRoute = false;
     if (execution == null) {
       return;
     }
@@ -3422,12 +3489,31 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   /// 使用选中账号批量执行扫码签到。
-  Future<void> _multiScan(String qrCodeUrl) async {
+  Future<void> _multiScan(
+    String qrCodeUrl, {
+    List<User>? selectedAccounts,
+    _RainClassroomScanExecution? rainTarget,
+  }) async {
     final identity = SignExecutionContext.capture();
+    final capturedRainTarget = rainTarget ?? _pendingRainScanExecution;
     if (SignTaskController.currentTask == null) {
+      final mode = await SignModeSettings.getMode(identity.platform);
+      if (mode == SignAccountMode.perRunSelection && selectedAccounts == null) {
+        if (!mounted) return;
+        selectedAccounts = await showSignAccountSelection(context, identity);
+        if (selectedAccounts == null || selectedAccounts.isEmpty) return;
+      }
+      final accounts = selectedAccounts;
       return SignTaskController.instance.run(
-        identity: identity, operation: qrCodeUrl, label: '扫码签到 / QR check-in',
-        action: () => _multiScan(qrCodeUrl),
+        identity: identity,
+        operation:
+            '$qrCodeUrl|${accounts?.map((u) => u.uid).join(",") ?? "mode"}',
+        label: '扫码签到 / QR check-in',
+        action: () => _multiScan(
+          qrCodeUrl,
+          selectedAccounts: accounts,
+          rainTarget: capturedRainTarget,
+        ),
       );
     }
     final isRainClassroom = PlatformManager().isRainClassroom;
@@ -3449,9 +3535,16 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     _scanConsoleController.resetForPlatform(signContext);
     final resolution = await SignModeSettings.resolveUsers(
       platform: signContext.platformType,
-      perRunUsesAllWhenNoSelection: true,
+      perRunSelection: selectedAccounts,
+      perRunUsesAllWhenNoSelection: false,
     );
     final targetAccounts = resolution.users;
+    SignTaskController.currentTask?.resultContexts = targetAccounts
+        .map(identity.withAccount)
+        .toList();
+    SignTaskController.currentTask?.accounts = targetAccounts
+        .map((user) => '${user.name} · ${user.studentId ?? user.uid}')
+        .toList();
 
     if (targetAccounts.isEmpty) {
       if (!mounted) return;
@@ -3461,253 +3554,260 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       return;
     }
 
-
-
     int successCount = 0;
     final List<String> failedAccounts = [];
 
     for (final user in targetAccounts) {
-      await identity.withAccount(user).run(() async {
-      try {
-        if (isRainClassroom) {
-          _scanConsoleController.add(
-            platform: '雨课堂',
-            accountName: user.name,
-            accountId: user.uid,
-            stage: SignRunStage.sessionCheck,
-            message: '检查雨课堂会话',
-          );
-          final rainExecution = _pendingRainScanExecution;
-          final int? status;
-          if (resolution.networkPolicy == SignSubmitNetworkPolicy.direct) {
-            _scanConsoleController.add(
-              platform: '雨课堂',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.queued,
-              message: '平台所选：直接提交',
-            );
-            _scanConsoleController.add(
-              platform: '雨课堂',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signStart,
-              message: '开始提交签到',
-            );
-            status = await _signRainClassroomTarget(qrCodeUrl, rainExecution);
-          } else {
-            if (!mounted) return;
-            final gateResult = await SignNetworkGate().run<int?>(
-              context: context,
-              platformLabel: '雨课堂',
-              user: user,
-              console: _scanConsoleController,
-              action: () => _signRainClassroomTarget(qrCodeUrl, rainExecution),
-            );
-            if (gateResult.skipped) {
-              final reason = gateResult.reason ?? '用户跳过';
-              failedAccounts.add('${user.name} ($reason)');
-              await signLogStore.append(
+      await SignTaskController.instance.deduplicate(
+        identity: identity.withAccount(user),
+        operation: qrCodeUrl,
+        action: () async {
+          try {
+            if (isRainClassroom) {
+              _scanConsoleController.add(
                 platform: '雨课堂',
-                platformType: PlatformType.rainClassroom,
-                courseName: '扫码签到课程',
-                account: user.name,
-                status: '失败',
-                detail: reason,
+                accountName: user.name,
+                accountId: user.uid,
+                stage: SignRunStage.sessionCheck,
+                message: '检查雨课堂会话',
               );
-              return;
-            }
-            status = gateResult.value;
-          }
-          ApiService.appendExternalConsoleLog(
-            'rainclassroom',
-            'rain scan mode=${rainExecution?.kind.name ?? 'dynamicQr'}',
-          );
-          if (status == 0) {
-            successCount++;
-            _scanConsoleController.add(
-              platform: '雨课堂',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signSuccess,
-              message: '扫码签到成功',
-            );
-            await signLogStore.append(
-              platform: '雨课堂',
-              platformType: PlatformType.rainClassroom,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '成功',
-            );
-          } else if (status == 51203) {
-            failedAccounts.add('${user.name} (缺少有效的雨课堂会话)');
-            _scanConsoleController.add(
-              platform: '雨课堂',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signFailure,
-              message: '缺少有效的雨课堂会话',
-            );
-            await signLogStore.append(
-              platform: '雨课堂',
-              platformType: PlatformType.rainClassroom,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '失败',
-              detail: '缺少有效的雨课堂会话',
-            );
-          } else {
-            failedAccounts.add('${user.name} (签到失败)');
-            _scanConsoleController.add(
-              platform: '雨课堂',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signFailure,
-              message: '签到失败',
-              detail: 'status=$status',
-            );
-            await signLogStore.append(
-              platform: '雨课堂',
-              platformType: PlatformType.rainClassroom,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '失败',
-              detail: '签到失败',
-            );
-          }
-        } else if (isKetangpai) {
-          _scanConsoleController.add(
-            platform: '课堂派',
-            accountName: user.name,
-            accountId: user.uid,
-            stage: SignRunStage.sessionCheck,
-            message: '检查课堂派 token',
-          );
-          if (user.token.isEmpty) {
-            failedAccounts.add('${user.name} (token 无效或已过期)');
-            _scanConsoleController.add(
-              platform: '课堂派',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signFailure,
-              message: 'token 无效或已过期',
-            );
-            await signLogStore.append(
-              platform: '课堂派',
-              platformType: PlatformType.ketangpai,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '失败',
-              detail: 'token 无效或已过期',
-            );
-            return;
-          }
-
-          final bool ok;
-          if (resolution.networkPolicy == SignSubmitNetworkPolicy.direct) {
-            _scanConsoleController.add(
-              platform: '课堂派',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.queued,
-              message: '平台所选：直接提交',
-            );
-            _scanConsoleController.add(
-              platform: '课堂派',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signStart,
-              message: '开始提交签到',
-            );
-            ok = await KTSignApi.scanToSign(qrCodeUrl, user.token);
-          } else {
-            if (!mounted) return;
-            final gateResult = await SignNetworkGate().run<bool>(
-              context: context,
-              platformLabel: '课堂派',
-              user: user,
-              console: _scanConsoleController,
-              action: () => KTSignApi.scanToSign(qrCodeUrl, user.token),
-            );
-            if (gateResult.skipped) {
-              final reason = gateResult.reason ?? '用户跳过';
-              failedAccounts.add('${user.name} ($reason)');
-              await signLogStore.append(
+              final rainExecution = capturedRainTarget;
+              final int? status;
+              if (resolution.networkPolicy == SignSubmitNetworkPolicy.direct) {
+                _scanConsoleController.add(
+                  platform: '雨课堂',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.queued,
+                  message: '平台所选：直接提交',
+                );
+                _scanConsoleController.add(
+                  platform: '雨课堂',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signStart,
+                  message: '开始提交签到',
+                );
+                status = await _signRainClassroomTarget(
+                  qrCodeUrl,
+                  rainExecution,
+                );
+              } else {
+                final gateResult = await SignNetworkGate().run<int?>(
+                  context: mounted ? context : null,
+                  platformLabel: '雨课堂',
+                  user: user,
+                  console: _scanConsoleController,
+                  action: () =>
+                      _signRainClassroomTarget(qrCodeUrl, rainExecution),
+                );
+                if (gateResult.skipped) {
+                  final reason = gateResult.reason ?? '用户跳过';
+                  failedAccounts.add('${user.name} ($reason)');
+                  await signLogStore.append(
+                    platform: '雨课堂',
+                    platformType: PlatformType.rainClassroom,
+                    courseName: '扫码签到课程',
+                    account: user.name,
+                    status: '失败',
+                    detail: reason,
+                  );
+                  return;
+                }
+                status = gateResult.value;
+              }
+              ApiService.appendExternalConsoleLog(
+                'rainclassroom',
+                'rain scan mode=${rainExecution?.kind.name ?? 'dynamicQr'}',
+              );
+              if (status == null) throw StateError('提交结果未确认，请先到雨课堂核实；后续账号已暂停');
+              if (status == 0) {
+                successCount++;
+                _scanConsoleController.add(
+                  platform: '雨课堂',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signSuccess,
+                  message: '扫码签到成功',
+                );
+                await signLogStore.append(
+                  platform: '雨课堂',
+                  platformType: PlatformType.rainClassroom,
+                  courseName: '扫码签到课程',
+                  account: user.name,
+                  status: '成功',
+                );
+              } else if (status == 51203) {
+                failedAccounts.add('${user.name} (二维码已过期，请重新扫码)');
+                _scanConsoleController.add(
+                  platform: '雨课堂',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signFailure,
+                  message: '二维码已过期，请重新扫码',
+                );
+                await signLogStore.append(
+                  platform: '雨课堂',
+                  platformType: PlatformType.rainClassroom,
+                  courseName: '扫码签到课程',
+                  account: user.name,
+                  status: '失败',
+                  detail: '二维码已过期，请重新扫码',
+                );
+              } else {
+                failedAccounts.add('${user.name} (签到失败)');
+                _scanConsoleController.add(
+                  platform: '雨课堂',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signFailure,
+                  message: '签到失败',
+                  detail: 'status=$status',
+                );
+                await signLogStore.append(
+                  platform: '雨课堂',
+                  platformType: PlatformType.rainClassroom,
+                  courseName: '扫码签到课程',
+                  account: user.name,
+                  status: '失败',
+                  detail: '签到失败',
+                );
+              }
+            } else if (isKetangpai) {
+              _scanConsoleController.add(
                 platform: '课堂派',
-                platformType: PlatformType.ketangpai,
+                accountName: user.name,
+                accountId: user.uid,
+                stage: SignRunStage.sessionCheck,
+                message: '检查课堂派 token',
+              );
+              if (user.token.isEmpty) {
+                failedAccounts.add('${user.name} (token 无效或已过期)');
+                _scanConsoleController.add(
+                  platform: '课堂派',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signFailure,
+                  message: 'token 无效或已过期',
+                );
+                await signLogStore.append(
+                  platform: '课堂派',
+                  platformType: PlatformType.ketangpai,
+                  courseName: '扫码签到课程',
+                  account: user.name,
+                  status: '失败',
+                  detail: 'token 无效或已过期',
+                );
+                return;
+              }
+
+              final bool ok;
+              if (resolution.networkPolicy == SignSubmitNetworkPolicy.direct) {
+                _scanConsoleController.add(
+                  platform: '课堂派',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.queued,
+                  message: '平台所选：直接提交',
+                );
+                _scanConsoleController.add(
+                  platform: '课堂派',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signStart,
+                  message: '开始提交签到',
+                );
+                ok = await KTSignApi.scanToSign(qrCodeUrl, user.token);
+              } else {
+                final gateResult = await SignNetworkGate().run<bool>(
+                  context: mounted ? context : null,
+                  platformLabel: '课堂派',
+                  user: user,
+                  console: _scanConsoleController,
+                  action: () => KTSignApi.scanToSign(qrCodeUrl, user.token),
+                );
+                if (gateResult.skipped) {
+                  final reason = gateResult.reason ?? '用户跳过';
+                  failedAccounts.add('${user.name} ($reason)');
+                  await signLogStore.append(
+                    platform: '课堂派',
+                    platformType: PlatformType.ketangpai,
+                    courseName: '扫码签到课程',
+                    account: user.name,
+                    status: '失败',
+                    detail: reason,
+                  );
+                  return;
+                }
+                ok = gateResult.value == true;
+              }
+              if (ok) {
+                successCount++;
+                _scanConsoleController.add(
+                  platform: '课堂派',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signSuccess,
+                  message: '扫码签到成功',
+                );
+                await signLogStore.append(
+                  platform: '课堂派',
+                  platformType: PlatformType.ketangpai,
+                  courseName: '扫码签到课程',
+                  account: user.name,
+                  status: '成功',
+                );
+              } else {
+                failedAccounts.add('${user.name} (签到失败)');
+                _scanConsoleController.add(
+                  platform: '课堂派',
+                  accountName: user.name,
+                  accountId: user.uid,
+                  stage: SignRunStage.signFailure,
+                  message: '签到失败',
+                );
+                await signLogStore.append(
+                  platform: '课堂派',
+                  platformType: PlatformType.ketangpai,
+                  courseName: '扫码签到课程',
+                  account: user.name,
+                  status: '失败',
+                  detail: '签到失败',
+                );
+              }
+            } else {
+              failedAccounts.add('${user.name} (当前账号未登录或会话失效)');
+            }
+          } catch (e) {
+            failedAccounts.add('${user.name} (异常：$e)');
+            _scanConsoleController.add(
+              platform: isRainClassroom ? '雨课堂' : '课堂派',
+              accountName: user.name,
+              accountId: user.uid,
+              stage: SignRunStage.aborted,
+              message: '签到异常',
+              detail: e.toString(),
+            );
+            if (isRainClassroom || isKetangpai) {
+              await signLogStore.append(
+                platform: isRainClassroom ? '雨课堂' : '课堂派',
+                platformType: signContext.platformType,
                 courseName: '扫码签到课程',
                 account: user.name,
                 status: '失败',
-                detail: reason,
+                detail: '提交结果未确认',
               );
-              return;
             }
-            ok = gateResult.value == true;
+            rethrow;
           }
-          if (ok) {
-            successCount++;
-            _scanConsoleController.add(
-              platform: '课堂派',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signSuccess,
-              message: '扫码签到成功',
-            );
-            await signLogStore.append(
-              platform: '课堂派',
-              platformType: PlatformType.ketangpai,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '成功',
-            );
-          } else {
-            failedAccounts.add('${user.name} (签到失败)');
-            _scanConsoleController.add(
-              platform: '课堂派',
-              accountName: user.name,
-              accountId: user.uid,
-              stage: SignRunStage.signFailure,
-              message: '签到失败',
-            );
-            await signLogStore.append(
-              platform: '课堂派',
-              platformType: PlatformType.ketangpai,
-              courseName: '扫码签到课程',
-              account: user.name,
-              status: '失败',
-              detail: '签到失败',
-            );
-          }
-        } else {
-          failedAccounts.add('${user.name} (当前账号未登录或会话失效)');
-        }
-      } catch (e) {
-        failedAccounts.add('${user.name} (异常：$e)');
-        _scanConsoleController.add(
-          platform: isRainClassroom ? '雨课堂' : '课堂派',
-          accountName: user.name,
-          accountId: user.uid,
-          stage: SignRunStage.aborted,
-          message: '签到异常',
-          detail: e.toString(),
-        );
-        if (isRainClassroom || isKetangpai) {
-          await signLogStore.append(
-            platform: isRainClassroom ? '雨课堂' : '课堂派',
-            platformType: signContext.platformType,
-            courseName: '扫码签到课程',
-            account: user.name,
-            status: '失败',
-            detail: '异常',
-          );
-        }
-      }
-      });
+        },
+      );
     }
-    _pendingRainScanExecution = null;
+    if (identical(_pendingRainScanExecution, capturedRainTarget)) {
+      _pendingRainScanExecution = null;
+    }
 
     if (!mounted) return;
-
 
     _showMultiScanResult(successCount, targetAccounts.length, failedAccounts);
   }
@@ -3770,7 +3870,8 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ScanPage(onScanResult: handleScanContent),
+        builder: (context) => ScanPage(onContextualScanResult: (result, source, onResolved) =>
+          handleScanContent(result, sourceIdentity: source, onResolvedIdentity: onResolved)),
       ),
     );
   }
@@ -3893,80 +3994,228 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       final identity = SignExecutionContext.capture();
       final platform = controller.target?.platform ?? identity.platform;
       return Scaffold(
-        appBar: AppBar(title: Text(contextText(context, '签到与课程', 'Check in & courses')),
-          actions: [IconButton(tooltip: contextText(context, '签到记录', 'Attendance records'),
-            icon: const Icon(Icons.history_rounded), onPressed: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const SignRecordsPage())))]),
-        body: SafeArea(bottom: false, child: CourseWorkspace(
-          key: ValueKey(identity.key), contextId: identity.key,
-          memory: _workspaceMemory.putIfAbsent(_courseContext, CourseWorkspaceMemory.new),
-          courses: _courses, loading: _isLoading,
-          refreshing: _isRefreshingCoursesInBackground,
-          enabled: !controller.switching && identity.platform != PlatformType.weizhuojiao,
-          message: identity.platform == PlatformType.weizhuojiao
-            ? contextText(context, '微助教暂未完整接入', 'Weizhuojiao is not yet available') : _emptyHint,
-          onOpen: _openCourseForCurrentPlatform, onRefresh: _refreshCourses,
-          onScan: _openScanPage, onOther: _openOtherSignMethods,
-          filter: identity.platform == PlatformType.rainClassroom ? FilterChip(
-            label: Text(contextText(context, '在线课程', 'Online courses')),
-            selected: _showOnlineOnly,
-            onSelected: (value) => setState(() {
-              _showOnlineOnly = value;
-              _courses = value ? _onlineCourses : _offlineCourses;
-            })) : null,
-          header: AccountContextHeader(platform: platform,
-            account: controller.switching ? null : identity.account,
-            switching: controller.switching,
-            error: controller.error == null ? null : contextText(context, '切换失败，请重新选择账号', 'Switch failed. Select the account again.'),
-            site: identity.platform == PlatformType.rainClassroom ? '${PlatformManager().serverName}.yuketang.cn' :
-              identity.platform == PlatformType.tronclass || identity.platform == PlatformType.ketangpai ? Uri.parse(identity.endpoint).host : '',
-            onSite: identity.platform == PlatformType.rainClassroom ? _chooseRainServer : null,
-            onPlatform: (value) => controller.select(value),
-            onAccount: () => selectAccountFromSheet(context, platform: platform)),
-        )),
+        appBar: AppBar(
+          title: Text(contextText(context, '签到与课程', 'Check in & courses')),
+          actions: [
+            IconButton(
+              tooltip: contextText(context, '签到记录', 'Attendance records'),
+              icon: const Icon(Icons.history_rounded),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SignRecordsPage()),
+              ),
+            ),
+          ],
+        ),
+        body: SafeArea(
+          bottom: false,
+          child: CourseWorkspace(
+            key: ValueKey(identity.key),
+            contextId: identity.key,
+            memory: _workspaceMemory.putIfAbsent(
+              _courseContext,
+              CourseWorkspaceMemory.new,
+            ),
+            courses: _courses,
+            loading: _isLoading,
+            refreshing: _isRefreshingCoursesInBackground,
+            enabled:
+                !controller.switching &&
+                identity.platform != PlatformType.weizhuojiao,
+            message: identity.platform == PlatformType.weizhuojiao
+                ? contextText(
+                    context,
+                    '微助教暂未完整接入',
+                    'Weizhuojiao is not yet available',
+                  )
+                : _emptyHint,
+            onOpen: _openCourseForCurrentPlatform,
+            onRefresh: _refreshCourses,
+            onScan: _openScanPage,
+            onOther: _openOtherSignMethods,
+            filter: identity.platform == PlatformType.rainClassroom
+                ? FilterChip(
+                    label: Text(contextText(context, '在线课程', 'Online courses')),
+                    selected: _showOnlineOnly,
+                    onSelected: (value) => setState(() {
+                      _showOnlineOnly = value;
+                      _courses = value ? _onlineCourses : _offlineCourses;
+                      _coursesCache[_courseContext] = _courses;
+                    }),
+                  )
+                : null,
+            header: AccountContextHeader(
+              platform: platform,
+              account: controller.switching ? null : identity.account,
+              switching: controller.switching,
+              error: controller.error == null
+                  ? null
+                  : contextText(
+                      context,
+                      '切换失败，请重新选择账号',
+                      'Switch failed. Select the account again.',
+                    ),
+              site: identity.platform == PlatformType.rainClassroom
+                  ? Uri.parse(identity.endpoint).host
+                  : identity.platform == PlatformType.tronclass ||
+                        identity.platform == PlatformType.ketangpai
+                  ? Uri.parse(identity.endpoint).host
+                  : '',
+              onSite: identity.platform == PlatformType.rainClassroom
+                  ? _chooseRainServer
+                  : null,
+              onPlatform: (value) => controller.select(value),
+              onAccount: () =>
+                  selectAccountFromSheet(context, platform: platform),
+            ),
+          ),
+        ),
         floatingActionButton: FloatingActionButton(
           tooltip: contextText(context, '扫码签到', 'Scan to check in'),
-          onPressed: controller.switching || identity.platform == PlatformType.weizhuojiao ? null : _openScanPage,
-          child: const Icon(Icons.qr_code_scanner)),
+          onPressed:
+              controller.switching ||
+                  identity.platform == PlatformType.weizhuojiao
+              ? null
+              : _openScanPage,
+          child: const Icon(Icons.qr_code_scanner),
+        ),
       );
-    });
+    },
+  );
 
   Future<void> _chooseRainServer() async {
-    final server = await showModalBottomSheet<RainClassroomServerType>(context: context, useSafeArea: true,
-      builder: (context) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        for (final value in RainClassroomServerType.values) ListTile(
-          title: Text(value.name), trailing: value == PlatformManager().currentServer ? const Icon(Icons.check) : null,
-          onTap: () => Navigator.pop(context, value)),
-      ])));
+    final server = await showModalBottomSheet<RainClassroomServerType>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final value in RainClassroomServerType.values)
+              ListTile(
+                title: Text(value.name),
+                trailing: value == PlatformManager().currentServer
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () => Navigator.pop(context, value),
+              ),
+          ],
+        ),
+      ),
+    );
     if (server != null) await PlatformManager().setServer(server);
   }
 
   Future<void> _openOtherSignMethods() async {
     final platform = PlatformManager().currentPlatform;
-    final action = await showModalBottomSheet<String>(context: context, useSafeArea: true,
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
       isScrollControlled: true,
-      builder: (context) => SafeArea(child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        ListTile(title: Text(contextText(context, '签到账号与模式', 'Check-in accounts & mode')),
-          leading: const Icon(Icons.people_outline), onTap: () => Navigator.pop(context, 'mode')),
-        if (platform == PlatformType.tronclass) ...[
-          ListTile(title: Text(contextText(context, '签到列表 · 数字 / 二维码 / 雷达', 'Check-in list · Code / QR / Radar')),
-            leading: const Icon(Icons.fact_check_outlined), onTap: () => Navigator.pop(context, 'tron-sign')),
-          ListTile(title: Text(contextText(context, '畅课门户与课堂活动', 'Portal & classroom activities')),
-            leading: const Icon(Icons.open_in_browser), onTap: () => Navigator.pop(context, 'tron-portal')),
-        ],
-        if (platform == PlatformType.ketangpai) ...[
-          for (final entry in <String, String>{'kt-sign': contextText(context, '本地签到', 'Local check-in'),
-            'kt-profile': contextText(context, '个人信息', 'Profile'), 'kt-shared': contextText(context, '在线课堂 / 共享房间', 'Shared classroom'),
-            'kt-rooms': contextText(context, '课程资料', 'Course materials'), 'kt-suggestions': contextText(context, '建议与反馈', 'Suggestions')}.entries)
-            ListTile(title: Text(entry.value), trailing: const Icon(Icons.chevron_right), onTap: () => Navigator.pop(context, entry.key)),
-        ],
-        if (platform == PlatformType.chaoxing || platform == PlatformType.rainClassroom)
-          ListTile(title: Text(contextText(context, '课程中的签到与课堂活动', 'Check-ins & activities inside a course')),
-            subtitle: Text(contextText(context, '选择下方课程，打开对应活动', 'Open a course below to choose an activity'))),
-        const SizedBox(height: 12),
-      ]))));
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: Text(
+                  contextText(context, '签到账号与模式', 'Check-in accounts & mode'),
+                ),
+                leading: const Icon(Icons.people_outline),
+                onTap: () => Navigator.pop(context, 'mode'),
+              ),
+              if (platform == PlatformType.rainClassroom)
+                ListTile(
+                  title: Text(
+                    contextText(
+                      context,
+                      '扫码并选择课程页 / 小程序方式',
+                      'Scan with advanced check-in options',
+                    ),
+                  ),
+                  leading: const Icon(Icons.tune),
+                  onTap: () => Navigator.pop(context, 'rain-options'),
+                ),
+              if (platform == PlatformType.tronclass) ...[
+                ListTile(
+                  title: Text(
+                    contextText(
+                      context,
+                      '签到列表 · 数字 / 二维码 / 雷达',
+                      'Check-in list · Code / QR / Radar',
+                    ),
+                  ),
+                  leading: const Icon(Icons.fact_check_outlined),
+                  onTap: () => Navigator.pop(context, 'tron-sign'),
+                ),
+                ListTile(
+                  title: Text(
+                    contextText(
+                      context,
+                      '畅课门户与课堂活动',
+                      'Portal & classroom activities',
+                    ),
+                  ),
+                  leading: const Icon(Icons.open_in_browser),
+                  onTap: () => Navigator.pop(context, 'tron-portal'),
+                ),
+              ],
+              if (platform == PlatformType.ketangpai) ...[
+                for (final entry in <String, String>{
+                  'kt-sign': contextText(context, '本地签到', 'Local check-in'),
+                  'kt-profile': contextText(context, '个人信息', 'Profile'),
+                  'kt-shared': contextText(
+                    context,
+                    '在线课堂 / 共享房间',
+                    'Shared classroom',
+                  ),
+                  'kt-rooms': contextText(context, '课程资料', 'Course materials'),
+                  'kt-suggestions': contextText(
+                    context,
+                    '建议与反馈',
+                    'Suggestions',
+                  ),
+                }.entries)
+                  ListTile(
+                    title: Text(entry.value),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.pop(context, entry.key),
+                  ),
+              ],
+              if (platform == PlatformType.chaoxing ||
+                  platform == PlatformType.rainClassroom)
+                ListTile(
+                  title: Text(
+                    contextText(
+                      context,
+                      '课程中的签到与课堂活动',
+                      'Check-ins & activities inside a course',
+                    ),
+                  ),
+                  subtitle: Text(
+                    contextText(
+                      context,
+                      '选择下方课程，打开对应活动',
+                      'Open a course below to choose an activity',
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
     if (!mounted || action == null) return;
-    if (action == 'mode') { await showSignModePicker(context, platform); return; }
+    if (action == 'rain-options') {
+      _chooseRainScanRoute = true;
+      _openScanPage();
+      return;
+    }
+    if (action == 'mode') {
+      await showSignModePicker(context, platform);
+      return;
+    }
     final Widget page = switch (action) {
       'tron-sign' => const TronclassSignInListPage(),
       'tron-portal' => TronclassDashboardPage(onScanResult: handleScanContent),
@@ -3982,7 +4231,6 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   // Kept as a route inventory while all secondary platform actions migrate.
   // ignore: unused_element
   Widget _buildLegacyWorkspace(BuildContext context) {
-
     if (PlatformManager().isTronclass) {
       return TronclassDashboardPage(onScanResult: handleScanContent);
     }

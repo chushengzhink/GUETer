@@ -12,19 +12,21 @@ import 'login.dart';
 import 'tronclass_login_request_profile.dart';
 
 import '../session/tronclass_auth.dart';
+import '../platform.dart';
 import '../tronclass_guet_constants.dart';
 
 /// Tronclass client with per-user isolated sessions.
 class TronclassClient {
   TronclassClient._();
 
-  static final Map<String, TronclassClient> _instances = {};
+  static final Map<String, Future<TronclassClient>> _instances = {};
 
   late final Dio _dio; // 闂傚倷鐒﹀鍨焽閸ф绀夐悗锝庡墲婵?tronclass API
   late final Dio _casDio;
   late final CookieJar _cookieJar;
   late final String _userId;
   String? _sessionId;
+  late final String _baseUrl;
 
   Dio get dio => _dio;
   Dio get casDio => _casDio;
@@ -34,60 +36,84 @@ class TronclassClient {
   bool get isLoggedIn => _sessionId != null;
 
   /// 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷顔煎缂佺姵婢橀…璺ㄦ崉閻戞ɑ鎷遍梺鍝勬缁绘﹢寮?ID 闂傚倸鍊搁崐鎼佸箠韫囨搩娼栧┑鐘冲焹閳ь剚鐗犲畷鍫曨敆娴ｇ澹?CookieJar
-  static Future<CookieJar> _getCookieJar(String userId) async {
+  static Future<CookieJar> _getCookieJar(String userId, String baseUrl) async {
     if (kIsWeb) {
       return CookieJar();
     }
     final dir = await getApplicationSupportDirectory();
-    final cookiePath = path.join(dir.path, 'cookies', 'tronclass', userId);
+    final cookiePath = baseUrl == TronclassGuetConstants.portalBaseUrl
+        ? path.join(dir.path, 'cookies', 'tronclass', userId)
+        : path.join(
+            dir.path,
+            'cookies',
+            'tronclass',
+            userId,
+            Uri.encodeComponent(baseUrl),
+          );
     return PersistCookieJar(
       storage: FileStorage(cookiePath),
       ignoreExpires: false,
     );
   }
 
-  static Future<TronclassClient> getInstance(String userId) async {
-    if (_instances[userId] == null) {
-      final instance = TronclassClient._();
-      instance._userId = userId;
-      instance._cookieJar = await _getCookieJar(userId);
+  static Future<TronclassClient> getInstance(String userId, {String? baseUrl}) {
+    final endpoint = (baseUrl ?? PlatformManager().tronclassBaseUrl)
+        .replaceFirst(RegExp(r'/+$'), '');
+    final key = '$userId|$endpoint';
+    return _instances.putIfAbsent(key, () async {
+      try {
+        return await _create(userId, endpoint);
+      } catch (_) {
+        _instances.remove(key);
+        rethrow;
+      }
+    });
+  }
 
-      instance._dio =
-          Dio(
-              BaseOptions(
-                baseUrl: TronclassGuetConstants.portalBaseUrl,
-                headers: TronclassLoginHeaders.baseHeaders(null),
-                followRedirects: false,
-                validateStatus: (status) => status != null,
-                connectTimeout: const Duration(seconds: 30),
-                receiveTimeout: const Duration(seconds: 30),
-                responseType: ResponseType.json,
-              ),
-            )
-            ..interceptors.addAll([
-              _TronclassCookieInterceptor(instance._cookieJar),
-              _TronclassAuthInterceptor(() => instance._sessionId),
-            ]);
+  static Future<TronclassClient> _create(String userId, String baseUrl) async {
+    final instance = TronclassClient._();
+    instance._userId = userId;
+    instance._baseUrl = baseUrl;
+    instance._cookieJar = await _getCookieJar(userId, baseUrl);
 
-      instance._casDio = Dio(
-        BaseOptions(
-          baseUrl: '${TronclassGuetConstants.casBaseUrl}/',
-          headers: TronclassLoginHeaders.baseHeaders(null),
-          followRedirects: false,
-          validateStatus: (status) => status != null,
-          connectTimeout: const Duration(minutes: 1),
-          receiveTimeout: const Duration(minutes: 5),
-          sendTimeout: const Duration(minutes: 5),
-        ),
-      )..interceptors.add(_TronclassCookieInterceptor(instance._cookieJar));
+    instance._dio =
+        Dio(
+            BaseOptions(
+              baseUrl: baseUrl,
+              headers: TronclassLoginHeaders.baseHeaders(null),
+              followRedirects: false,
+              validateStatus: (status) => status != null,
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(seconds: 30),
+              responseType: ResponseType.json,
+            ),
+          )
+          ..interceptors.addAll([
+            _TronclassCookieInterceptor(instance._cookieJar),
+            _TronclassAuthInterceptor(
+              () => instance._sessionId,
+              Uri.parse(baseUrl).origin,
+            ),
+          ]);
 
-      // 婵?TronclassAuthManager 闂備浇宕垫慨鏉懨洪埡鍜佹晪鐟滄垿濡?session
-      instance._sessionId = await TronclassAuthManager.getSessionIdForUser(
-        userId,
-      );
-      _instances[userId] = instance;
-    }
-    return _instances[userId]!;
+    instance._casDio = Dio(
+      BaseOptions(
+        baseUrl: '${TronclassGuetConstants.casBaseUrl}/',
+        headers: TronclassLoginHeaders.baseHeaders(null),
+        followRedirects: false,
+        validateStatus: (status) => status != null,
+        connectTimeout: const Duration(minutes: 1),
+        receiveTimeout: const Duration(minutes: 5),
+        sendTimeout: const Duration(minutes: 5),
+      ),
+    )..interceptors.add(_TronclassCookieInterceptor(instance._cookieJar));
+
+    // 婵?TronclassAuthManager 闂備浇宕垫慨鏉懨洪埡鍜佹晪鐟滄垿濡?session
+    instance._sessionId = await TronclassAuthManager.getSessionIdForUser(
+      userId,
+      baseUrl: baseUrl,
+    );
+    return instance;
   }
 
   /// 闂傚倷娴囬惃顐﹀幢閳轰焦顔勭紓鍌氬€哥粔瀵哥矓瑜版帒鏋佺€广儱鎷嬪鈺呮煕閹邦垰鐨烘い鏂挎濮婃椽宕ㄦ繝鍕櫗闂佺粯顨嗗ú鐔煎箠閻斿吋鍋勯柛婵勫劗閺€鍐测攽閻樼粯娑ф俊顐ｇ洴楠炴鎮╃紒妯煎幐闂佺鏈粙鎴λ夌€ｎ偆绠?session
@@ -116,14 +142,21 @@ class TronclassClient {
   Future<void> setSessionId(String? value) async {
     _sessionId = value;
     if (value != null) {
-      await TronclassAuthManager.setSessionIdForUser(_userId, value);
+      await TronclassAuthManager.setSessionIdForUser(
+        _userId,
+        value,
+        baseUrl: _baseUrl,
+      );
     } else {
-      await TronclassAuthManager.clearSessionIdForUser(_userId);
+      await TronclassAuthManager.clearSessionIdForUser(
+        _userId,
+        baseUrl: _baseUrl,
+      );
     }
   }
 
   static void clearInstance(String userId) {
-    _instances.remove(userId);
+    _instances.removeWhere((key, _) => key.startsWith('$userId|'));
   }
 
   static void clearAll() {
@@ -166,15 +199,15 @@ class _TronclassCookieInterceptor extends Interceptor {
 class _TronclassAuthInterceptor extends Interceptor {
   final String? Function() getSessionId;
 
-  _TronclassAuthInterceptor(this.getSessionId);
+  final String origin;
+  _TronclassAuthInterceptor(this.getSessionId, this.origin);
 
   @override
   void onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    final url = options.uri.toString();
-    if (url.contains('${TronclassGuetConstants.portalBaseUrl}/')) {
+    if (options.uri.origin == origin) {
       final sessionId = getSessionId();
       if (sessionId != null) {
         options.headers['x-session-id'] = sessionId;

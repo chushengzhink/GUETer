@@ -12,6 +12,7 @@ import 'ketangpai_exam_api.dart';
 import 'tronclass_sign_api.dart';
 import 'tronclass_client.dart';
 import '../session/account.dart';
+import '../platform.dart';
 import '../utils/encrypt.dart';
 import '../models/active.dart';
 import '../models/course.dart';
@@ -386,23 +387,26 @@ class RCCourseApi {
   static Map<String, dynamic>? _lastCourseDebugSummary;
 
   static String get _currentSessionId => AccountManager.currentSessionId!;
+  static String get _rainEndpoint =>
+      'https://${PlatformManager().serverName == 'yuketang' ? 'www' : PlatformManager().serverName}.yuketang.cn';
+  static String get _tokenKey => '$_rainEndpoint|$_currentSessionId';
 
   /// 获取当前用户的 bearerToken
   static String? getBearerToken() {
-    return _tokens[_currentSessionId]?[0];
+    return _tokens[_tokenKey]?[0];
   }
 
   static String? getLessonToken() {
-    return _tokens[_currentSessionId]?[1];
+    return _tokens[_tokenKey]?[1];
   }
 
   static void _setToken(String bearerToken, String lessonToken) {
-    _tokens[_currentSessionId] = [bearerToken, lessonToken];
+    _tokens[_tokenKey] = [bearerToken, lessonToken];
   }
 
   @visibleForTesting
   static String buildLessonPageReferer(String lessonId) {
-    return 'https://www.yuketang.cn/lesson/student/v3/$lessonId?source=12';
+    return '$_rainEndpoint/lesson/student/v3/$lessonId?source=12';
   }
 
   @visibleForTesting

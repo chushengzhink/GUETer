@@ -1,3 +1,8 @@
+import 'package:flutter/services.dart';
+import '../widgets/unsaved_changes_guard.dart';
+import '../session/sign_execution_context.dart';
+import '../widgets/account_context_header.dart';
+import '../widgets/sign_task_dock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:uuid/uuid.dart';
@@ -33,6 +38,10 @@ class TronclassNumberSignPage extends StatefulWidget {
 
 class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
     with TickerProviderStateMixin {
+  static final Map<String, String> _drafts = {};
+  String get _draftKey => '${_identity.key}|${widget.rollcallId}';
+  late final SignExecutionContext _identity;
+  final TextEditingController _codeController = TextEditingController();
   final FocusNode _codeFocus = FocusNode();
 
   _NumberSignState _currentState = _NumberSignState.input;
@@ -57,6 +66,8 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
   @override
   void initState() {
     super.initState();
+    _identity = SignExecutionContext.capture(platform: PlatformType.tronclass);
+    _codeController.text = _drafts[_draftKey] ?? "";
     _printerAnimationController = AnimationController(
       duration: const Duration(milliseconds: 2500),
       vsync: this,
@@ -72,6 +83,7 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
 
   @override
   void dispose() {
+    _codeController.dispose();
     _codeFocus.dispose();
     _printerAnimationController.dispose();
     _consoleController.dispose();
@@ -148,6 +160,18 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
   }
 
   Future<void> _submitCodeBatch(String code) async {
+    if (_isBatchSigning || _isBruteForcing) return;
+    setState(() => _isBatchSigning = true);
+    try {
+      await _identity.run(() => _submitCodeBatchScoped(code));
+    } catch (error) {
+      if (mounted) _showFailureState('$error');
+    } finally {
+      if (mounted) setState(() => _isBatchSigning = false);
+    }
+  }
+
+  Future<void> _submitCodeBatchScoped(String code) async {
     final resolution = await SignModeSettings.resolveUsers(
       platform: PlatformType.tronclass,
       perRunSelection: _selectedAccounts,
@@ -186,6 +210,7 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
       if (!mounted) return;
       final result = await TronclassBatchSignExecutor().sign(
         context: context,
+        operationId: widget.rollcallId,
         courseName: widget.activityName?.trim().isNotEmpty == true
             ? widget.activityName!.trim()
             : '畅课数字签到',
@@ -213,7 +238,6 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
           '批量签到完成，成功 ${result.successCount}/${result.totalCount}，跳过 ${result.skippedCount}',
         );
       }
-      await _showBatchResult(result);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -223,6 +247,7 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
     }
   }
 
+  // ignore: unused_element
   Future<void> _showBatchResult(TronclassBatchSignResult result) async {
     if (!mounted) return;
     await showDialog<void>(
@@ -252,6 +277,7 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
   }
 
   void _showSuccessState(String code) {
+    _drafts.remove(_draftKey);
     final now = DateTime.now();
     setState(() {
       _currentState = _NumberSignState.success;
@@ -550,7 +576,141 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
 
   @override
   Widget build(BuildContext context) {
+    final busy = _isBatchSigning || _isBruteForcing;
+    return UnsavedChangesGuard(
+      hasChanges:
+          !busy &&
+          _codeController.text.isNotEmpty &&
+          _currentState != _NumberSignState.success,
+      onSave: () async {
+        _drafts[_draftKey] = _codeController.text;
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(contextText(context, '数字签到', 'Code check-in')),
+          actions: [
+            PopupMenuButton<String>(
+              enabled: !busy,
+              onSelected: (_) => _identity.run(_confirmBruteForce),
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'legacy',
+                  child: Text(
+                    contextText(context, '原有一键签到', 'Legacy check-in'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        bottomNavigationBar: const SafeArea(top: false, child: SignTaskDock()),
+        body: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              SignIdentityLabel(identity: _identity),
+              if (widget.activityName?.isNotEmpty == true)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    widget.activityName!,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+              TextField(
+                controller: _codeController,
+                focusNode: _codeFocus,
+                autofocus: true,
+                enabled: !busy,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.done,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                ],
+                style: Theme.of(context).textTheme.headlineMedium,
+                decoration: InputDecoration(
+                  labelText: contextText(
+                    context,
+                    '4 位签到码',
+                    '4-digit check-in code',
+                  ),
+                  helperText: contextText(
+                    context,
+                    '输入完整签到码后提交',
+                    'Complete the code to submit',
+                  ),
+                  errorText: _hasError ? _errorMessage : null,
+                ),
+                onChanged: (value) {
+                  setState(() {
+                    _hasError = false;
+                  });
+                  if (value.length == 4) _submitCodeBatch(value);
+                },
+                onSubmitted: _submitCodeBatch,
+              ),
+              const SizedBox(height: 16),
+              TronclassAccountSelector(
+                identity: _identity,
+                enabled: !busy,
+                initiallyExpanded: false,
+                onSelectionChanged: (users) =>
+                    setState(() => _selectedAccounts = users),
+              ),
+              const SizedBox(height: 16),
+              if (busy) ...[
+                const LinearProgressIndicator(),
+                const SizedBox(height: 12),
+                Text(
+                  contextText(
+                    context,
+                    '正在处理，可返回课程页，任务将继续',
+                    'In progress. You can return to courses.',
+                  ),
+                ),
+              ],
+              if (_currentState == _NumberSignState.success)
+                ListTile(
+                  leading: const Icon(Icons.check_circle_outline),
+                  title: Text(
+                    contextText(
+                      context,
+                      '签到已完成，请查看逐账号结果',
+                      'Check-in finished. See results for each account.',
+                    ),
+                  ),
+                ),
+              if (_currentState == _NumberSignState.failure)
+                Text(
+                  _errorMessage,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              if (_currentState == _NumberSignState.failure)
+                TextButton(
+                  onPressed: busy
+                      ? null
+                      : () => _submitCodeBatch(_codeController.text),
+                  child: Text(
+                    contextText(
+                      context,
+                      '核实结果后重新提交',
+                      'Submit again after verifying',
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ignore: unused_element
+  Widget _buildLegacyPage(BuildContext context) {
     return Scaffold(
+      bottomNavigationBar: const SafeArea(top: false, child: SignTaskDock()),
       backgroundColor: Colors.transparent,
       appBar: AppBar(title: const Text('数字签到')),
       body: TronclassGlassBackground(
@@ -608,6 +768,7 @@ class _TronclassNumberSignPageState extends State<TronclassNumberSignPage>
                       _buildShowcaseCard(),
                       const SizedBox(height: 16),
                       TronclassAccountSelector(
+                        identity: _identity,
                         enabled: !_isBatchSigning && !_isBruteForcing,
                         onSelectionChanged: (users) {
                           setState(() {
