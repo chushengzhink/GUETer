@@ -13,6 +13,17 @@ void main() {
   ) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final store = UpdateAnnouncementStore();
+    final statusStore = UpdateCheckStatusStore();
+    await statusStore.save(
+      UpdateCheckStatus(
+        currentVersion: '1.0.5',
+        latestVersion: '1.0.6',
+        hasUpdate: true,
+        downloadUrl: 'https://example.com/download',
+        releaseNotes: '缓存更新说明',
+        checkedAt: DateTime.parse('2026-06-08T00:00:00+08:00'),
+      ),
+    );
     await store.save([
       UpdateAnnouncement(
         version: '1.0.6',
@@ -28,6 +39,7 @@ void main() {
       MaterialApp(
         home: UpdateAnnouncementsPage(
           store: store,
+          statusStore: statusStore,
           updateService: UpdateService(
             dio: Dio()..httpClientAdapter = _AlwaysFailAdapter(),
             folderUrl: 'https://updates.example.test/share-folder',
@@ -43,6 +55,7 @@ void main() {
     expect(find.text('修复云盘上传连接中断重试'), findsOneWidget);
     expect(find.text('优化请求控制台日志查看'), findsOneWidget);
     expect(find.text('刷新失败，当前显示本地缓存公告。'), findsOneWidget);
+    expect(find.text('暂无可用下载链接'), findsNothing);
   });
 }
 

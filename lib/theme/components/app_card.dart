@@ -30,16 +30,23 @@ class AppCard extends StatelessWidget {
     final theme = Theme.of(context);
     final cardTheme = theme.cardTheme;
 
-    final effectiveRadius = radius ??
-        (cardTheme.shape as RoundedRectangleBorder?)?.borderRadius.resolve(TextDirection.ltr).topLeft.x ??
+    final effectiveRadius =
+        radius ??
+        (cardTheme.shape as RoundedRectangleBorder?)?.borderRadius
+            .resolve(TextDirection.ltr)
+            .topLeft
+            .x ??
         AppRadius.large;
 
-    final effectiveElevation = elevation ?? cardTheme.elevation ?? AppElevation.low;
+    final effectiveElevation =
+        elevation ?? cardTheme.elevation ?? AppElevation.low;
 
-    final content = Container(
+    final content = Ink(
       padding: padding ?? const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
-        color: gradient == null ? (color ?? cardTheme.color ?? theme.colorScheme.surface) : null,
+        color: gradient == null
+            ? (color ?? cardTheme.color ?? theme.colorScheme.surface)
+            : null,
         gradient: gradient,
         borderRadius: BorderRadius.circular(effectiveRadius),
         border: border,
@@ -66,7 +73,7 @@ class AppCard extends StatelessWidget {
 
     return Padding(
       padding: margin ?? EdgeInsets.zero,
-      child: content,
+      child: Material(color: Colors.transparent, child: content),
     );
   }
 }

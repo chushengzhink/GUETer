@@ -1663,7 +1663,7 @@ class TCLoginApi {
         codeSuccess ||
         statusSuccess ||
         resultSuccess ||
-        (tip?.contains('宸插彂閫?') ?? false);
+        (tip?.contains('已发送') ?? false);
   }
 
   static String? _extractDynamicCodeTip(Map<String, dynamic>? response) {
@@ -1981,7 +1981,7 @@ class TCLoginApi {
             ? '璇锋眰瓒呮椂閲嶅畾鍚?'
             : (body.trim().isNotEmpty
                   ? body.trim()
-                  : '鍔ㄦ€佺爜鏈嶅姟杩斿洖寮傚父锛岃绋嶅悗閲嶈瘯');
+                  : '动态码服务返回异常，请稍后重试');
         return _finalizeDynamicCodeResult(
           {'res': 'fail', 'returnMessage': tip, 'mobile': ''},
           attempt: attempt,
@@ -2001,7 +2001,7 @@ class TCLoginApi {
           continue;
         }
         return _finalizeDynamicCodeResult(
-          {'res': 'fail', 'returnMessage': '缃戠粶璇锋眰澶辫触: $e', 'mobile': ''},
+          {'res': 'fail', 'returnMessage': '网络请求失败: $e', 'mobile': ''},
           attempt: attempt,
           maxAttempts: attemptLimit,
           manualSendOnly: manualSendOnly,
@@ -2337,7 +2337,7 @@ class TCLoginApi {
       return {
         'ok': false,
         'requireMfa': true,
-        'message': '褰撳墠璐﹀彿闇€瑕佸鍥犲瓙鐭俊楠岃瘉鐮侊紝璇疯緭鍏ョ煭淇″姩鎬佺爜鍚庨噸璇曘€?',
+        'message': '当前账号需要短信多因素验证，请输入短信动态码后重试。',
       };
     }
 
@@ -2468,7 +2468,7 @@ class TCLoginApi {
       return {
         'ok': false,
         'cancelledMfa': true,
-        'message': '鐭俊鍔ㄦ€佺爜宸插彂閫侊紝浣嗕綘鍙栨秷浜嗚緭鍏ワ紱璇烽噸鏂板彂璧风晠璇剧櫥褰曞悗鍐嶉獙璇?',
+        'message': '短信动态码已发送，但你取消了输入；请重新发起畅课登录后再验证。',
         'debug': lastLoginTrace,
       };
     }
@@ -2485,7 +2485,7 @@ class TCLoginApi {
       );
       return {
         'ok': false,
-        'message': (mfaResult['msg'] ?? '鍔ㄦ€佺爜楠岃瘉澶辫触').toString(),
+        'message': (mfaResult['msg'] ?? '动态码验证失败').toString(),
         'debug': lastLoginTrace,
       };
     }

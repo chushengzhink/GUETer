@@ -1218,6 +1218,8 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _login() async {
+    if (_isLoading) return;
+    FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -1295,7 +1297,7 @@ class _LoginPageState extends State<LoginPage> {
             if (!canResumeTronclassMfaChallenge(result)) {
               if (mounted) {
                 await _showTronclassDebugDialog(
-                  message: (result['message'] ?? '鐣呰鐧诲綍澶辫触').toString(),
+                  message: (result['message'] ?? '畅课登录失败').toString(),
                   debug: result['debug']?.toString() ?? '',
                 );
               }
@@ -1342,7 +1344,7 @@ class _LoginPageState extends State<LoginPage> {
           if (nextAction == TronclassLoginNextAction.requireWebReauth) {
             if (mounted) {
               await _showTronclassDebugDialog(
-                message: (result['message'] ?? '鐣呰鐧诲綍澶辫触').toString(),
+                message: (result['message'] ?? '畅课登录失败').toString(),
                 debug: result['debug']?.toString() ?? '',
               );
             }
@@ -1770,11 +1772,17 @@ class _LoginPageState extends State<LoginPage> {
                           padding: const EdgeInsets.all(AppSpacing.xl),
                           child: Form(
                             key: _formKey,
+                            autovalidateMode:
+                                AutovalidateMode.onUserInteraction,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 TextFormField(
                                   controller: _usernameController,
+                                  textInputAction: TextInputAction.next,
+                                  autofillHints: const [AutofillHints.username],
+                                  autocorrect: false,
+                                  enabled: !_isLoading,
                                   decoration: const InputDecoration(
                                     labelText: '账号',
                                     hintText: '学号/手机号/邮箱',
@@ -1790,6 +1798,18 @@ class _LoginPageState extends State<LoginPage> {
                                   const SizedBox(height: AppSpacing.lg),
                                   TextFormField(
                                     controller: _passwordController,
+                                    textInputAction: isTronclass
+                                        ? TextInputAction.done
+                                        : TextInputAction.next,
+                                    onFieldSubmitted: (_) {
+                                      if (isTronclass) _login();
+                                    },
+                                    autofillHints: const [
+                                      AutofillHints.password,
+                                    ],
+                                    autocorrect: false,
+                                    enableSuggestions: false,
+                                    enabled: !_isLoading,
                                     obscureText: !_showPassword,
                                     decoration: InputDecoration(
                                       labelText: '密码',
@@ -1826,6 +1846,9 @@ class _LoginPageState extends State<LoginPage> {
                                   const SizedBox(height: AppSpacing.lg),
                                   TextFormField(
                                     controller: _captchaController,
+                                    textInputAction: TextInputAction.done,
+                                    onFieldSubmitted: (_) => _login(),
+                                    enabled: !_isLoading,
                                     decoration: InputDecoration(
                                       labelText: '验证码',
                                       hintText: '短信验证码/图形码',

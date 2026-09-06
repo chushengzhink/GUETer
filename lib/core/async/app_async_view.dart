@@ -35,8 +35,49 @@ class AppAsyncView<T> extends StatelessWidget {
             state.status == AppAsyncStatus.loading ||
             state.status == AppAsyncStatus.error)) {
       final content = dataBuilder(context, data, state.isRefreshing);
-      if (onRefresh == null) return content;
-      return RefreshIndicator(onRefresh: onRefresh!, child: content);
+      final body = onRefresh == null
+          ? content
+          : RefreshIndicator(onRefresh: onRefresh!, child: content);
+      if (!state.hasError) return body;
+      final en = Localizations.localeOf(context).languageCode == 'en';
+      return Column(
+        children: [
+          Material(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.sync_problem_rounded,
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        en
+                            ? 'Refresh failed. Showing previous content.'
+                            : '刷新失败，已保留原有内容。',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (onRetry != null)
+                    TextButton(
+                      onPressed: onRetry,
+                      child: Text(en ? 'Retry' : '重试'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      );
     }
 
     return switch (state.status) {
@@ -134,7 +175,11 @@ class _EmptyState extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: onRetry,
                 icon: const Icon(Icons.refresh_rounded),
-                label: const Text('刷新'),
+                label: Text(
+                  Localizations.localeOf(context).languageCode == 'en'
+                      ? 'Refresh'
+                      : '刷新',
+                ),
               ),
             ],
           ],
@@ -194,7 +239,11 @@ class _ErrorState extends StatelessWidget {
               FilledButton.icon(
                 onPressed: onRetry,
                 icon: const Icon(Icons.refresh_rounded),
-                label: const Text('重试'),
+                label: Text(
+                  Localizations.localeOf(context).languageCode == 'en'
+                      ? 'Retry'
+                      : '重试',
+                ),
               ),
             ],
           ],

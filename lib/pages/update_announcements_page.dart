@@ -8,11 +8,14 @@ class UpdateAnnouncementsPage extends StatefulWidget {
     super.key,
     UpdateAnnouncementStore? store,
     UpdateService? updateService,
+    UpdateCheckStatusStore? statusStore,
   }) : _store = store,
-       _updateService = updateService;
+       _updateService = updateService,
+       _statusStore = statusStore;
 
   final UpdateAnnouncementStore? _store;
   final UpdateService? _updateService;
+  final UpdateCheckStatusStore? _statusStore;
 
   @override
   State<UpdateAnnouncementsPage> createState() =>
@@ -21,6 +24,7 @@ class UpdateAnnouncementsPage extends StatefulWidget {
 
 class _UpdateAnnouncementsPageState extends State<UpdateAnnouncementsPage> {
   late final UpdateAnnouncementStore _store;
+  late final UpdateCheckStatusStore _statusStore;
   bool _loading = true;
   bool _refreshing = false;
   String? _error;
@@ -31,14 +35,17 @@ class _UpdateAnnouncementsPageState extends State<UpdateAnnouncementsPage> {
   void initState() {
     super.initState();
     _store = widget._store ?? UpdateAnnouncementStore();
+    _statusStore = widget._statusStore ?? UpdateCheckStatusStore();
     _load();
   }
 
   Future<void> _load() async {
-    final cached = await _store.loadCached();
+    final cachedAnnouncements = await _store.loadCached();
+    final cachedStatus = await _statusStore.load();
     if (mounted) {
       setState(() {
-        _announcements = cached;
+        _announcements = cachedAnnouncements;
+        _downloadUrl = cachedStatus?.downloadUrl;
         _loading = false;
       });
     }

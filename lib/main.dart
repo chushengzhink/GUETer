@@ -14,6 +14,8 @@ import './app_entries/app_entry.dart';
 import './app_entries/app_entry_registry.dart';
 import './features/openlist/openlist_repository.dart';
 import './layout/layout_preferences.dart';
+import './layout/lazy_destination_stack.dart';
+import './services/todo_reminder_restore_service.dart';
 import './modules/airchat/ui/nearby_room_page.dart';
 import './modules/local_transfer/local_transfer.dart';
 import './modules/zerotier/ui/zerotier_page.dart';
@@ -33,6 +35,7 @@ import './utils/global_palette.dart';
 import './platform.dart';
 import './theme/design_tokens.dart';
 import './theme/theme_style.dart';
+import './theme/app_theme.dart';
 import './widgets/floating_nav_bar.dart';
 import './widgets/session_health_banner.dart';
 import './l10n/app_localizations.dart';
@@ -78,6 +81,15 @@ void main() async {
 
   runApp(const MyApp());
   unawaited(HomeWidgetSummaryService().updateWidget());
+  // Page construction is lazy; notification initialization remains app-owned.
+  unawaited(
+    TodoReminderRestoreService().restore().catchError((Object error) {
+      ApiService.appendExternalConsoleLog(
+        'notifications',
+        'Initialization failed: $error',
+      );
+    }),
+  );
   WidgetsBinding.instance.addPostFrameCallback((_) {
     unawaited(StartupRecoveryCoordinator.runAfterLaunch());
   });
@@ -125,6 +137,17 @@ class MyApp extends StatelessWidget {
                 return MaterialApp(
                   navigatorKey: LocalTransferModule.navigatorKey,
                   title: 'GUETer',
+                  builder: (context, child) => ValueListenableBuilder(
+                    valueListenable: AppSettings.performanceSettingsNotifier,
+                    builder: (context, settings, _) => MediaQuery(
+                      data: MediaQuery.of(context).copyWith(
+                        disableAnimations:
+                            MediaQuery.disableAnimationsOf(context) ||
+                            settings.lowPower,
+                      ),
+                      child: child!,
+                    ),
+                  ),
                   locale: AppSettings.currentLocale,
                   supportedLocales: AppLocalizations.supportedLocales,
                   localizationsDelegates: [
@@ -133,8 +156,8 @@ class MyApp extends StatelessWidget {
                     GlobalWidgetsLocalizations.delegate,
                     GlobalCupertinoLocalizations.delegate,
                   ],
-                  theme: _buildThemeData(lightScheme, scheme, themeStyle),
-                  darkTheme: _buildThemeData(darkScheme, scheme, themeStyle),
+                  theme: buildAppTheme(lightScheme, scheme, themeStyle),
+                  darkTheme: buildAppTheme(darkScheme, scheme, themeStyle),
                   themeMode: mode,
                   home: const MyHomePage(),
                   onGenerateRoute: _onGenerateRoute,
@@ -234,100 +257,6 @@ class MyApp extends StatelessWidget {
         return ThemeStyleData.modern;
     }
   }
-
-  ThemeData _buildThemeData(
-    ColorScheme colorScheme,
-    String scheme,
-    ThemeStyleData style,
-  ) {
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: colorScheme,
-      scaffoldBackgroundColor:
-          scheme == AppSettings.colorSchemeNight &&
-              colorScheme.brightness == Brightness.dark
-          ? const Color(0xFF0F1512)
-          : null,
-      cardTheme: CardThemeData(
-        elevation: style.cardElevation,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(style.cardRadius),
-        ),
-        color:
-            scheme == AppSettings.colorSchemeNight &&
-                colorScheme.brightness == Brightness.dark
-            ? const Color(0xFF17201C)
-            : null,
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(style.buttonRadius),
-          ),
-        ),
-      ),
-      filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(style.buttonRadius),
-          ),
-        ),
-      ),
-      outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(style.buttonRadius),
-          ),
-        ),
-      ),
-      textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(style.buttonRadius),
-          ),
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(style.inputRadius),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(style.inputRadius),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(style.inputRadius),
-        ),
-      ),
-      chipTheme: ChipThemeData(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(style.chipRadius),
-        ),
-      ),
-      appBarTheme: AppBarTheme(
-        centerTitle: false,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        backgroundColor: colorScheme.surface,
-        foregroundColor: colorScheme.onSurface,
-        titleTextStyle: TextStyle(
-          color: colorScheme.onSurface,
-          fontSize: 18,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-      floatingActionButtonTheme: FloatingActionButtonThemeData(
-        elevation: 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadius.large),
-        ),
-      ),
-      dialogTheme: DialogThemeData(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(style.dialogRadius),
-        ),
-      ),
-    );
-  }
 }
 
 class MyHomePage extends StatefulWidget {
@@ -352,7 +281,7 @@ class MainPage extends StatefulWidget {
 }
 
 class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
-  int _selectedIndex = 0;
+  String _selectedEntryId = 'courses';
   late final SessionHealthController _sessionHealthController;
   StreamSubscription<PlatformType>? _platformSubscription;
   StreamSubscription<AccountStateSnapshot>? _accountSubscription;
@@ -429,9 +358,6 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final bottomSafeArea = MediaQuery.of(context).padding.bottom;
-    const floatingNavBarHeight = 80.0;
-    final totalBottomPadding = bottomSafeArea + floatingNavBarHeight;
     final locale = Localizations.localeOf(context);
 
     return ValueListenableBuilder<LayoutPreferences>(
@@ -450,21 +376,20 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
             .map((id) => entryById[id])
             .whereType<AppEntry>()
             .toList();
-        final selectedIndex = _selectedIndex >= entries.length
-            ? entries.length - 1
-            : _selectedIndex;
+        if (!entries.any((entry) => entry.id == _selectedEntryId)) {
+          _selectedEntryId = entries.first.id;
+        }
+        final selectedIndex = entries.indexWhere(
+          (entry) => entry.id == _selectedEntryId,
+        );
 
         return Scaffold(
-          extendBody: true,
-          body: Stack(
+          body: Column(
             children: [
-              Padding(
-                padding: EdgeInsets.only(bottom: totalBottomPadding),
-                child: IndexedStack(
-                  index: selectedIndex,
-                  children: entries
-                      .map((entry) => entry.builder(context))
-                      .toList(),
+              Expanded(
+                child: LazyDestinationStack(
+                  entries: allEntries,
+                  selectedId: _selectedEntryId,
                 ),
               ),
               AnimatedBuilder(
@@ -474,16 +399,11 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                   if (issue == null) {
                     return const SizedBox.shrink();
                   }
-                  return Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: totalBottomPadding,
-                    child: SessionHealthBanner(
-                      issue: issue,
-                      totalCount: _sessionHealthController.visibleIssueCount,
-                      onReLogin: () => _handleReLogin(issue),
-                      onDismiss: () => _sessionHealthController.dismiss(issue),
-                    ),
+                  return SessionHealthBanner(
+                    issue: issue,
+                    totalCount: _sessionHealthController.visibleIssueCount,
+                    onReLogin: () => _handleReLogin(issue),
+                    onDismiss: () => _sessionHealthController.dismiss(issue),
                   );
                 },
               ),
@@ -493,10 +413,11 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
             currentIndex: selectedIndex,
             onTap: (index) {
               setState(() {
-                _selectedIndex = index;
+                _selectedEntryId = entries[index].id;
               });
               final entryId = entries[index].id;
-              (coursesPageKey.currentState as dynamic)?.onVisibilityChanged(
+              FocusManager.instance.primaryFocus?.unfocus();
+              coursesPageKey.currentState?.onVisibilityChanged(
                 entryId == 'courses',
               );
             },

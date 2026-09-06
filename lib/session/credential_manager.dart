@@ -333,6 +333,10 @@ class CredentialManager {
         return false;
       }
 
+      // A local expiry extension is only valid after the server accepts the
+      // token. This check explicitly skips recursive credential validation.
+      if (!await KTLoginApi.checkTokenStatus(user.token)) return false;
+
       final updated = await updateCredentialExpiry(user, notify: false);
       ApiService.appendExternalConsoleLog(
         'ketangpai',

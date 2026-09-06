@@ -13,10 +13,8 @@ class AppAnimations {
       duration: duration ?? AppDuration.normal,
       curve: curve ?? AppCurves.standard,
       builder: (context, value, child) {
-        return Opacity(
-          opacity: value,
-          child: child,
-        );
+        if (MediaQuery.disableAnimationsOf(context)) return child!;
+        return Opacity(opacity: value, child: child);
       },
       child: child,
     );
@@ -34,10 +32,8 @@ class AppAnimations {
       duration: duration ?? AppDuration.normal,
       curve: curve ?? AppCurves.emphasized,
       builder: (context, value, child) {
-        return Transform.translate(
-          offset: value * 50,
-          child: child,
-        );
+        if (MediaQuery.disableAnimationsOf(context)) return child!;
+        return Transform.translate(offset: value * 50, child: child);
       },
       child: child,
     );
@@ -55,10 +51,8 @@ class AppAnimations {
       duration: duration ?? AppDuration.normal,
       curve: curve ?? AppCurves.emphasized,
       builder: (context, value, child) {
-        return Transform.scale(
-          scale: value,
-          child: child,
-        );
+        if (MediaQuery.disableAnimationsOf(context)) return child!;
+        return Transform.scale(scale: value, child: child);
       },
       child: child,
     );
@@ -76,6 +70,7 @@ class AppAnimations {
       duration: duration ?? AppDuration.normal,
       curve: curve ?? AppCurves.emphasized,
       builder: (context, value, child) {
+        if (MediaQuery.disableAnimationsOf(context)) return child!;
         return Opacity(
           opacity: value,
           child: Transform.translate(
@@ -96,27 +91,28 @@ class AppAnimations {
     return PageRouteBuilder<T>(
       pageBuilder: (context, animation, secondaryAnimation) => page,
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        if (MediaQuery.disableAnimationsOf(context)) return child;
         switch (type) {
           case RouteTransitionType.fade:
             return FadeTransition(opacity: animation, child: child);
           case RouteTransitionType.slide:
             return SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(1.0, 0.0),
-                end: Offset.zero,
-              ).animate(CurvedAnimation(
-                parent: animation,
-                curve: AppCurves.emphasized,
-              )),
+              position:
+                  Tween<Offset>(
+                    begin: const Offset(1.0, 0.0),
+                    end: Offset.zero,
+                  ).animate(
+                    CurvedAnimation(
+                      parent: animation,
+                      curve: AppCurves.emphasized,
+                    ),
+                  ),
               child: child,
             );
           case RouteTransitionType.scale:
             return ScaleTransition(
               scale: Tween<double>(begin: 0.8, end: 1.0).animate(
-                CurvedAnimation(
-                  parent: animation,
-                  curve: AppCurves.emphasized,
-                ),
+                CurvedAnimation(parent: animation, curve: AppCurves.emphasized),
               ),
               child: FadeTransition(opacity: animation, child: child),
             );
@@ -127,11 +123,7 @@ class AppAnimations {
   }
 }
 
-enum RouteTransitionType {
-  fade,
-  slide,
-  scale,
-}
+enum RouteTransitionType { fade, slide, scale }
 
 // Shimmer loading effect
 class ShimmerLoading extends StatefulWidget {
@@ -159,10 +151,18 @@ class _ShimmerLoadingState extends State<ShimmerLoading>
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: widget.duration,
-    )..repeat();
+    _controller = AnimationController(vsync: this, duration: widget.duration);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context) ||
+        !TickerMode.valuesOf(context).enabled) {
+      _controller.stop();
+    } else {
+      _controller.repeat();
+    }
   }
 
   @override
@@ -173,10 +173,11 @@ class _ShimmerLoadingState extends State<ShimmerLoading>
 
   @override
   Widget build(BuildContext context) {
-    final baseColor = widget.baseColor ??
+    final baseColor =
+        widget.baseColor ??
         Theme.of(context).colorScheme.surfaceContainerHighest;
-    final highlightColor = widget.highlightColor ??
-        Theme.of(context).colorScheme.surface;
+    final highlightColor =
+        widget.highlightColor ?? Theme.of(context).colorScheme.surface;
 
     return AnimatedBuilder(
       animation: _controller,
@@ -184,11 +185,7 @@ class _ShimmerLoadingState extends State<ShimmerLoading>
         return ShaderMask(
           shaderCallback: (bounds) {
             return LinearGradient(
-              colors: [
-                baseColor,
-                highlightColor,
-                baseColor,
-              ],
+              colors: [baseColor, highlightColor, baseColor],
               stops: const [0.0, 0.5, 1.0],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -271,9 +268,9 @@ class _RippleEffectState extends State<RippleEffect>
         builder: (context, child) {
           return Container(
             decoration: BoxDecoration(
-              color: (widget.rippleColor ??
-                      Theme.of(context).colorScheme.primary)
-                  .withValues(alpha: 0.1 * (1 - _controller.value)),
+              color:
+                  (widget.rippleColor ?? Theme.of(context).colorScheme.primary)
+                      .withValues(alpha: 0.1 * (1 - _controller.value)),
             ),
             child: child,
           );

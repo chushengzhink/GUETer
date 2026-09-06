@@ -9,52 +9,8 @@ void main() {
     source = File('lib/pages/tools_page.dart').readAsStringSync();
   });
 
-  test('wheel center still opens the selected category detail page', () {
-    expect(source, contains('onCenterTap: _openSelectedToolCategory'));
-    expect(source, contains('builder: (_) => _ToolCategoryDetailPage'));
-  });
-
-  test('dashboard previews current category actions below wheel', () {
-    expect(source, contains('_CurrentCategoryPreview'));
-    expect(source, contains('category: selectedCategory'));
-  });
-
-  test('header search opens command sheet without onChanged modal loop', () {
-    expect(source, contains('onSearchTap: _openToolSearch'));
-    expect(source, contains('readOnly: true'));
-    expect(source, contains('showCursor: false'));
-    expect(source, isNot(contains('onSearchChanged:')));
-    expect(source, isNot(contains('_openToolSearch();')));
-  });
-
-  test('dashboard shows persistent search results with clear action', () {
-    expect(source, contains('class _ToolSearchResultsSection'));
-    expect(source, contains('_toolSearchQuery.trim().isNotEmpty'));
-    expect(source, contains('actions: _filteredActions(categories)'));
-    expect(source, contains('onClear: _clearToolSearch'));
-    expect(source, contains("child: _ToolActionCard(action: action)"));
-  });
-
-  test('wheel category nodes expose semantic selection state', () {
-    expect(source, contains('class _WheelNodeButton'));
-    expect(source, contains('Semantics('));
-    expect(source, contains('button: true'));
-    expect(source, contains('selected: selected'));
-    expect(
-      source,
-      contains("label: '\${category.label}, \${category.subtitle}'"),
-    );
-  });
-
-  test(
-    'category detail uses compact visual grid with two-column mobile layout',
-    () {
-      expect(source, contains('class _VisualToolTile'));
-      expect(source, contains('childCount: category.actions.length'));
-      expect(source, contains(': 2;'));
-      expect(source, isNot(contains('columns == 1 ? 2.45 : 1.35')));
-    },
-  );
+  // Navigation, search, direct category access and large-text layouts are
+  // covered by beta_tool_catalog_test.dart through real widget interactions.
 
   test('pdf category exposes the seven pdf actions', () {
     const pdfActionIds = <String>[

@@ -11,6 +11,7 @@ import '../session/account.dart';
 import '../session/account_events.dart';
 import '../session/app_settings.dart';
 import '../session/cookie.dart';
+import '../session/sign_mode_settings.dart';
 import '../session/tronclass_auth.dart';
 import '../models/user.dart';
 import '../platform.dart';
@@ -53,6 +54,10 @@ class _AccountsPageState extends State<AccountsPage>
   String? _currentAccountId;
   PlatformType _selectedPlatform = PlatformManager().currentPlatform;
   bool _isPlatformSwitching = false;
+  String? _switchingAccountId;
+  bool _isSignModeExpanded = false;
+  SignAccountMode _signMode = SignAccountMode.manualCurrent;
+  Set<String> _signModeSelectedAccountIds = <String>{};
   StreamSubscription? _accountChangeSubscription;
   StreamSubscription? _platformChangeSubscription;
   Color _globalPrimary = const Color(0xFF1F9EA8);
@@ -69,6 +74,7 @@ class _AccountsPageState extends State<AccountsPage>
     _loadUpdateStatus();
     _refreshUpdateStatus(showSnackBar: false);
     _loadAccounts();
+    _loadSignModeSettings();
     _platformChangeSubscription = PlatformManager().platformChanges.listen((
       platform,
     ) {
@@ -83,9 +89,12 @@ class _AccountsPageState extends State<AccountsPage>
         _tronclassLoginState.clear();
         _ketangpaiLoginState.clear();
         _isPlatformSwitching = false;
+        _signMode = SignAccountMode.manualCurrent;
+        _signModeSelectedAccountIds.clear();
       });
       _loadGlobalPalette();
       _loadAccounts();
+      _loadSignModeSettings();
     });
 
     // 监听账户变更事件
@@ -127,6 +136,28 @@ class _AccountsPageState extends State<AccountsPage>
     setState(() {
       _globalPrimary = platformPalette.primary;
       _globalSecondary = platformPalette.secondary;
+    });
+  }
+
+  Future<void> _loadSignModeSettings() async {
+    final platform = PlatformManager().currentPlatform;
+    if (!SignModeSettings.supportsPlatform(platform)) {
+      if (!mounted) return;
+      setState(() {
+        _signMode = SignAccountMode.manualCurrent;
+        _signModeSelectedAccountIds.clear();
+      });
+      return;
+    }
+
+    final mode = await SignModeSettings.getMode(platform);
+    final selectedIds = await SignModeSettings.getSelectedAccountIds(platform);
+    if (!mounted || PlatformManager().currentPlatform != platform) {
+      return;
+    }
+    setState(() {
+      _signMode = mode;
+      _signModeSelectedAccountIds = selectedIds;
     });
   }
 
@@ -207,6 +238,7 @@ class _AccountsPageState extends State<AccountsPage>
         snapshot.platform,
       ),
     );
+    unawaited(_loadSignModeSettings());
   }
 
   Future<void> _loadAccounts() async {
@@ -231,6 +263,7 @@ class _AccountsPageState extends State<AccountsPage>
       '[AccountsPage] loadAccounts platform=${PlatformManager().currentPlatformName} '
           'storageCount=${filteredAccounts.length} current=${current ?? '-'} applied=true',
     );
+    unawaited(_loadSignModeSettings());
 
     try {
       if (filteredAccounts.isEmpty) {
@@ -330,6 +363,7 @@ class _AccountsPageState extends State<AccountsPage>
           _isPlatformSwitching = false;
         });
       }
+      unawaited(_loadSignModeSettings());
     }
   }
 
@@ -532,27 +566,109 @@ class _AccountsPageState extends State<AccountsPage>
   }
 
   Future<void> _deleteSelectedAccounts() async {
-    if (_selectedAccounts.isNotEmpty) {
-      await AccountManager.removeAccounts(_selectedAccounts.toList());
-      await _loadAccounts();
-      _toggleMultiSelect();
-    }
+    if (_selectedAccounts.isEmpty) return;
+    final selected = _selectedAccounts.toList();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('移除所选账号'),
+        content: Text('将从本机移除 ${selected.length} 个账号及其登录信息，不会注销平台账号。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('移除'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    await AccountManager.removeAccounts(selected);
+    if (!mounted) return;
+    await _loadAccounts();
+    if (mounted) _toggleMultiSelect();
   }
 
   Future<void> _switchToAccount(User user) async {
-    if (user.uid == _currentAccountId) {
+    if (user.uid == _currentAccountId ||
+        _switchingAccountId != null ||
+        _isPlatformSwitching) {
       return;
     }
-    final switched = await AccountManager.switchAccount(user.uid);
-    if (!switched) {
-      return;
+    final platform = PlatformManager().currentPlatform;
+    setState(() => _switchingAccountId = user.uid);
+    try {
+      final switched = await AccountManager.switchAccount(user.uid);
+      if (!mounted || PlatformManager().currentPlatform != platform) return;
+      if (!switched) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('账号切换失败，请重试')));
+        return;
+      }
+      await _loadAccounts();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('账号切换失败：$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _switchingAccountId = null);
     }
+  }
 
+  Future<void> _setSignMode(SignAccountMode mode) async {
+    final platform = PlatformManager().currentPlatform;
+    if (!SignModeSettings.supportsPlatform(platform)) {
+      return;
+    }
+    await SignModeSettings.setMode(platform, mode);
+    if (!mounted || PlatformManager().currentPlatform != platform) {
+      return;
+    }
     setState(() {
-      _currentAccountId = user.uid;
-      _accounts.remove(user);
-      _accounts.insert(0, user);
+      _signMode = mode;
+      if (mode == SignAccountMode.savedPlatformSelection) {
+        _isSignModeExpanded = true;
+      }
     });
+  }
+
+  Future<void> _setSignModeSelectedIds(Set<String> ids) async {
+    final platform = PlatformManager().currentPlatform;
+    if (!SignModeSettings.supportsPlatform(platform)) {
+      return;
+    }
+    await SignModeSettings.setSelectedAccountIds(platform, ids);
+    final selectedIds = await SignModeSettings.getSelectedAccountIds(platform);
+    if (!mounted || PlatformManager().currentPlatform != platform) {
+      return;
+    }
+    setState(() {
+      _signModeSelectedAccountIds = selectedIds;
+    });
+  }
+
+  Future<void> _toggleSignModeAccount(String uid, bool selected) async {
+    final next = Set<String>.from(_signModeSelectedAccountIds);
+    if (selected) {
+      next.add(uid);
+    } else {
+      next.remove(uid);
+    }
+    await _setSignModeSelectedIds(next);
+  }
+
+  Future<void> _selectAllSignModeAccounts() async {
+    await _setSignModeSelectedIds(_accounts.map((user) => user.uid).toSet());
+  }
+
+  Future<void> _clearSignModeAccounts() async {
+    await _setSignModeSelectedIds(<String>{});
   }
 
   Widget _buildPlatformSwitcherPanel() {
@@ -707,10 +823,271 @@ class _AccountsPageState extends State<AccountsPage>
     );
   }
 
+  Widget _buildSignModeCard() {
+    if (!SignModeSettings.supportsPlatform(_selectedPlatform)) {
+      return const SizedBox.shrink();
+    }
+
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final selectedCount = _signModeSelectedAccountIds.length;
+    final summary = _signMode == SignAccountMode.savedPlatformSelection
+        ? '当前平台已保存 $selectedCount 个签到账号'
+        : SignModeSettings.descriptionOf(_signMode);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: AppAnimations.fadeSlideIn(
+        begin: const Offset(0, 0.06),
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            color: scheme.surface.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(AppRadius.xlarge),
+            border: Border.all(color: scheme.outlineVariant),
+            boxShadow: AppShadows.low(scheme.shadow),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: _globalPrimary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(AppRadius.medium),
+                    ),
+                    child: Icon(
+                      Icons.rule_folder_outlined,
+                      color: _globalPrimary,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '签到模式',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          summary,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: _isSignModeExpanded ? '收起' : '展开',
+                    onPressed: () {
+                      setState(() {
+                        _isSignModeExpanded = !_isSignModeExpanded;
+                      });
+                    },
+                    icon: Icon(
+                      _isSignModeExpanded
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minWidth: constraints.maxWidth,
+                      ),
+                      child: SegmentedButton<SignAccountMode>(
+                        showSelectedIcon: false,
+                        segments: const [
+                          ButtonSegment(
+                            value: SignAccountMode.manualCurrent,
+                            label: Text('模式一'),
+                            icon: Icon(Icons.person_outline),
+                          ),
+                          ButtonSegment(
+                            value: SignAccountMode.savedPlatformSelection,
+                            label: Text('模式二'),
+                            icon: Icon(Icons.fact_check_outlined),
+                          ),
+                          ButtonSegment(
+                            value: SignAccountMode.perRunSelection,
+                            label: Text('模式三'),
+                            icon: Icon(Icons.network_check_rounded),
+                          ),
+                        ],
+                        selected: {_signMode},
+                        onSelectionChanged: (selection) {
+                          unawaited(_setSignMode(selection.first));
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
+              if (_isSignModeExpanded) ...[
+                const SizedBox(height: AppSpacing.sm),
+                ...SignAccountMode.values.map(
+                  (mode) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      '${SignModeSettings.labelOf(mode)}：${SignModeSettings.descriptionOf(mode)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ),
+                if (_signMode == SignAccountMode.savedPlatformSelection) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _buildSignModeSelectionArea(),
+                ],
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSignModeSelectionArea() {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final validSelected = _accounts
+        .where((user) => _signModeSelectedAccountIds.contains(user.uid))
+        .length;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(AppRadius.large),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '以下为当前平台下签到账号',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Text(
+                '已选 $validSelected/${_accounts.length}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.xs,
+            children: [
+              TextButton.icon(
+                onPressed: _accounts.isEmpty
+                    ? null
+                    : () => unawaited(_selectAllSignModeAccounts()),
+                icon: const Icon(Icons.done_all_rounded, size: 18),
+                label: const Text('全选'),
+              ),
+              TextButton.icon(
+                onPressed: _signModeSelectedAccountIds.isEmpty
+                    ? null
+                    : () => unawaited(_clearSignModeAccounts()),
+                icon: const Icon(Icons.clear_rounded, size: 18),
+                label: const Text('取消全选'),
+              ),
+            ],
+          ),
+          if (_signModeSelectedAccountIds.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: AppSpacing.xs,
+                bottom: AppSpacing.xs,
+              ),
+              child: Text(
+                '暂无签到账号，请勾选下方账号后保存',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.error,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          if (_accounts.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(AppSpacing.xs),
+              child: Text(
+                '当前平台暂无账号',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            )
+          else
+            for (final user in _accounts)
+              CheckboxListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: _signModeSelectedAccountIds.contains(user.uid),
+                onChanged: (value) {
+                  unawaited(_toggleSignModeAccount(user.uid, value == true));
+                },
+                title: Row(
+                  children: [
+                    Flexible(
+                      child: Text(user.name, overflow: TextOverflow.ellipsis),
+                    ),
+                    if (user.uid == _currentAccountId) ...[
+                      const SizedBox(width: AppSpacing.xs),
+                      _StatusBadge(
+                        label: '当前',
+                        icon: Icons.check_circle_outline_rounded,
+                        foreground: _globalPrimary,
+                        background: _globalPrimary.withValues(alpha: 0.10),
+                      ),
+                    ],
+                  ],
+                ),
+                subtitle: Text(
+                  user.studentId?.trim().isNotEmpty == true
+                      ? '学号 ${user.studentId}'
+                      : 'UID: ${user.uid}',
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _handlePlatformTap(
     PlatformType platform,
     PlatformType currentPlatform,
   ) async {
+    if (_switchingAccountId != null || _isPlatformSwitching) return;
     if (platform == PlatformType.weizhuojiao) {
       _showWeizhuojiaoComingSoonNotice();
       return;
@@ -1307,7 +1684,9 @@ class _AccountsPageState extends State<AccountsPage>
     return _AccountCard(
       user: user,
       platformLabel: _platformLabel(user),
-      platformStatus: platformStatus ?? '未知状态',
+      platformStatus: _switchingAccountId == user.uid
+          ? '正在切换…'
+          : platformStatus ?? '未知状态',
       isLoggedIn: platformStatus == '已登录' || platformStatus == '工具页',
       canLogout: canLogout,
       isCurrentAccount: isCurrentAccount,
@@ -1315,7 +1694,9 @@ class _AccountsPageState extends State<AccountsPage>
       isMultiSelectMode: _isMultiSelectMode,
       primary: _globalPrimary,
       secondary: _globalSecondary,
-      onTap: _isMultiSelectMode ? null : () => _switchToAccount(user),
+      onTap: _isMultiSelectMode || _switchingAccountId != null
+          ? null
+          : () => _switchToAccount(user),
       onLongPress: () {
         _toggleMultiSelect();
         _toggleSelection(user.uid);
@@ -2195,6 +2576,7 @@ class _AccountsPageState extends State<AccountsPage>
               ),
             ),
             _buildPlatformSwitcherPanel(),
+            _buildSignModeCard(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
               child: AppAnimations.fadeSlideIn(

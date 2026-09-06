@@ -93,6 +93,8 @@ void main() {
       expect(UpdateInfo.isNewerVersion('bad', '1.0.2'), isFalse);
       expect(UpdateInfo.isNewerVersion('1.0.6', '1.0.5'), isTrue);
       expect(UpdateInfo.isNewerVersion('1.0.6', '1.0.6'), isFalse);
+      expect(UpdateInfo.isNewerVersion('1.0.12', '1.0.11'), isTrue);
+      expect(UpdateInfo.isNewerVersion('1.0.13', '1.0.11'), isTrue);
     });
 
     test('stores and restores update check status cache', () async {
@@ -246,7 +248,7 @@ void main() {
       expect(info.tag, '1.0.4+5');
       expect(info.forceUpdate, isTrue);
       expect(info.forceFromVersions, ['1.0.3']);
-      expect(info.releaseNotes, '发现 GUETer 新版本，点击前往蓝奏云下载。');
+      expect(info.releaseNotes, '发现 GUETer 新版本，点击前往下载页获取安装包。');
       expect(info.apk.abi, 'arm64-v8a');
       expect(info.apk.fileName, 'GUETer_1.0.4+5_arm64-v8a.apk');
       expect(
@@ -280,10 +282,7 @@ void main() {
         expect(info.announcements.first.notes, ['正式发布']);
         expect(info.forceUpdate, isTrue);
         expect(info.forceFromVersions, ['1.0.3']);
-        expect(
-          info.apk.downloadUrl,
-          'https://updates.example.test/i1043r5tfoj?webpage=BzZUNF47',
-        );
+        expect(info.apk.downloadUrl, 'https://expired.example/app.apk');
       },
     );
 

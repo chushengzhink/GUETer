@@ -12,6 +12,7 @@ import '../api/platform_request_stability.dart';
 import '../api/chaoxing_chapter_api.dart';
 import '../api/chaoxing_homework_api.dart';
 import '../session/account.dart';
+import '../session/account_events.dart';
 import '../session/app_settings.dart';
 import '../platform.dart';
 import '../services/platform_network_warmup_service.dart';
@@ -40,6 +41,7 @@ PlatformRequestOptions _todoStableOptions(String operationId) {
 
 /// 单个平台的待办数据容器
 class TodoPlatformData {
+  String? ownerUserId;
   List<Map<String, dynamic>> pendingTodos;
   List<Map<String, dynamic>> completedTodos;
   DateTime? lastRefreshTime;
@@ -53,6 +55,7 @@ class TodoPlatformData {
     List<Map<String, dynamic>>? pendingTodos,
     List<Map<String, dynamic>>? completedTodos,
     this.lastRefreshTime,
+    this.ownerUserId,
     this.isLoading = false,
     this.requestLock = false,
     this.isShowingCachedData = false,
@@ -85,8 +88,10 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   };
 
   bool _isInitializing = true;
+  bool _notificationPermissionGranted = true;
+  bool _requestingNotificationPermission = false;
   bool _showTodosOnLockScreen = true;
-  StreamSubscription<String?>? _accountChangeSubscription;
+  StreamSubscription<AccountStateSnapshot>? _accountChangeSubscription;
   Timer? _countdownTimer;
   String? _selectedDateFilter;
   final PlatformPageSnapshotStore _snapshotStore = PlatformPageSnapshotStore();
@@ -115,9 +120,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       PlatformType.rainClassroom,
       PlatformType.ketangpai,
     ]) {
-      final platformAccounts = AccountManager.getAccountsForPlatform(platform);
-      if (platformAccounts.isNotEmpty) {
-        accounts[platform] = platformAccounts.first.uid;
+      final selected = AccountManager.currentSessionForPlatform(platform);
+      if (selected != null && selected.isNotEmpty) {
+        accounts[platform] = selected;
       }
     }
 
@@ -130,6 +135,18 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     ApiService.appendExternalConsoleLog('TodosPage', 'initState called');
     _autoRefreshOnOpen();
+    _accountChangeSubscription = AccountChangeNotifier().accountStateChanges
+        .listen((snapshot) {
+          if (!mounted || !_platformData.containsKey(snapshot.platform)) return;
+          final data = _platformData[snapshot.platform]!;
+          if (data.ownerUserId == snapshot.currentAccountId) return;
+          setState(
+            () => _platformData[snapshot.platform] = TodoPlatformData(
+              ownerUserId: snapshot.currentAccountId,
+            ),
+          );
+          unawaited(_refreshSinglePlatform(snapshot.platform));
+        });
     _startCountdownTimer();
   }
 
@@ -157,9 +174,18 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
   Future<void> _autoRefreshOnOpen() async {
     setState(() => _isInitializing = true);
-    await NotificationService().initialize();
-    _showTodosOnLockScreen = NotificationService().showTodosOnLockScreen;
-    await _checkAndRequestNotificationPermission();
+    try {
+      await NotificationService().initialize();
+      _showTodosOnLockScreen = NotificationService().showTodosOnLockScreen;
+      await _checkAndRequestNotificationPermission();
+    } catch (error) {
+      ApiService.appendExternalConsoleLog(
+        'TodosPage',
+        'Notification initialization failed: $error',
+      );
+      if (mounted) setState(() => _notificationPermissionGranted = false);
+    }
+    if (!mounted) return;
 
     // 先加载本地持久化数据
     await _loadPersistedTodos();
@@ -198,14 +224,17 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         PlatformType.ketangpai,
       ]) {
         final userId = platformAccounts[platform];
-        if (userId != null && userId.isNotEmpty) {
+        if (userId == null || userId.isEmpty) continue;
+        final ownedData = _dataFor(platform, userId);
+        if (userId.isNotEmpty) {
           final snapshot = await _snapshotStore.readList(
             platform: platform,
             userId: userId,
             page: 'todos',
           );
+          if (!_isCurrentData(platform, ownedData)) continue;
           if (snapshot != null) {
-            final data = _platformData[platform]!;
+            final data = ownedData;
             data.pendingTodos = snapshot.data;
             data.completedTodos = [];
             data.lastRefreshTime = snapshot.updatedAt;
@@ -225,7 +254,14 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
         if (jsonStr != null) {
           final decoded = jsonDecode(jsonStr) as Map<String, dynamic>;
-          final data = _platformData[platform]!;
+          if (!_isCurrentData(platform, ownedData)) continue;
+          if (decoded['userId'] != userId &&
+              (decoded['userId'] != null ||
+                  AccountManager.getAccountsForPlatform(platform).length !=
+                      1)) {
+            continue;
+          }
+          final data = ownedData;
 
           data.pendingTodos =
               (decoded['pending'] as List?)
@@ -269,21 +305,22 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   Future<void> _persistTodos() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final platformAccounts = _getAllPlatformAccounts();
 
       for (final entry in _platformData.entries) {
         final platform = entry.key;
         final data = entry.value;
+        if (!_isCurrentData(platform, data)) continue;
         final key = 'todos_${platform.name}';
 
         final json = jsonEncode({
+          'userId': data.ownerUserId,
           'pending': data.pendingTodos,
           'completed': data.completedTodos,
           'lastRefreshTime': data.lastRefreshTime?.toIso8601String(),
         });
 
         await prefs.setString(key, json);
-        final userId = platformAccounts[platform];
+        final userId = data.ownerUserId;
         if (userId != null && userId.isNotEmpty) {
           await _snapshotStore.writeList(
             platform: platform,
@@ -308,39 +345,55 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _checkAndRequestNotificationPermission() async {
-    // 每次进入待办页都检查通知权限状态
+  Future<void> _checkAndRequestNotificationPermission({
+    bool request = false,
+  }) async {
+    if (_requestingNotificationPermission) return;
     final hasPermission = await NotificationService().checkPermissionStatus();
+    if (!mounted) return;
+    setState(() => _notificationPermissionGranted = hasPermission);
+    // Browsing the page never opens a permission dialog. The visible toolbar
+    // action lets the user explicitly opt into notification setup.
+    if (!request) return;
 
     if (!hasPermission && mounted) {
-      final shouldOpenSettings = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('开启通知权限'),
-          content: const Text('开启通知权限后，待办截止前我们会及时提醒你'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('暂不'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('去开启'),
-            ),
-          ],
-        ),
-      );
+      _requestingNotificationPermission = true;
+      try {
+        final shouldOpenSettings = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('开启通知权限'),
+            content: const Text('开启通知权限后，待办截止前我们会及时提醒你'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('暂不'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('去开启'),
+              ),
+            ],
+          ),
+        );
 
-      if (shouldOpenSettings == true) {
-        // 跳转到系统通知权限设置页面
-        try {
-          await NotificationService().requestPermissions();
-        } catch (e) {
-          ApiService.appendExternalConsoleLog(
-            'TodosPage',
-            'Failed to open notification settings: $e',
-          );
+        if (shouldOpenSettings == true) {
+          // 跳转到系统通知权限设置页面
+          try {
+            await NotificationService().requestPermissions();
+            final granted = await NotificationService().checkPermissionStatus();
+            if (mounted) {
+              setState(() => _notificationPermissionGranted = granted);
+            }
+          } catch (e) {
+            ApiService.appendExternalConsoleLog(
+              'TodosPage',
+              'Failed to open notification settings: $e',
+            );
+          }
         }
+      } finally {
+        _requestingNotificationPermission = false;
       }
     }
   }
@@ -487,8 +540,20 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
     await _scheduleNotificationsForAllPlatforms();
   }
 
+  TodoPlatformData _dataFor(PlatformType platform, String userId) {
+    final current = _platformData[platform]!;
+    if (current.ownerUserId == userId) return current;
+    return _platformData[platform] = TodoPlatformData(ownerUserId: userId);
+  }
+
+  bool _isCurrentData(PlatformType platform, TodoPlatformData data) =>
+      mounted &&
+      identical(_platformData[platform], data) &&
+      AccountManager.currentSessionForPlatform(platform) == data.ownerUserId;
+
   Future<void> _loadTronclassTodos(String userId) async {
-    final data = _platformData[PlatformType.tronclass]!;
+    if (!mounted) return;
+    final data = _dataFor(PlatformType.tronclass, userId);
 
     if (data.requestLock) {
       ApiService.appendExternalConsoleLog(
@@ -520,7 +585,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         platformOptions: _todoStableOptions('tronclass.todo.list'),
       );
 
-      if (!mounted) {
+      if (!_isCurrentData(PlatformType.tronclass, data)) {
         ApiService.appendExternalConsoleLog(
           'TodosPage',
           'Tronclass: widget unmounted, discarding response',
@@ -548,6 +613,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         'Tronclass: parsed ${todos.length} todos',
       );
 
+      if (!_isCurrentData(PlatformType.tronclass, data)) return;
       setState(() {
         data.pendingTodos = todos;
         data.lastRefreshTime = DateTime.now();
@@ -563,7 +629,9 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       ApiService.appendExternalConsoleLog('TodosPage', 'Tronclass: error = $e');
       data.refreshFailed = true;
     } finally {
-      if (mounted) {
+      data.requestLock = false;
+      data.isLoading = false;
+      if (_isCurrentData(PlatformType.tronclass, data)) {
         setState(() {
           data.isLoading = false;
           data.requestLock = false;
@@ -592,7 +660,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         platformOptions: _todoStableOptions('tronclass.course.list'),
       );
 
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.tronclass, data)) return;
 
       final coursesData = _extractTronclassCourses(coursesResponse.data);
       if (coursesData.isEmpty) return;
@@ -610,7 +678,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         ),
       );
 
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.tronclass, data)) return;
 
       ApiService.appendExternalConsoleLog(
         'TodosPage',
@@ -629,6 +697,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         return aTime.compareTo(bTime);
       });
 
+      if (!_isCurrentData(PlatformType.tronclass, data)) return;
       setState(() {
         data.pendingTodos = allTodos;
       });
@@ -880,7 +949,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadChaoxingTodos(String userId) async {
-    final data = _platformData[PlatformType.chaoxing]!;
+    if (!mounted) return;
+    final data = _dataFor(PlatformType.chaoxing, userId);
 
     if (data.requestLock) {
       return;
@@ -905,7 +975,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       );
 
       final coursesData = await CXCourseApi.getCourses();
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.chaoxing, data)) return;
 
       final allTodos = <Map<String, dynamic>>[];
 
@@ -916,13 +986,14 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         );
       }
 
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.chaoxing, data)) return;
 
       ApiService.appendExternalConsoleLog(
         'TodosPage',
         'Chaoxing: found ${allTodos.length} todos',
       );
 
+      if (!_isCurrentData(PlatformType.chaoxing, data)) return;
       setState(() {
         data.pendingTodos = allTodos;
         data.lastRefreshTime = DateTime.now();
@@ -934,13 +1005,16 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
 
       await _persistTodos();
     } catch (e) {
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.chaoxing, data)) return;
+      if (!_isCurrentData(PlatformType.chaoxing, data)) return;
       setState(() {
         data.isLoading = false;
         data.requestLock = false;
         data.refreshFailed = true;
       });
     } finally {
+      data.requestLock = false;
+      data.isLoading = false;
       context?.dispose();
     }
   }
@@ -1042,7 +1116,8 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadRainClassroomTodos(String userId) async {
-    final data = _platformData[PlatformType.rainClassroom]!;
+    if (!mounted) return;
+    final data = _dataFor(PlatformType.rainClassroom, userId);
 
     if (data.requestLock) {
       return;
@@ -1070,7 +1145,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         platformOptions: _todoStableOptions('rainclassroom.todo.upcoming'),
       );
 
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.rainClassroom, data)) return;
 
       ApiService.appendExternalConsoleLog(
         'TodosPage',
@@ -1178,6 +1253,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         'RainClassroom: parsed ${todos.length} todos',
       );
 
+      if (!_isCurrentData(PlatformType.rainClassroom, data)) return;
       setState(() {
         data.pendingTodos = todos;
         data.lastRefreshTime = DateTime.now();
@@ -1193,19 +1269,23 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         'TodosPage',
         'RainClassroom: error = $e',
       );
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.rainClassroom, data)) return;
+      if (!_isCurrentData(PlatformType.rainClassroom, data)) return;
       setState(() {
         data.isLoading = false;
         data.requestLock = false;
         data.refreshFailed = true;
       });
     } finally {
+      data.requestLock = false;
+      data.isLoading = false;
       context?.dispose();
     }
   }
 
   Future<void> _loadKetangpaiTodos(String userId) async {
-    final data = _platformData[PlatformType.ketangpai]!;
+    if (!mounted) return;
+    final data = _dataFor(PlatformType.ketangpai, userId);
 
     if (data.requestLock) {
       return;
@@ -1233,7 +1313,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         method: 'POST',
       );
 
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.ketangpai, data)) return;
 
       ApiService.appendExternalConsoleLog(
         'TodosPage',
@@ -1259,6 +1339,7 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         'Ketangpai: loaded ${todos.length} todos',
       );
 
+      if (!_isCurrentData(PlatformType.ketangpai, data)) return;
       setState(() {
         data.pendingTodos = todos;
         data.lastRefreshTime = DateTime.now();
@@ -1271,13 +1352,16 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
       await _persistTodos();
     } catch (e) {
       ApiService.appendExternalConsoleLog('TodosPage', 'Ketangpai: error = $e');
-      if (!mounted) return;
+      if (!_isCurrentData(PlatformType.ketangpai, data)) return;
+      if (!_isCurrentData(PlatformType.ketangpai, data)) return;
       setState(() {
         data.isLoading = false;
         data.requestLock = false;
         data.refreshFailed = true;
       });
     } finally {
+      data.requestLock = false;
+      data.isLoading = false;
       context?.dispose();
     }
   }
@@ -1445,6 +1529,15 @@ class _TodosPageState extends State<TodosPage> with WidgetsBindingObserver {
         backgroundColor: palette.primary,
         foregroundColor: Colors.white,
         actions: [
+          if (!_notificationPermissionGranted)
+            IconButton(
+              icon: const Icon(Icons.notifications_off_outlined),
+              tooltip: Localizations.localeOf(context).languageCode == 'en'
+                  ? 'Enable reminders'
+                  : '开启待办提醒',
+              onPressed: () =>
+                  _checkAndRequestNotificationPermission(request: true),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _refreshAllPlatformAccounts,

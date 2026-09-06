@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
 import '../design_tokens.dart';
 
-enum AppButtonVariant {
-  primary,
-  secondary,
-  tertiary,
-  outlined,
-}
+enum AppButtonVariant { primary, secondary, tertiary, outlined }
 
 class AppButton extends StatelessWidget {
   final String label;
@@ -30,92 +25,51 @@ class AppButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    Widget button;
-
-    if (isLoading) {
-      final loadingIndicator = SizedBox(
-        width: 16,
-        height: 16,
-        child: CircularProgressIndicator(
-          strokeWidth: 2,
-          valueColor: AlwaysStoppedAnimation<Color>(
-            variant == AppButtonVariant.primary
-                ? theme.colorScheme.onPrimary
-                : theme.colorScheme.primary,
-          ),
+    final action = isLoading ? null : onPressed;
+    final leading = isLoading
+        ? SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          )
+        : icon == null
+        ? null
+        : Icon(icon);
+    final content = Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (leading != null) ...[leading, const SizedBox(width: AppSpacing.sm)],
+        Flexible(child: Text(label, textAlign: TextAlign.center)),
+      ],
+    );
+    final Widget button = Semantics(
+      liveRegion: isLoading,
+      child: switch (variant) {
+        AppButtonVariant.primary => FilledButton(
+          onPressed: action,
+          child: content,
         ),
-      );
-
-      button = FilledButton(
-        onPressed: null,
-        child: Row(
-          mainAxisSize: isFullWidth ? MainAxisSize.max : MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            loadingIndicator,
-            const SizedBox(width: AppSpacing.sm),
-            Text(label),
-          ],
+        AppButtonVariant.secondary => FilledButton.tonal(
+          onPressed: action,
+          child: content,
         ),
-      );
-    } else {
-      switch (variant) {
-        case AppButtonVariant.primary:
-          button = icon != null
-              ? FilledButton.icon(
-                  onPressed: onPressed,
-                  icon: Icon(icon),
-                  label: Text(label),
-                )
-              : FilledButton(
-                  onPressed: onPressed,
-                  child: Text(label),
-                );
-          break;
-        case AppButtonVariant.secondary:
-          button = icon != null
-              ? FilledButton.tonalIcon(
-                  onPressed: onPressed,
-                  icon: Icon(icon),
-                  label: Text(label),
-                )
-              : FilledButton.tonal(
-                  onPressed: onPressed,
-                  child: Text(label),
-                );
-          break;
-        case AppButtonVariant.tertiary:
-          button = icon != null
-              ? TextButton.icon(
-                  onPressed: onPressed,
-                  icon: Icon(icon),
-                  label: Text(label),
-                )
-              : TextButton(
-                  onPressed: onPressed,
-                  child: Text(label),
-                );
-          break;
-        case AppButtonVariant.outlined:
-          button = icon != null
-              ? OutlinedButton.icon(
-                  onPressed: onPressed,
-                  icon: Icon(icon),
-                  label: Text(label),
-                )
-              : OutlinedButton(
-                  onPressed: onPressed,
-                  child: Text(label),
-                );
-          break;
-      }
-    }
+        AppButtonVariant.tertiary => TextButton(
+          onPressed: action,
+          child: content,
+        ),
+        AppButtonVariant.outlined => OutlinedButton(
+          onPressed: action,
+          child: content,
+        ),
+      },
+    );
 
     if (isFullWidth) {
-      return SizedBox(
-        width: double.infinity,
-        child: button,
-      );
+      return SizedBox(width: double.infinity, child: button);
     }
 
     return button;

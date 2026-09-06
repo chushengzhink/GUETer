@@ -361,7 +361,7 @@ class UpdateService {
       buildNumber: fromText.buildNumber,
       tag: fromText.tag,
       releaseNotes: fromText.releaseNotes,
-      apk: metadata.apk,
+      apk: fromText.apk,
       publishedAt: fromText.publishedAt,
       announcements: fromText.announcements,
       metadataSource: 'update.txt',
@@ -561,11 +561,12 @@ class UpdateService {
 
     final version = match.group(1)!;
     final buildNumber = int.parse(match.group(2)!);
+    const fallbackNotes = '发现 GUETer 新版本，点击前往下载页获取安装包。';
     return UpdateInfo(
       version: version,
       buildNumber: buildNumber,
       tag: '$version+$buildNumber',
-      releaseNotes: '发现 GUETer 新版本，点击前往蓝奏云下载。',
+      releaseNotes: fallbackNotes,
       apk: UpdateApkInfo(
         abi: 'arm64-v8a',
         fileName: entry.name,
@@ -578,7 +579,7 @@ class UpdateService {
           buildNumber: buildNumber,
           tag: '$version+$buildNumber',
           publishedAt: null,
-          releaseNotes: '发现 GUETer 新版本，点击前往蓝奏云下载。',
+          releaseNotes: fallbackNotes,
         ),
       ],
       metadataSource: 'apk',

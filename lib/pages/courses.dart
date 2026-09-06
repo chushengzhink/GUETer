@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 
 import '../core/async/app_async_view.dart';
+import '../features/courses/course_load_controller.dart';
 import '../features/courses/chaoxing/chaoxing_course_detail_controller.dart';
 import '../platform.dart';
 import '../api/course.dart';
@@ -260,10 +261,11 @@ class CoursesPage extends StatefulWidget {
   const CoursesPage({super.key});
 
   @override
-  State<CoursesPage> createState() => _CoursesPageState();
+  State<CoursesPage> createState() => CoursesPageState();
 }
 
-final GlobalKey coursesPageKey = GlobalKey();
+final GlobalKey<CoursesPageState> coursesPageKey =
+    GlobalKey<CoursesPageState>();
 
 enum _RainClassroomScanRouteChoice { auto, lessonPage, miniProgram, dynamicQr }
 
@@ -279,7 +281,7 @@ class _RainClassroomScanExecution {
   final String? lessonId;
 }
 
-class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
+class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   List<Course> _courses = [];
   List<Course> _onlineCourses = [];
   List<Course> _offlineCourses = [];
@@ -290,7 +292,13 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   StreamSubscription? _accountChangeSubscription;
   StreamSubscription? _platformChangeSubscription;
   Timer? _refreshTimer;
-  bool _isLoadingCourses = false;
+  final _courseLoads = CourseLoadController();
+  int _snapshotReadVersion = 0;
+  bool get _isLoadingCourses => _courseLoads.loading;
+  CourseContext get _courseContext => (
+    PlatformManager().currentPlatform,
+    AccountManager.currentSessionId ?? '',
+  );
   bool _isShowingCachedCourses = false;
   bool _isRefreshingCoursesInBackground = false;
   Color _globalPrimary = const Color(0xFF1F9EA8);
@@ -299,13 +307,12 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   String? _lastRefreshMessage;
   DateTime? _snapshotUpdatedAt;
   bool _snapshotRefreshFailed = false;
-  String? _pendingAccountReloadUserId;
-  bool _runningPendingAccountReload = false;
-
-  final Map<PlatformType, List<Course>> _coursesCache = {};
-  final Map<PlatformType, List<Course>> _onlineCoursesCache = {};
-  final Map<PlatformType, List<Course>> _offlineCoursesCache = {};
-  final Map<PlatformType, DateTime> _cacheTimestamps = {};
+  Map<CourseContext, List<Course>> get _coursesCache => _courseLoads.courses;
+  Map<CourseContext, List<Course>> get _onlineCoursesCache =>
+      _courseLoads.online;
+  Map<CourseContext, List<Course>> get _offlineCoursesCache =>
+      _courseLoads.offline;
+  Map<CourseContext, DateTime> get _cacheTimestamps => _courseLoads.timestamps;
   final PlatformPageSnapshotStore _snapshotStore = PlatformPageSnapshotStore();
   final SignRunConsoleController _scanConsoleController =
       SignRunConsoleController();
@@ -2085,12 +2092,12 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     _loadGlobalPalette();
 
     final currentPlatform = PlatformManager().currentPlatform;
-    final cachedCourses = _coursesCache[currentPlatform];
+    final cachedCourses = _coursesCache[_courseContext];
 
     if (cachedCourses != null && cachedCourses.isNotEmpty) {
       _courses = cachedCourses;
-      _onlineCourses = _onlineCoursesCache[currentPlatform] ?? [];
-      _offlineCourses = _offlineCoursesCache[currentPlatform] ?? [];
+      _onlineCourses = _onlineCoursesCache[_courseContext] ?? [];
+      _offlineCourses = _offlineCoursesCache[_courseContext] ?? [];
       _isLoading = false;
     } else {
       _loadCourseSnapshotThenRefresh(currentPlatform);
@@ -2109,97 +2116,19 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       );
     }
 
-    // 刷新课程前先设置加载状态。
-    _accountChangeSubscription = AccountChangeNotifier().accountStateChanges.listen((
-      snapshot,
-    ) {
-      if (snapshot.platform != PlatformManager().currentPlatform) {
-        return;
-      }
-      final changedAccountId = snapshot.currentAccountId ?? '';
-      if (mounted &&
-          changedAccountId.isNotEmpty &&
-          PlatformManager().isTronclass) {
-        _coursesCache.remove(PlatformType.tronclass);
-        _onlineCoursesCache.remove(PlatformType.tronclass);
-        _offlineCoursesCache.remove(PlatformType.tronclass);
-        setState(() {
-          _emptyHint = null;
-          _snapshotRefreshFailed = false;
+    _courseLoads.switchContext(_courseContext);
+    _accountChangeSubscription = AccountChangeNotifier().accountStateChanges
+        .listen((snapshot) {
+          if (!mounted ||
+              snapshot.platform != PlatformManager().currentPlatform) {
+            return;
+          }
+          _onCourseContextChanged();
         });
-      }
-      // Prevent reload loop: only reload if not currently loading courses
-      // 雨课堂不自动加载，由用户或扫码流程触发。
-      if (mounted &&
-          changedAccountId.isNotEmpty &&
-          !_isLoading &&
-          !_isLoadingCourses &&
-          !PlatformManager().isRainClassroom) {
-        debugPrint(
-          '[Courses] Account changed to $changedAccountId, reloading courses',
-        );
-        _loadCourses(forceNetwork: true);
-      } else {
-        if (mounted &&
-            changedAccountId.isNotEmpty &&
-            !PlatformManager().isRainClassroom) {
-          _queuePendingAccountReload(changedAccountId);
-        }
-        debugPrint(
-          '[Courses] Account changed queued reload: mounted=$mounted isLoading=$_isLoading isLoadingCourses=$_isLoadingCourses pendingUser=$_pendingAccountReloadUserId',
-        );
-      }
-    });
-
-    // 切换平台后清理旧平台课程状态。
-    _platformChangeSubscription = PlatformManager().platformChanges.listen((
-      newPlatform,
-    ) async {
-      if (mounted) {
-        debugPrint(
-          '[Courses] Platform changed to $newPlatform, loading from cache',
-        );
-
-        var waitCount = 0;
-        while (_isLoadingCourses && waitCount < 160) {
-          await Future.delayed(const Duration(milliseconds: 50));
-          waitCount++;
-        }
-
-        if (!mounted) return;
-
-        if (_isLoadingCourses) {
-          debugPrint('[Courses] Timed out waiting for previous load');
-          _isLoadingCourses = false;
-          setState(() {
-            _isLoading = false;
-          });
-        }
-
-        _loadGlobalPalette();
-        final cachedCourses = _coursesCache[newPlatform];
-        final cachedOnline = _onlineCoursesCache[newPlatform];
-        final cachedOffline = _offlineCoursesCache[newPlatform];
-
-        if (cachedCourses != null && cachedCourses.isNotEmpty) {
-          setState(() {
-            _courses = cachedCourses;
-            _onlineCourses = cachedOnline ?? [];
-            _offlineCourses = cachedOffline ?? [];
-            _isLoading = false;
-            _emptyHint = null;
-          });
-        } else {
-          setState(() {
-            _courses = [];
-            _onlineCourses = [];
-            _offlineCourses = [];
-            _isLoading = PlatformManager().isRainClassroom ? false : true;
-          });
-
-          _loadCourseSnapshotThenRefresh(newPlatform);
-        }
-      }
+    _platformChangeSubscription = PlatformManager().platformChanges.listen((_) {
+      if (!mounted) return;
+      _loadGlobalPalette();
+      _onCourseContextChanged();
     });
 
     // initState 时不启动自动刷新，避免误触发平台请求。
@@ -2231,6 +2160,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCourseSnapshotThenRefresh(PlatformType platform) async {
+    final readVersion = ++_snapshotReadVersion;
     final userId = AccountManager.currentSessionId ?? '';
     if (userId.isNotEmpty) {
       unawaited(
@@ -2245,14 +2175,15 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         page: 'courses',
       );
       if (mounted &&
-          PlatformManager().currentPlatform == platform &&
+          readVersion == _snapshotReadVersion &&
+          _courseContext == (platform, userId) &&
           snapshot != null &&
           snapshot.data.isNotEmpty) {
         final courses = snapshot.data.map(Course.fromJson).toList();
         setState(() {
           _courses = courses;
-          _coursesCache[platform] = courses;
-          _cacheTimestamps[platform] = snapshot.updatedAt;
+          _coursesCache[(platform, userId)] = courses;
+          _cacheTimestamps[(platform, userId)] = snapshot.updatedAt;
           _snapshotUpdatedAt = snapshot.updatedAt;
           _isLoading = false;
           _isShowingCachedCourses = true;
@@ -2263,47 +2194,32 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       }
     }
 
-    if (!mounted || PlatformManager().currentPlatform != platform) return;
+    if (!mounted ||
+        readVersion != _snapshotReadVersion ||
+        _courseContext != (platform, userId)) {
+      return;
+    }
     if (!PlatformManager().isRainClassroom) {
       unawaited(_loadCourses());
     }
   }
 
-  void _queuePendingAccountReload(String accountId) {
-    if (!mounted || PlatformManager().isRainClassroom) {
-      return;
-    }
-    _pendingAccountReloadUserId = accountId;
-    debugPrint('[Courses] queued pending account reload userId=$accountId');
-  }
-
-  void _runPendingAccountReloadIfNeeded(PlatformType completedPlatform) {
-    if (_runningPendingAccountReload || !mounted) {
-      return;
-    }
-    final pendingUserId = _pendingAccountReloadUserId;
-    if (pendingUserId == null || pendingUserId.isEmpty) {
-      return;
-    }
-    if (PlatformManager().currentPlatform != completedPlatform ||
-        PlatformManager().isRainClassroom ||
-        AccountManager.currentSessionId != pendingUserId) {
-      debugPrint(
-        '[Courses] drop pending account reload userId=$pendingUserId current=${AccountManager.currentSessionId ?? ''} platform=${PlatformManager().currentPlatform}',
-      );
-      _pendingAccountReloadUserId = null;
-      return;
-    }
-    _pendingAccountReloadUserId = null;
-    _runningPendingAccountReload = true;
-    debugPrint(
-      '[Courses] running pending account reload userId=$pendingUserId',
-    );
-    unawaited(
-      _loadCourses(forceNetwork: true).whenComplete(() {
-        _runningPendingAccountReload = false;
-      }),
-    );
+  void _onCourseContextChanged() {
+    final next = _courseContext;
+    if (_courseLoads.context == next) return;
+    _courseLoads.switchContext(next);
+    setState(() {
+      _courses = _coursesCache[next] ?? [];
+      _onlineCourses = _onlineCoursesCache[next] ?? [];
+      _offlineCourses = _offlineCoursesCache[next] ?? [];
+      _snapshotUpdatedAt = _cacheTimestamps[next];
+      _emptyHint = null;
+      _snapshotRefreshFailed = false;
+      _isShowingCachedCourses = _courses.isNotEmpty;
+      _isRefreshingCoursesInBackground = false;
+      _isLoading = _courses.isEmpty && !PlatformManager().isRainClassroom;
+    });
+    unawaited(_loadCourseSnapshotThenRefresh(next.$1));
   }
 
   Future<void> _loadCourses({
@@ -2316,10 +2232,18 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       return;
     }
 
-    _isLoadingCourses = true;
-    final requestPlatform = PlatformManager().currentPlatform;
-    final requestUserId = AccountManager.currentSessionId ?? '';
-    final cachedCourses = _coursesCache[requestPlatform];
+    if (!mounted) return;
+    final requestContext = _courseContext;
+    _snapshotReadVersion++;
+    final generation = _courseLoads.begin(requestContext);
+    if (generation == null) return;
+    final requestPlatform = requestContext.$1;
+    final requestUserId = requestContext.$2;
+    bool isCurrent() =>
+        mounted &&
+        _courseLoads.accepts(generation, requestContext) &&
+        _courseContext == requestContext;
+    final cachedCourses = _coursesCache[requestContext];
     final hasCachedCourses = cachedCourses != null && cachedCourses.isNotEmpty;
 
     setState(() {
@@ -2329,8 +2253,8 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       _snapshotRefreshFailed = false;
       if (hasCachedCourses) {
         _courses = cachedCourses;
-        _onlineCourses = _onlineCoursesCache[requestPlatform] ?? [];
-        _offlineCourses = _offlineCoursesCache[requestPlatform] ?? [];
+        _onlineCourses = _onlineCoursesCache[requestContext] ?? [];
+        _offlineCourses = _offlineCoursesCache[requestContext] ?? [];
       } else {
         _courses = [];
         _onlineCourses = [];
@@ -2343,8 +2267,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     if (!AccountManager.hasActiveSession()) {
       if (!mounted) return;
       if (AccountManager.currentSessionId != requestUserId) {
-        _isLoadingCourses = false;
-        _runPendingAccountReloadIfNeeded(requestPlatform);
+        _courseLoads.finish(generation);
         return;
       }
       setState(() {
@@ -2353,8 +2276,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         _isRefreshingCoursesInBackground = false;
         _emptyHint = '当前未登录，请先到账号页登录。';
       });
-      _isLoadingCourses = false;
-      _runPendingAccountReloadIfNeeded(requestPlatform);
+      _courseLoads.finish(generation);
       return;
     }
 
@@ -2386,26 +2308,19 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         coursesData = await KTCourseApi.getCoursesList();
       }
 
-      if (!mounted ||
-          PlatformManager().currentPlatform != requestPlatform ||
-          AccountManager.currentSessionId != requestUserId) {
+      if (!isCurrent()) {
         debugPrint(
           '[Courses] Platform/account changed during load, discarding stale data',
         );
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
-        }
         return;
       }
 
-      if (coursesData != null && coursesData.isNotEmpty) {
+      if (coursesData != null) {
         debugPrint('[Courses] 雨课堂课程请求完成');
 
-        _coursesCache[requestPlatform] = coursesData;
-        _cacheTimestamps[requestPlatform] = DateTime.now();
-        _snapshotUpdatedAt = _cacheTimestamps[requestPlatform];
+        _coursesCache[requestContext] = coursesData;
+        _cacheTimestamps[requestContext] = DateTime.now();
+        _snapshotUpdatedAt = _cacheTimestamps[requestContext];
         final userId = AccountManager.currentSessionId ?? '';
         if (userId.isNotEmpty) {
           await _snapshotStore.writeList(
@@ -2416,9 +2331,10 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             updatedAt: _snapshotUpdatedAt,
           );
         }
+        if (!isCurrent()) return;
         if (PlatformManager().isRainClassroom) {
-          _onlineCoursesCache[requestPlatform] = onlineData ?? [];
-          _offlineCoursesCache[requestPlatform] = offlineData ?? [];
+          _onlineCoursesCache[requestContext] = onlineData ?? [];
+          _offlineCoursesCache[requestContext] = offlineData ?? [];
         }
 
         setState(() {
@@ -2466,7 +2382,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       }
     } catch (e) {
       debugPrint('[Courses] load failed: $e');
-      if (!mounted) return;
+      if (!isCurrent()) return;
       setState(() {
         if (!hasCachedCourses) {
           _courses = [];
@@ -2488,13 +2404,10 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             : null;
       });
     } finally {
-      _isLoadingCourses = false;
-      if (mounted) {
-        setState(() {
-          _isRefreshingCoursesInBackground = false;
-        });
+      if (isCurrent()) {
+        setState(() => _isRefreshingCoursesInBackground = false);
       }
-      _runPendingAccountReloadIfNeeded(requestPlatform);
+      _courseLoads.finish(generation);
     }
   }
 
@@ -4037,6 +3950,7 @@ class _CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _courseLoads.invalidate();
     WidgetsBinding.instance.removeObserver(this);
     AppSettings.globalColorSchemeNotifier.removeListener(
       _onGlobalSchemeChanged,

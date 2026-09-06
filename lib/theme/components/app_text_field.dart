@@ -16,6 +16,11 @@ class AppTextField extends StatelessWidget {
   final VoidCallback? onTap;
   final bool readOnly;
   final bool enabled;
+  final FocusNode? focusNode;
+  final TextInputAction? textInputAction;
+  final ValueChanged<String>? onSubmitted;
+  final String? suffixTooltip;
+  final Iterable<String>? autofillHints;
 
   const AppTextField({
     super.key,
@@ -34,6 +39,11 @@ class AppTextField extends StatelessWidget {
     this.onTap,
     this.readOnly = false,
     this.enabled = true,
+    this.focusNode,
+    this.textInputAction,
+    this.onSubmitted,
+    this.suffixTooltip,
+    this.autofillHints,
   });
 
   @override
@@ -42,6 +52,11 @@ class AppTextField extends StatelessWidget {
 
     return TextField(
       controller: controller,
+      focusNode: focusNode,
+      textInputAction: textInputAction,
+      onSubmitted: onSubmitted,
+      autofillHints: autofillHints,
+      onTapOutside: (_) => FocusScope.of(context).unfocus(),
       obscureText: obscureText,
       keyboardType: keyboardType,
       maxLines: maxLines,
@@ -57,12 +72,15 @@ class AppTextField extends StatelessWidget {
         prefixIcon: prefixIcon != null ? Icon(prefixIcon) : null,
         suffixIcon: suffixIcon != null
             ? IconButton(
+                tooltip: suffixTooltip,
                 icon: Icon(suffixIcon),
                 onPressed: onSuffixIconTap,
               )
             : null,
         filled: true,
-        fillColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        fillColor: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.5,
+        ),
       ),
     );
   }

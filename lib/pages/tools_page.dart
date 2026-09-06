@@ -2,7 +2,6 @@
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
@@ -15,6 +14,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/performance/app_performance.dart';
+import '../features/tools/tool_catalog.dart';
 import '../modules/local_transfer/ui/local_transfer_page.dart';
 import '../app_entries/app_entry.dart';
 import '../l10n/app_localizations.dart';
@@ -53,11 +53,6 @@ import 'study_center_page.dart';
 import 'user_manual_page.dart';
 import 'web_archive_page.dart';
 
-const Color _dashboardPrimary = Color(0xFF0D9488);
-const Color _dashboardSecondary = Color(0xFF14B8A6);
-const Color _dashboardAction = Color(0xFFF97316);
-const Color _dashboardInk = Color(0xFF134E4A);
-
 class _ToolTaskRecord {
   final String toolName;
   final String inputSummary;
@@ -87,79 +82,25 @@ class _ToolTaskRecord {
   }
 }
 
-class _ToolActionSpec {
-  const _ToolActionSpec({
-    required this.id,
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-    this.tags = const <String>[],
-    this.badge,
-    this.priority = 0,
-  });
-
-  final String id;
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final Color color;
-  final VoidCallback? onTap;
-  final List<String> tags;
-  final String? badge;
-  final int priority;
-
-  bool matches(String query) {
-    final normalized = query.trim().toLowerCase();
-    if (normalized.isEmpty) return true;
-    return title.toLowerCase().contains(normalized) ||
-        subtitle.toLowerCase().contains(normalized) ||
-        (badge ?? '').toLowerCase().contains(normalized) ||
-        tags.any((tag) => tag.toLowerCase().contains(normalized));
-  }
-}
-
-class _ToolCategorySpec {
-  const _ToolCategorySpec({
-    required this.id,
-    required this.label,
-    required this.subtitle,
-    required this.icon,
-    required this.color,
-    required this.actions,
-  });
-
-  final String id;
-  final String label;
-  final String subtitle;
-  final IconData icon;
-  final Color color;
-  final List<_ToolActionSpec> actions;
-}
-
 class ToolsPage extends StatefulWidget {
-  const ToolsPage({super.key});
+  const ToolsPage({super.key, this.initializeServices = true});
+
+  /// Disable external services when rendering the real page in widget tests.
+  final bool initializeServices;
 
   @override
   State<ToolsPage> createState() => _ToolsPageState();
 }
 
-class _ToolsPageState extends State<ToolsPage>
-    with SingleTickerProviderStateMixin {
+class _ToolsPageState extends State<ToolsPage> {
   bool _busy = false;
   String _status = '';
   String? _customOutputDir;
   String? _defaultOutputDirPath;
   String? _lastOutputPath;
   int _selectedToolCategory = 1;
-  String _toolSearchQuery = '';
-  late final TextEditingController _toolSearchController;
   final List<_ToolTaskRecord> _recentTasks = <_ToolTaskRecord>[];
   final ScrollController _dashboardScrollController = ScrollController();
-  late final AnimationController _wheelController;
-  late Animation<double> _wheelAnimation;
-  double _wheelRotation = 0;
 
   final NasaApiService _nasaApiService = NasaApiService();
   final FileToolHistoryStore _historyStore = FileToolHistoryStore();
@@ -201,9 +142,9 @@ class _ToolsPageState extends State<ToolsPage>
       : (_defaultOutputDirPath ??
             _tr('正在读取默认输出目录', 'Loading default output directory'));
 
-  _ToolActionSpec _fromToolEntry(ToolEntry entry) {
+  ToolActionSpec _fromToolEntry(ToolEntry entry) {
     final locale = Localizations.localeOf(context);
-    return _ToolActionSpec(
+    return ToolActionSpec(
       id: entry.id,
       title: entry.titleFor(locale),
       subtitle: entry.subtitleFor(locale),
@@ -216,7 +157,7 @@ class _ToolsPageState extends State<ToolsPage>
     );
   }
 
-  List<_ToolCategorySpec> _withToolLayout(List<_ToolCategorySpec> categories) {
+  List<ToolCategorySpec> _withToolLayout(List<ToolCategorySpec> categories) {
     final pluginEntries = PluginRuntime.buildToolEntries(
       AppSettings.pluginStore.enabledPluginsNotifier.value,
       context,
@@ -229,11 +170,11 @@ class _ToolsPageState extends State<ToolsPage>
             .putIfAbsent(entry.categoryId, () => <ToolEntry>[])
             .add(entry);
       }
-      categories = <_ToolCategorySpec>[
+      categories = <ToolCategorySpec>[
         ...categories,
         ...groupedPluginEntries.entries.map((group) {
           final first = group.value.first;
-          return _ToolCategorySpec(
+          return ToolCategorySpec(
             id: first.categoryId,
             label: first.categoryFor(locale),
             subtitle: first.categorySubtitleFor(locale),
@@ -270,7 +211,7 @@ class _ToolsPageState extends State<ToolsPage>
 
     return orderedCategoryIds
         .map((id) => categoryById[id])
-        .whereType<_ToolCategorySpec>()
+        .whereType<ToolCategorySpec>()
         .map((category) {
           final actions =
               category.actions
@@ -284,7 +225,7 @@ class _ToolsPageState extends State<ToolsPage>
                     actionIndex[b.id] ?? 9999,
                   ),
                 );
-          return _ToolCategorySpec(
+          return ToolCategorySpec(
             id: category.id,
             label: category.label,
             subtitle: category.subtitle,
@@ -297,16 +238,16 @@ class _ToolsPageState extends State<ToolsPage>
         .toList();
   }
 
-  List<_ToolCategorySpec> _toolCategories() {
+  List<ToolCategorySpec> _toolCategories() {
     return _withToolLayout([
-      _ToolCategorySpec(
+      ToolCategorySpec(
         id: 'transfer',
         label: _tr('传输', 'Transfer'),
         subtitle: _tr('近场配对、局域网互传', 'Nearby pairing and LAN transfer'),
         icon: Icons.swap_horiz_rounded,
         color: const Color(0xFF06B6D4),
         actions: [
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'nearby-room',
             title: _tr('附近房间', 'Nearby Room'),
             subtitle: _tr('发现附近房间，进入面对面配对。', 'Discover nearby rooms.'),
@@ -315,7 +256,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: () => Navigator.pushNamed(context, '/nearby-room'),
             badge: _tr('近场', 'Nearby'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'local-transfer',
             title: l10n.localTransferTitle,
             subtitle: l10n.localTransferSubtitle,
@@ -331,14 +272,14 @@ class _ToolsPageState extends State<ToolsPage>
           ),
         ],
       ),
-      _ToolCategorySpec(
+      ToolCategorySpec(
         id: 'pdf',
         label: 'PDF',
         subtitle: _tr('转换、压缩、提取、水印', 'Convert, compress, extract, watermark'),
         icon: Icons.picture_as_pdf_outlined,
         color: const Color(0xFFF97316),
         actions: [
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'arrange-pdf',
             title: _tr('PDF 页面编排', 'PDF Arrange'),
             subtitle: _tr(
@@ -356,7 +297,7 @@ class _ToolsPageState extends State<ToolsPage>
                   },
             badge: _tr('编排', 'Arrange'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'lightweight-to-pdf',
             title: _tr('轻量转 PDF', 'Files to PDF'),
             subtitle: _tr(
@@ -368,7 +309,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: _busy ? null : () => _runTool(_lightweightFilesToPdf),
             badge: _tr('本地', 'Local'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'pdf-to-images',
             title: l10n.pdfToImagesTitle,
             subtitle: l10n.pdfToImagesSubtitle,
@@ -377,7 +318,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: _busy ? null : () => _runTool(_pdfToImages),
             badge: 'PNG',
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'images-to-pdf',
             title: l10n.imagesToPdfTitle,
             subtitle: l10n.imagesToPdfSubtitle,
@@ -386,7 +327,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: _busy ? null : () => _runTool(_imagesToPdf),
             badge: 'PDF',
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'compress-pdf',
             title: l10n.compressPdfTitle,
             subtitle: l10n.compressPdfSubtitle,
@@ -395,7 +336,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: _busy ? null : () => _runTool(_compressPdf),
             badge: _tr('压缩', 'Zip'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'extract-pages',
             title: l10n.extractPagesTitle,
             subtitle: l10n.extractPagesSubtitle,
@@ -404,7 +345,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: _busy ? null : () => _runTool(_extractPages),
             badge: _tr('页码', 'Pages'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'watermark-pdf',
             title: l10n.watermarkTitle,
             subtitle: l10n.watermarkSubtitle,
@@ -415,14 +356,14 @@ class _ToolsPageState extends State<ToolsPage>
           ),
         ],
       ),
-      _ToolCategorySpec(
+      ToolCategorySpec(
         id: 'files',
         label: _tr('文件', 'Files'),
         subtitle: _tr('压缩包、批量整理', 'Archive and batch cleanup'),
         icon: Icons.folder_zip_outlined,
         color: const Color(0xFF22C55E),
         actions: [
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'file-tools',
             title: _tr('文件工具', 'File Tools'),
             subtitle: _tr(
@@ -439,7 +380,7 @@ class _ToolsPageState extends State<ToolsPage>
             },
             badge: 'ZIP',
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'file-output-manager',
             title: _tr('输出文件管家', 'Output Manager'),
             subtitle: _tr(
@@ -459,7 +400,7 @@ class _ToolsPageState extends State<ToolsPage>
             tags: const ['output', 'history', 'cleanup', 'share', 'files'],
             badge: _tr('输出', 'Output'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'material-ocr',
             title: _tr('资料扫描 OCR', 'Material OCR'),
             subtitle: _tr(
@@ -477,7 +418,7 @@ class _ToolsPageState extends State<ToolsPage>
             tags: const ['ocr', 'scan', 'text', 'study card'],
             badge: 'OCR',
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'web-archive',
             title: _tr('网页归档箱', 'Web Archive'),
             subtitle: _tr(
@@ -497,14 +438,14 @@ class _ToolsPageState extends State<ToolsPage>
           ),
         ],
       ),
-      _ToolCategorySpec(
+      ToolCategorySpec(
         id: 'network',
         label: _tr('网络', 'Network'),
         subtitle: _tr('虚拟局域网与连接状态', 'Virtual LAN and connection state'),
         icon: Icons.vpn_lock_outlined,
         color: const Color(0xFF6366F1),
         actions: [
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'virtual-lan',
             title: _tr('虚拟局域网', 'Virtual LAN'),
             subtitle: _tr(
@@ -518,14 +459,14 @@ class _ToolsPageState extends State<ToolsPage>
           ),
         ],
       ),
-      _ToolCategorySpec(
+      ToolCategorySpec(
         id: 'study',
         label: _tr('学习', 'Study'),
         subtitle: _tr('阅读、检索、天文图', 'Reading, search, APOD'),
         icon: Icons.auto_stories_outlined,
         color: const Color(0xFF8B5CF6),
         actions: [
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'smart-organizer',
             title: _tr('智能整理', 'Smart Organizer'),
             subtitle: _tr(
@@ -552,7 +493,7 @@ class _ToolsPageState extends State<ToolsPage>
             ],
             badge: _tr('本地', 'Local'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'material-search',
             title: _tr('资料搜索', 'Material Search'),
             subtitle: _tr(
@@ -577,7 +518,7 @@ class _ToolsPageState extends State<ToolsPage>
             ],
             badge: _tr('资料', 'Materials'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'user-manual',
             title: _tr('使用说明书', 'User Manual'),
             subtitle: _tr(
@@ -595,7 +536,7 @@ class _ToolsPageState extends State<ToolsPage>
             tags: const ['manual', 'help', 'guide', '说明书', '帮助'],
             badge: _tr('说明', 'Manual'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'study-cards',
             title: _tr('复习中心', 'Review Center'),
             subtitle: _tr(
@@ -612,7 +553,7 @@ class _ToolsPageState extends State<ToolsPage>
             },
             badge: _tr('复习', 'Review'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'reading',
             title: l10n.readingTitle,
             subtitle: l10n.readingSubtitle,
@@ -626,7 +567,7 @@ class _ToolsPageState extends State<ToolsPage>
             },
             badge: _tr('阅读', 'Read'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'academic-search',
             title: l10n.academicSearchTitle,
             subtitle: l10n.academicSearchSubtitle,
@@ -640,7 +581,7 @@ class _ToolsPageState extends State<ToolsPage>
             },
             badge: _tr('检索', 'Search'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'apod',
             title: l10n.apodCardTitle,
             subtitle: _apodData?.title ?? l10n.apodLoadingSubtitle,
@@ -660,7 +601,7 @@ class _ToolsPageState extends State<ToolsPage>
           ),
         ],
       ),
-      _ToolCategorySpec(
+      ToolCategorySpec(
         id: 'cloud',
         label: _tr('云盘', 'Cloud'),
         subtitle: _tr(
@@ -670,7 +611,7 @@ class _ToolsPageState extends State<ToolsPage>
         icon: Icons.cloud_queue_outlined,
         color: const Color(0xFF2563EB),
         actions: [
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'openlist-cloud',
             title: _tr('云盘共享', 'Cloud Share'),
             subtitle: _tr(
@@ -688,7 +629,7 @@ class _ToolsPageState extends State<ToolsPage>
             tags: const ['OpenList', 'cloud', 'share', 'upload', 'download'],
             badge: _tr('云盘', 'Cloud'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'material-sync-status',
             title: _tr('资料状态', 'Material Status'),
             subtitle: _tr(
@@ -710,14 +651,14 @@ class _ToolsPageState extends State<ToolsPage>
           ),
         ],
       ),
-      _ToolCategorySpec(
+      ToolCategorySpec(
         id: 'campus',
         label: _tr('校园', 'Campus'),
         subtitle: _tr('桂电入口与支持', 'GUET entries and support'),
         icon: Icons.school_outlined,
         color: const Color(0xFF10B981),
         actions: [
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'unipus-assist',
             title: 'U 校园辅助',
             subtitle: '自动扫描课程树，生成确认式学习辅助队列。',
@@ -732,7 +673,7 @@ class _ToolsPageState extends State<ToolsPage>
             tags: const ['unipus', 'u-campus', 'assist', 'accessibility'],
             badge: 'Unipus',
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'guet-email',
             title: l10n.guetEmailTitle,
             subtitle: l10n.guetEmailSubtitle,
@@ -745,7 +686,7 @@ class _ToolsPageState extends State<ToolsPage>
             },
             badge: _tr('邮箱', 'Mail'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'guet-official',
             title: l10n.guetOfficialTitle,
             subtitle: l10n.guetOfficialSubtitle,
@@ -754,7 +695,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: () => _openExternalUrl('https://www.guet.edu.cn/'),
             badge: _tr('官网', 'Web'),
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'ai-figure',
             title: l10n.aiFigureTitle,
             subtitle: l10n.aiFigureSubtitle,
@@ -763,7 +704,7 @@ class _ToolsPageState extends State<ToolsPage>
             onTap: () => _openExternalUrl('https://deepscientist.cc'),
             badge: 'AI',
           ),
-          _ToolActionSpec(
+          ToolActionSpec(
             id: 'computer-help',
             title: l10n.computerHelpTitle,
             subtitle: l10n.computerHelpSubtitle,
@@ -785,50 +726,15 @@ class _ToolsPageState extends State<ToolsPage>
   }
 
   void _selectToolCategory(int index) {
-    final categories = _toolCategories();
-    if (index < 0 || index >= categories.length) return;
-    final targetRotation = -index * (math.pi * 2 / categories.length);
-    _animateWheelTo(index, targetRotation);
-  }
-
-  void _selectToolCategoryByRotation(double rotation) {
-    final categories = _toolCategories();
-    final segment = math.pi * 2 / categories.length;
-    final index = ((-rotation / segment).round() % categories.length);
-    final normalizedIndex = index < 0 ? index + categories.length : index;
-    _selectToolCategory(normalizedIndex);
-  }
-
-  void _setWheelDragRotation(double rotation) {
-    _wheelController.stop();
-    _wheelRotation = rotation;
-    _wheelAnimation = AlwaysStoppedAnimation<double>(_wheelRotation);
-    setState(() {});
-  }
-
-  void _animateWheelTo(int index, double targetRotation) {
-    final disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     setState(() => _selectedToolCategory = index);
+  }
 
-    if (disableAnimations) {
-      _wheelController.stop();
-      _wheelRotation = targetRotation;
-      _wheelAnimation = AlwaysStoppedAnimation<double>(_wheelRotation);
-      setState(() {});
-      return;
-    }
-
-    _wheelAnimation = Tween<double>(begin: _wheelRotation, end: targetRotation)
-        .animate(
-          CurvedAnimation(parent: _wheelController, curve: Curves.easeOutCubic),
-        );
-    _wheelController
-      ..stop()
-      ..reset()
-      ..forward().whenComplete(() {
-        _wheelRotation = targetRotation;
-      });
+  Future<void> _openToolCategory(ToolCategorySpec category) async {
+    if (ModalRoute.of(context)?.isCurrent == false) return;
+    _selectedToolCategory = _toolCategories().indexWhere(
+      (item) => item.id == category.id,
+    );
+    await _openSelectedToolCategory();
   }
 
   Future<void> _openSelectedToolCategory() async {
@@ -868,66 +774,11 @@ class _ToolsPageState extends State<ToolsPage>
     );
   }
 
-  Future<void> _openToolSearch() async {
-    final categories = _toolCategories();
-    final actions = categories.expand((category) => category.actions).toList();
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (context) {
-        return _ToolSearchSheet(
-          title: _tr('搜索工具', 'Search tools'),
-          emptyText: _tr('没有找到匹配工具', '没有找到匹配工具'),
-          initialQuery: _toolSearchQuery,
-          actions: actions,
-          onQueryChanged: (value) {
-            _setToolSearchQuery(value);
-          },
-        );
-      },
-    );
-  }
-
-  void _setToolSearchQuery(String value) {
-    if (_toolSearchQuery == value && _toolSearchController.text == value) {
-      return;
-    }
-    setState(() {
-      _toolSearchQuery = value;
-      if (_toolSearchController.text != value) {
-        _toolSearchController.value = TextEditingValue(
-          text: value,
-          selection: TextSelection.collapsed(offset: value.length),
-        );
-      }
-    });
-  }
-
-  void _clearToolSearch() {
-    _setToolSearchQuery('');
-  }
-
-  List<_ToolActionSpec> _filteredActions(List<_ToolCategorySpec> categories) {
-    final query = _toolSearchQuery.trim().toLowerCase();
-    if (query.isEmpty) return categories[_selectedToolCategory].actions;
-    return categories
-        .expand((category) => category.actions)
-        .where((action) => action.matches(query))
-        .toList();
-  }
-
   @override
   void initState() {
     super.initState();
-    _wheelController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 420),
-    );
-    _wheelAnimation = AlwaysStoppedAnimation<double>(_wheelRotation);
-    _toolSearchController = TextEditingController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || !widget.initializeServices) return;
       _initializeApod();
       _loadPdfHistory();
       _refreshDefaultOutputDirectory();
@@ -997,7 +848,7 @@ class _ToolsPageState extends State<ToolsPage>
                 title: _tr('暂无可见工具', '暂无可见工具'),
                 subtitle: _tr('请在设置的界面布局中恢复工具卡片。', '请在设置的界面布局中恢复工具卡片。'),
                 icon: Icons.visibility_off_outlined,
-                color: _dashboardPrimary,
+                color: Theme.of(context).colorScheme.primary,
               ),
             ),
           ),
@@ -1008,33 +859,42 @@ class _ToolsPageState extends State<ToolsPage>
     if (_selectedToolCategory >= categories.length) {
       _selectedToolCategory = categories.isEmpty ? 0 : categories.length - 1;
     }
-    final selectedCategory = categories[_selectedToolCategory];
-    final statusText = _status.isEmpty ? l10n.statusSelectTool : _status;
-
     return CustomScrollView(
+      key: const PageStorageKey('tools-dashboard'),
       controller: _dashboardScrollController,
-      physics: const BouncingScrollPhysics(),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       slivers: [
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           sliver: SliverToBoxAdapter(
-            child: _ToolCommandHeader(
-              title: _tr('工具', 'Tools'),
-              subtitle: _tr(
-                '常用学习、文件和网络工具集中在这里。',
-                'Study, file, and network tools in one workspace.',
-              ),
-              busy: _busy,
-              statusText: statusText,
-              searchHint: _tr(
-                '搜索工具、PDF、传输、云盘...',
-                'Search tools, PDF, transfer, cloud...',
-              ),
-              searchController: _toolSearchController,
-              onSearchTap: _openToolSearch,
+            child: ToolCatalog(
+              categories: categories,
+              pinnedIds: AppSettings
+                  .layoutPreferencesStore
+                  .notifier
+                  .value
+                  .pinnedToolActionIds,
+              onOpenCategory: _openToolCategory,
             ),
           ),
         ),
+        if (_busy || _status.isNotEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.all(16),
+            sliver: SliverToBoxAdapter(
+              child: Semantics(
+                liveRegion: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (_busy) const LinearProgressIndicator(),
+                    const SizedBox(height: 8),
+                    Text(_status.isEmpty ? l10n.statusSelectTool : _status),
+                  ],
+                ),
+              ),
+            ),
+          ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           sliver: const SliverToBoxAdapter(
@@ -1061,33 +921,6 @@ class _ToolsPageState extends State<ToolsPage>
                 ),
               ],
             ),
-          ),
-        ),
-        if (_toolSearchQuery.trim().isNotEmpty)
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-            sliver: SliverToBoxAdapter(
-              child: _ToolSearchResultsSection(
-                title: _tr('\u641c\u7d22\u7ed3\u679c', 'Search results'),
-                subtitle: _tr(
-                  '\u5df2\u5728\u5168\u90e8\u5de5\u5177\u4e2d\u7b5b\u9009\u5339\u914d\u9879\u3002',
-                  'Matching tools from every category.',
-                ),
-                emptyText: _tr(
-                  '\u6ca1\u6709\u627e\u5230\u5339\u914d\u5de5\u5177',
-                  'No matching tools',
-                ),
-                clearLabel: _tr('\u6e05\u7a7a', 'Clear'),
-                query: _toolSearchQuery,
-                actions: _filteredActions(categories),
-                onClear: _clearToolSearch,
-              ),
-            ),
-          ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-          sliver: SliverToBoxAdapter(
-            child: _buildFeaturedToolActions(categories),
           ),
         ),
         SliverPadding(
@@ -1119,40 +952,12 @@ class _ToolsPageState extends State<ToolsPage>
             ),
           ),
         ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-          sliver: SliverToBoxAdapter(
-            child: Column(
-              children: [
-                _ToolWheelPanel(
-                  categories: categories,
-                  selectedIndex: _selectedToolCategory,
-                  selectedCategory: selectedCategory,
-                  rotationAnimation: _wheelAnimation,
-                  onSelected: _selectToolCategory,
-                  onRotationChanged: _setWheelDragRotation,
-                  onRotationEnd: _selectToolCategoryByRotation,
-                  onCenterTap: _openSelectedToolCategory,
-                ),
-                const SizedBox(height: 12),
-                _CurrentCategoryPreview(
-                  category: selectedCategory,
-                  onOpenCategory: _openSelectedToolCategory,
-                ),
-              ],
-            ),
-          ),
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-          sliver: _buildCategoryShortcutGrid(categories),
-        ),
         SliverToBoxAdapter(child: SizedBox(height: totalBottomPadding + 20)),
       ],
     );
   }
 
-  Widget _buildCategoryShortcutGrid(List<_ToolCategorySpec> categories) {
+  Widget _buildCategoryShortcutGrid(List<ToolCategorySpec> categories) {
     return SliverLayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.crossAxisExtent - 32;
@@ -1176,8 +981,8 @@ class _ToolsPageState extends State<ToolsPage>
     );
   }
 
-  Widget _buildFeaturedToolActions(List<_ToolCategorySpec> categories) {
-    final featured = <_ToolActionSpec>[];
+  Widget _buildFeaturedToolActions(List<ToolCategorySpec> categories) {
+    final featured = <ToolActionSpec>[];
     for (final category in categories) {
       if (category.actions.isNotEmpty) {
         featured.add(category.actions.first);
@@ -1227,9 +1032,9 @@ class _ToolsPageState extends State<ToolsPage>
   }
 
   List<ToolWorkflowRecipe> _recommendedRecipes(
-    List<_ToolCategorySpec> categories,
+    List<ToolCategorySpec> categories,
   ) {
-    final byId = <String, _ToolActionSpec>{
+    final byId = <String, ToolActionSpec>{
       for (final category in categories)
         for (final action in category.actions) action.id: action,
     };
@@ -1298,7 +1103,7 @@ class _ToolsPageState extends State<ToolsPage>
     );
   }
 
-  Widget _buildToolActionGrid(List<_ToolActionSpec> actions) {
+  Widget _buildToolActionGrid(List<ToolActionSpec> actions) {
     return SliverLayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.crossAxisExtent - 32;
@@ -1343,7 +1148,7 @@ class _ToolsPageState extends State<ToolsPage>
         imageUrl: _apodData!.url,
         fit: BoxFit.cover,
         placeholder: (context, progress) => Container(
-          color: _dashboardPrimary.withValues(alpha: 0.08),
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
           alignment: Alignment.center,
           child: const SizedBox(
             width: 20,
@@ -1379,8 +1184,10 @@ class _ToolsPageState extends State<ToolsPage>
     return AppCard(
       elevation: 0,
       radius: 20,
-      border: Border.all(color: _dashboardPrimary.withValues(alpha: 0.12)),
-      color: _dashboardSurface(context, _dashboardPrimary),
+      border: Border.all(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+      ),
+      color: _dashboardSurface(context, Theme.of(context).colorScheme.primary),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1399,12 +1206,12 @@ class _ToolsPageState extends State<ToolsPage>
                   children: [
                     _DashboardPill(
                       label: _tr('APOD', 'APOD'),
-                      color: _dashboardPrimary,
+                      color: Theme.of(context).colorScheme.primary,
                     ),
                     if (_apodData?.date.isNotEmpty == true)
                       _DashboardPill(
                         label: _apodData!.date,
-                        color: _dashboardSecondary,
+                        color: Theme.of(context).colorScheme.secondary,
                       ),
                   ],
                 ),
@@ -1443,7 +1250,7 @@ class _ToolsPageState extends State<ToolsPage>
                               );
                             }
                           : null,
-                      icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                      icon: Icon(Icons.open_in_new_rounded, size: 18),
                       label: Text(_tr('查看详情', '查看详情')),
                     ),
                     OutlinedButton.icon(
@@ -1454,7 +1261,7 @@ class _ToolsPageState extends State<ToolsPage>
                               height: 16,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : const Icon(Icons.refresh_rounded, size: 18),
+                          : Icon(Icons.refresh_rounded, size: 18),
                       label: Text(_tr('刷新', 'Refresh')),
                     ),
                   ],
@@ -1483,8 +1290,6 @@ class _ToolsPageState extends State<ToolsPage>
     AppSettings.pluginStore.enabledPluginsNotifier.removeListener(
       _onRegistryChanged,
     );
-    _toolSearchController.dispose();
-    _wheelController.dispose();
     _dashboardScrollController.dispose();
     _nasaApiService.dispose();
     super.dispose();
@@ -2284,7 +2089,7 @@ class _ToolsPageState extends State<ToolsPage>
                   color: Colors.white,
                 ),
               )
-            : const Icon(Icons.refresh_rounded),
+            : Icon(Icons.refresh_rounded),
       ),
       footnotes: [
         if (_apodData?.date.isNotEmpty == true)
@@ -2979,13 +2784,9 @@ class _ToolsPageState extends State<ToolsPage>
 
   @override
   Widget build(BuildContext context) {
-    final bottomSafeArea = MediaQuery.of(context).padding.bottom;
-    const floatingNavBarHeight = 80.0;
-    final totalBottomPadding = bottomSafeArea + floatingNavBarHeight;
-
     return Scaffold(
       appBar: AppBar(title: Text(l10n.toolsPageTitle)),
-      body: _buildDashboard(totalBottomPadding),
+      body: _buildDashboard(0),
     );
   }
 }
@@ -2997,293 +2798,6 @@ Color _dashboardSurface(BuildContext context, Color accent) {
     accent.withValues(alpha: alpha),
     theme.colorScheme.surface,
   );
-}
-
-class _ToolCommandHeader extends StatelessWidget {
-  const _ToolCommandHeader({
-    required this.title,
-    required this.subtitle,
-    required this.busy,
-    required this.statusText,
-    required this.searchHint,
-    required this.searchController,
-    this.onSearchTap,
-  });
-
-  final String title;
-  final String subtitle;
-  final bool busy;
-  final String statusText;
-  final String searchHint;
-  final TextEditingController searchController;
-  final VoidCallback? onSearchTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return AppCard(
-      elevation: 0,
-      radius: 24,
-      border: Border.all(color: _dashboardPrimary.withValues(alpha: 0.14)),
-      color: _dashboardSurface(context, _dashboardPrimary),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: _dashboardPrimary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Icon(
-                  Icons.blur_circular_rounded,
-                  color: _dashboardPrimary,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: theme.brightness == Brightness.dark
-                            ? null
-                            : _dashboardInk,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                        height: 1.35,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              _DashboardPill(
-                label: busy ? '处理中' : '待命',
-                color: busy ? _dashboardAction : _dashboardPrimary,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Semantics(
-            button: true,
-            textField: true,
-            label: searchHint,
-            child: TextField(
-              controller: searchController,
-              readOnly: true,
-              showCursor: false,
-              canRequestFocus: false,
-              onTap: onSearchTap,
-              decoration: InputDecoration(
-                hintText: searchHint,
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: const Icon(Icons.keyboard_arrow_up_rounded),
-                isDense: true,
-                filled: true,
-                fillColor: colorScheme.surface.withValues(alpha: 0.86),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            statusText,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ToolWheelPanel extends StatelessWidget {
-  const _ToolWheelPanel({
-    required this.categories,
-    required this.selectedIndex,
-    required this.selectedCategory,
-    required this.rotationAnimation,
-    required this.onSelected,
-    required this.onRotationChanged,
-    required this.onRotationEnd,
-    required this.onCenterTap,
-  });
-
-  final List<_ToolCategorySpec> categories;
-  final int selectedIndex;
-  final _ToolCategorySpec selectedCategory;
-  final Animation<double> rotationAnimation;
-  final ValueChanged<int> onSelected;
-  final ValueChanged<double> onRotationChanged;
-  final ValueChanged<double> onRotationEnd;
-  final VoidCallback onCenterTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return AppCard(
-      elevation: 0,
-      radius: 28,
-      border: Border.all(color: selectedCategory.color.withValues(alpha: 0.18)),
-      color: Color.alphaBlend(
-        selectedCategory.color.withValues(alpha: 0.055),
-        colorScheme.surface,
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final size = constraints.maxWidth.clamp(260.0, 360.0);
-          return Column(
-            children: [
-              SizedBox(
-                width: size,
-                height: size,
-                child: RepaintBoundary(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onPanUpdate: (details) {
-                      onRotationChanged(
-                        rotationAnimation.value + details.delta.dx * 0.014,
-                      );
-                    },
-                    onPanEnd: (_) => onRotationEnd(rotationAnimation.value),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        AnimatedBuilder(
-                          animation: rotationAnimation,
-                          builder: (context, _) {
-                            return CustomPaint(
-                              size: Size.square(size),
-                              painter: _TechWheelPainter(
-                                categories: categories,
-                                selectedIndex: selectedIndex,
-                                rotation: rotationAnimation.value,
-                                surfaceColor: colorScheme.surface,
-                                textColor: colorScheme.onSurface,
-                              ),
-                            );
-                          },
-                        ),
-                        AnimatedBuilder(
-                          animation: rotationAnimation,
-                          builder: (context, child) {
-                            return Transform.rotate(
-                              angle: rotationAnimation.value,
-                              child: child,
-                            );
-                          },
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              for (var i = 0; i < categories.length; i++)
-                                _WheelNodeButton(
-                                  index: i,
-                                  total: categories.length,
-                                  category: categories[i],
-                                  selected: i == selectedIndex,
-                                  radius: size * 0.38,
-                                  wheelRotation: rotationAnimation.value,
-                                  onSelected: onSelected,
-                                ),
-                            ],
-                          ),
-                        ),
-                        Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: onCenterTap,
-                            customBorder: const CircleBorder(),
-                            child: Container(
-                              width: size * 0.42,
-                              height: size * 0.42,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: colorScheme.surface.withValues(
-                                  alpha: 0.94,
-                                ),
-                                border: Border.all(
-                                  color: selectedCategory.color.withValues(
-                                    alpha: 0.42,
-                                  ),
-                                  width: 1.5,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: selectedCategory.color.withValues(
-                                      alpha: 0.18,
-                                    ),
-                                    blurRadius: 26,
-                                    offset: const Offset(0, 10),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    selectedCategory.icon,
-                                    color: selectedCategory.color,
-                                    size: 34,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    selectedCategory.label,
-                                    style: theme.textTheme.titleMedium
-                                        ?.copyWith(fontWeight: FontWeight.w900),
-                                  ),
-                                  Text(
-                                    '进入${selectedCategory.label}',
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: colorScheme.onSurfaceVariant,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
 }
 
 class _ToolEfficiencyOverview extends StatelessWidget {
@@ -3319,16 +2833,18 @@ class _ToolEfficiencyOverview extends StatelessWidget {
     return AppCard(
       elevation: 0,
       radius: 22,
-      border: Border.all(color: _dashboardPrimary.withValues(alpha: 0.14)),
-      color: _dashboardSurface(context, _dashboardPrimary),
+      border: Border.all(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.14),
+      ),
+      color: _dashboardSurface(context, Theme.of(context).colorScheme.primary),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const _ToolIconBox(
+              _ToolIconBox(
                 icon: Icons.space_dashboard_outlined,
-                color: _dashboardPrimary,
+                color: Theme.of(context).colorScheme.primary,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -3361,7 +2877,7 @@ class _ToolEfficiencyOverview extends StatelessWidget {
               IconButton(
                 tooltip: _localizedLabel(context, '刷新', 'Refresh'),
                 onPressed: onRefresh,
-                icon: const Icon(Icons.refresh_rounded),
+                icon: Icon(Icons.refresh_rounded),
               ),
             ],
           ),
@@ -3378,7 +2894,9 @@ class _ToolEfficiencyOverview extends StatelessWidget {
                   icon: busy
                       ? Icons.hourglass_top_rounded
                       : Icons.check_circle_outline,
-                  color: busy ? _dashboardAction : _dashboardPrimary,
+                  color: busy
+                      ? Theme.of(context).colorScheme.tertiary
+                      : Theme.of(context).colorScheme.primary,
                 ),
                 _EfficiencyMetricTile(
                   label: _localizedLabel(context, '输出收件箱', 'Output inbox'),
@@ -3394,7 +2912,7 @@ class _ToolEfficiencyOverview extends StatelessWidget {
                       ? '-'
                       : '${summary.missingCount + summary.duplicateCandidateCount}',
                   icon: Icons.rule_folder_outlined,
-                  color: _dashboardAction,
+                  color: Theme.of(context).colorScheme.tertiary,
                 ),
                 _EfficiencyMetricTile(
                   label: _localizedLabel(context, '最近任务', 'Recent tasks'),
@@ -3442,19 +2960,19 @@ class _ToolEfficiencyOverview extends StatelessWidget {
               const SizedBox(width: 8),
               FilledButton.tonalIcon(
                 onPressed: onOpenOutputManager,
-                icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                icon: Icon(Icons.inventory_2_outlined, size: 18),
                 label: Text(_localizedLabel(context, '收件箱', 'Inbox')),
               ),
               const SizedBox(width: 8),
               IconButton.outlined(
                 tooltip: _localizedLabel(context, '打开最近输出', 'Open latest'),
                 onPressed: onOpenLastOutput,
-                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                icon: Icon(Icons.open_in_new_rounded, size: 18),
               ),
               IconButton.outlined(
                 tooltip: _localizedLabel(context, '分享最近输出', 'Share latest'),
                 onPressed: onShareLastOutput,
-                icon: const Icon(Icons.share_outlined, size: 18),
+                icon: Icon(Icons.share_outlined, size: 18),
               ),
             ],
           ),
@@ -3535,16 +3053,18 @@ class _RecommendedWorkflowPanel extends StatelessWidget {
     return AppCard(
       elevation: 0,
       radius: 22,
-      border: Border.all(color: _dashboardAction.withValues(alpha: 0.15)),
-      color: _dashboardSurface(context, _dashboardAction),
+      border: Border.all(
+        color: Theme.of(context).colorScheme.tertiary.withValues(alpha: 0.15),
+      ),
+      color: _dashboardSurface(context, Theme.of(context).colorScheme.tertiary),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const _ToolIconBox(
+              _ToolIconBox(
                 icon: Icons.account_tree_outlined,
-                color: _dashboardAction,
+                color: Theme.of(context).colorScheme.tertiary,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -3624,7 +3144,9 @@ class _WorkflowRecipeCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: colorScheme.surface.withValues(alpha: 0.82),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _dashboardAction.withValues(alpha: 0.12)),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.tertiary.withValues(alpha: 0.12),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3655,7 +3177,7 @@ class _WorkflowRecipeCard extends StatelessWidget {
                 .map(
                   (step) => _DashboardPill(
                     label: step.label,
-                    color: _dashboardAction,
+                    color: Theme.of(context).colorScheme.tertiary,
                   ),
                 )
                 .toList(),
@@ -3682,7 +3204,7 @@ class _CurrentCategoryPreview extends StatelessWidget {
     required this.onOpenCategory,
   });
 
-  final _ToolCategorySpec category;
+  final ToolCategorySpec category;
   final VoidCallback onOpenCategory;
 
   @override
@@ -3714,7 +3236,7 @@ class _CurrentCategoryPreview extends StatelessWidget {
               ),
               TextButton.icon(
                 onPressed: onOpenCategory,
-                icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                icon: Icon(Icons.arrow_forward_rounded, size: 18),
                 label: const Text('查看全部'),
               ),
             ],
@@ -3741,7 +3263,7 @@ class _CurrentCategoryPreview extends StatelessWidget {
 class _CompactPreviewToolTile extends StatelessWidget {
   const _CompactPreviewToolTile({required this.action});
 
-  final _ToolActionSpec action;
+  final ToolActionSpec action;
 
   @override
   Widget build(BuildContext context) {
@@ -3780,150 +3302,6 @@ class _CompactPreviewToolTile extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _WheelNodeButton extends StatelessWidget {
-  const _WheelNodeButton({
-    required this.index,
-    required this.total,
-    required this.category,
-    required this.selected,
-    required this.radius,
-    required this.wheelRotation,
-    required this.onSelected,
-  });
-
-  final int index;
-  final int total;
-  final _ToolCategorySpec category;
-  final bool selected;
-  final double radius;
-  final double wheelRotation;
-  final ValueChanged<int> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final angle = (math.pi * 2 / total) * index - math.pi / 2;
-    final offset = Offset(math.cos(angle) * radius, math.sin(angle) * radius);
-
-    return Transform.translate(
-      offset: offset,
-      child: Semantics(
-        button: true,
-        enabled: true,
-        selected: selected,
-        label: '${category.label}, ${category.subtitle}',
-        child: GestureDetector(
-          onTap: () => onSelected(index),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            width: selected ? 70 : 58,
-            height: selected ? 70 : 58,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Color.alphaBlend(
-                category.color.withValues(alpha: selected ? 0.20 : 0.10),
-                Theme.of(context).colorScheme.surface,
-              ),
-              border: Border.all(
-                color: category.color.withValues(alpha: selected ? 0.7 : 0.25),
-                width: selected ? 2 : 1,
-              ),
-              boxShadow: [
-                if (selected)
-                  BoxShadow(
-                    color: category.color.withValues(alpha: 0.22),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-              ],
-            ),
-            child: Transform.rotate(
-              angle: -wheelRotation,
-              child: Icon(
-                category.icon,
-                color: category.color,
-                size: selected ? 31 : 27,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TechWheelPainter extends CustomPainter {
-  const _TechWheelPainter({
-    required this.categories,
-    required this.selectedIndex,
-    required this.rotation,
-    required this.surfaceColor,
-    required this.textColor,
-  });
-
-  final List<_ToolCategorySpec> categories;
-  final int selectedIndex;
-  final double rotation;
-  final Color surfaceColor;
-  final Color textColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    final radius = size.shortestSide / 2;
-    final ringPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..color = textColor.withValues(alpha: 0.08);
-    final activePaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round
-      ..color = categories[selectedIndex].color.withValues(alpha: 0.72);
-
-    for (final factor in const [0.34, 0.58, 0.82]) {
-      canvas.drawCircle(center, radius * factor, ringPaint);
-    }
-
-    final segment = math.pi * 2 / categories.length;
-    for (var i = 0; i < categories.length; i++) {
-      final angle = segment * i - math.pi / 2 + rotation;
-      final start =
-          center + Offset(math.cos(angle), math.sin(angle)) * radius * 0.22;
-      final end =
-          center + Offset(math.cos(angle), math.sin(angle)) * radius * 0.84;
-      canvas.drawLine(start, end, ringPaint);
-    }
-
-    final activeStart =
-        -math.pi / 2 + segment * selectedIndex + rotation - segment * 0.34;
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius * 0.82),
-      activeStart,
-      segment * 0.68,
-      false,
-      activePaint,
-    );
-
-    final dotPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..color = categories[selectedIndex].color.withValues(alpha: 0.42);
-    for (var i = 0; i < categories.length; i++) {
-      final angle = segment * i - math.pi / 2 + rotation;
-      final dot =
-          center + Offset(math.cos(angle), math.sin(angle)) * radius * 0.58;
-      canvas.drawCircle(dot, i == selectedIndex ? 4 : 2.5, dotPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _TechWheelPainter oldDelegate) {
-    return oldDelegate.selectedIndex != selectedIndex ||
-        oldDelegate.rotation != rotation ||
-        oldDelegate.categories != categories ||
-        oldDelegate.textColor != textColor;
   }
 }
 
@@ -3990,7 +3368,7 @@ class _ToolStatusStrip extends StatelessWidget {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: onOpenOutput,
-                    icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                    icon: Icon(Icons.open_in_new_rounded, size: 18),
                     label: const Text('打开输出'),
                   ),
                 ),
@@ -3998,7 +3376,7 @@ class _ToolStatusStrip extends StatelessWidget {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: onShareOutput,
-                    icon: const Icon(Icons.share_outlined, size: 18),
+                    icon: Icon(Icons.share_outlined, size: 18),
                     label: const Text('分享输出'),
                   ),
                 ),
@@ -4027,7 +3405,7 @@ class _MiniMetric extends StatelessWidget {
     final theme = Theme.of(context);
     return Row(
       children: [
-        Icon(icon, size: 18, color: _dashboardPrimary),
+        Icon(icon, size: 18, color: Theme.of(context).colorScheme.primary),
         const SizedBox(width: 6),
         Expanded(
           child: Column(
@@ -4100,7 +3478,7 @@ class _ToolSearchResultsSection extends StatelessWidget {
   final String emptyText;
   final String clearLabel;
   final String query;
-  final List<_ToolActionSpec> actions;
+  final List<ToolActionSpec> actions;
   final VoidCallback onClear;
 
   @override
@@ -4111,8 +3489,10 @@ class _ToolSearchResultsSection extends StatelessWidget {
     return AppCard(
       elevation: 0,
       radius: 22,
-      border: Border.all(color: _dashboardPrimary.withValues(alpha: 0.16)),
-      color: _dashboardSurface(context, _dashboardPrimary),
+      border: Border.all(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+      ),
+      color: _dashboardSurface(context, Theme.of(context).colorScheme.primary),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4123,7 +3503,7 @@ class _ToolSearchResultsSection extends StatelessWidget {
             children: [
               _ToolIconBox(
                 icon: Icons.manage_search_rounded,
-                color: _dashboardPrimary,
+                color: Theme.of(context).colorScheme.primary,
               ),
               ConstrainedBox(
                 constraints: const BoxConstraints(minWidth: 180),
@@ -4153,7 +3533,7 @@ class _ToolSearchResultsSection extends StatelessWidget {
               ),
               TextButton.icon(
                 onPressed: onClear,
-                icon: const Icon(Icons.close_rounded, size: 18),
+                icon: Icon(Icons.close_rounded, size: 18),
                 label: Text(clearLabel),
               ),
             ],
@@ -4197,7 +3577,7 @@ class _ToolSearchResultsSection extends StatelessWidget {
 class _ToolActionCard extends StatelessWidget {
   const _ToolActionCard({required this.action});
 
-  final _ToolActionSpec action;
+  final ToolActionSpec action;
 
   @override
   Widget build(BuildContext context) {
@@ -4293,7 +3673,7 @@ class _ToolCategoryShortcutCard extends StatelessWidget {
     required this.onTap,
   });
 
-  final _ToolCategorySpec category;
+  final ToolCategorySpec category;
   final bool selected;
   final VoidCallback onTap;
 
@@ -4377,7 +3757,7 @@ class _ToolCategoryDetailPage extends StatelessWidget {
     this.onCopyPdfOutput,
   });
 
-  final _ToolCategorySpec category;
+  final ToolCategorySpec category;
   final String? pdfOutputDirectory;
   final String? pdfLastOutputPath;
   final VoidCallback? onOpenPdfOutput;
@@ -4450,7 +3830,10 @@ class _ToolCategoryDetailPage extends StatelessWidget {
             sliver: SliverLayoutBuilder(
               builder: (context, constraints) {
                 final width = constraints.crossAxisExtent;
-                final columns = width >= 1100
+                final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+                final columns = scale > 1.4
+                    ? 1
+                    : width >= 1100
                     ? 4
                     : width >= 720
                     ? 3
@@ -4463,7 +3846,7 @@ class _ToolCategoryDetailPage extends StatelessWidget {
                     crossAxisCount: columns,
                     mainAxisSpacing: 12,
                     crossAxisSpacing: 12,
-                    childAspectRatio: width < 380 ? 0.96 : 1.08,
+                    mainAxisExtent: 188 + (scale - 1).clamp(0, 3) * 110,
                   ),
                 );
               },
@@ -4494,7 +3877,7 @@ class _ToolCategoryDetailPage extends StatelessWidget {
 class _VisualToolTile extends StatelessWidget {
   const _VisualToolTile({required this.action});
 
-  final _ToolActionSpec action;
+  final ToolActionSpec action;
 
   @override
   Widget build(BuildContext context) {
@@ -4703,17 +4086,17 @@ class _PdfOutputHelpPanel extends StatelessWidget {
                 children: [
                   OutlinedButton.icon(
                     onPressed: onOpenOutput,
-                    icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                    icon: Icon(Icons.open_in_new_rounded, size: 18),
                     label: Text(_localizedLabel(context, '打开输出', 'Open')),
                   ),
                   OutlinedButton.icon(
                     onPressed: onShareOutput,
-                    icon: const Icon(Icons.share_outlined, size: 18),
+                    icon: Icon(Icons.share_outlined, size: 18),
                     label: Text(_localizedLabel(context, '分享输出', 'Share')),
                   ),
                   OutlinedButton.icon(
                     onPressed: onCopyOutput,
-                    icon: const Icon(Icons.copy_outlined, size: 18),
+                    icon: Icon(Icons.copy_outlined, size: 18),
                     label: Text(_localizedLabel(context, '复制路径', 'Copy path')),
                   ),
                 ],
@@ -4774,133 +4157,6 @@ class _PathSummaryRow extends StatelessWidget {
   }
 }
 
-class _ToolSearchSheet extends StatefulWidget {
-  const _ToolSearchSheet({
-    required this.title,
-    required this.emptyText,
-    required this.initialQuery,
-    required this.actions,
-    required this.onQueryChanged,
-  });
-
-  final String title;
-  final String emptyText;
-  final String initialQuery;
-  final List<_ToolActionSpec> actions;
-  final ValueChanged<String> onQueryChanged;
-
-  @override
-  State<_ToolSearchSheet> createState() => _ToolSearchSheetState();
-}
-
-class _ToolSearchSheetState extends State<_ToolSearchSheet> {
-  late final TextEditingController _controller;
-  late String _query;
-
-  @override
-  void initState() {
-    super.initState();
-    _query = widget.initialQuery;
-    _controller = TextEditingController(text: widget.initialQuery);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  List<_ToolActionSpec> get _filteredActions {
-    final query = _query.trim().toLowerCase();
-    if (query.isEmpty) return widget.actions;
-    return widget.actions.where((action) => action.matches(query)).toList();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final actions = _filteredActions;
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              prefixIcon: Icon(Icons.search_rounded),
-              hintText: '输入工具名称',
-              border: OutlineInputBorder(),
-            ),
-            onChanged: (value) {
-              setState(() => _query = value);
-              widget.onQueryChanged(value);
-            },
-          ),
-          const SizedBox(height: 12),
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.52,
-            ),
-            child: actions.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(widget.emptyText),
-                    ),
-                  )
-                : ListView.separated(
-                    shrinkWrap: true,
-                    itemBuilder: (context, index) {
-                      final action = actions[index];
-                      return ListTile(
-                        leading: _ToolIconBox(
-                          icon: action.icon,
-                          color: action.color,
-                        ),
-                        title: Text(action.title),
-                        subtitle: Text(
-                          action.subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: action.badge == null
-                            ? null
-                            : _DashboardPill(
-                                label: action.badge!,
-                                color: action.color,
-                              ),
-                        onTap: action.onTap == null
-                            ? null
-                            : () {
-                                Navigator.pop(context);
-                                action.onTap!();
-                              },
-                      );
-                    },
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemCount: actions.length,
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _ToolQuickControls extends StatelessWidget {
   const _ToolQuickControls({
     required this.title,
@@ -4948,9 +4204,9 @@ class _ToolQuickControls extends StatelessWidget {
         children: [
           Row(
             children: [
-              const _ToolIconBox(
+              _ToolIconBox(
                 icon: Icons.tune_rounded,
-                color: _dashboardPrimary,
+                color: Theme.of(context).colorScheme.primary,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -4997,12 +4253,12 @@ class _ToolQuickControls extends StatelessWidget {
             children: [
               FilledButton.tonalIcon(
                 onPressed: onPickOutputDirectory,
-                icon: const Icon(Icons.folder_open_rounded, size: 18),
+                icon: Icon(Icons.folder_open_rounded, size: 18),
                 label: Text(pickOutputLabel),
               ),
               OutlinedButton.icon(
                 onPressed: onResetOutputDirectory,
-                icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                icon: Icon(Icons.restart_alt_rounded, size: 18),
                 label: Text(resetOutputLabel),
               ),
             ],
@@ -5059,9 +4315,9 @@ class _DashboardTaskHistoryPanel extends StatelessWidget {
       child: ExpansionTile(
         tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         childrenPadding: EdgeInsets.zero,
-        leading: const _ToolIconBox(
+        leading: _ToolIconBox(
           icon: Icons.history_rounded,
-          color: _dashboardPrimary,
+          color: Theme.of(context).colorScheme.primary,
           size: 40,
           iconSize: 20,
         ),
@@ -5102,7 +4358,9 @@ class _DashboardTaskHistoryPanel extends StatelessWidget {
                 ),
                 leading: Icon(
                   task.success ? Icons.check_circle : Icons.error_outline,
-                  color: task.success ? _dashboardPrimary : colorScheme.error,
+                  color: task.success
+                      ? Theme.of(context).colorScheme.primary
+                      : colorScheme.error,
                   size: 20,
                 ),
                 title: Text(
@@ -5129,12 +4387,12 @@ class _DashboardTaskHistoryPanel extends StatelessWidget {
                               '分享输出',
                               'Share output',
                             ),
-                            icon: const Icon(Icons.share_outlined, size: 18),
+                            icon: Icon(Icons.share_outlined, size: 18),
                             onPressed: () => onSharePath(task.outputPath),
                           ),
                           IconButton(
                             tooltip: copyTooltip,
-                            icon: const Icon(Icons.copy_outlined, size: 18),
+                            icon: Icon(Icons.copy_outlined, size: 18),
                             onPressed: () => onCopyPath(task.outputPath),
                           ),
                         ],
@@ -5749,7 +5007,7 @@ class _WorkbenchStatusPanel extends StatelessWidget {
           children: [
             Row(
               children: [
-                const _ToolIconBox(
+                _ToolIconBox(
                   icon: Icons.space_dashboard_outlined,
                   color: Colors.orange,
                   size: 42,
@@ -5841,22 +5099,22 @@ class _WorkbenchStatusPanel extends StatelessWidget {
               children: [
                 FilledButton.tonalIcon(
                   onPressed: onPickOutputDirectory,
-                  icon: const Icon(Icons.folder_open, size: 18),
+                  icon: Icon(Icons.folder_open, size: 18),
                   label: Text(pickOutputLabel),
                 ),
                 OutlinedButton.icon(
                   onPressed: onResetOutputDirectory,
-                  icon: const Icon(Icons.restart_alt, size: 18),
+                  icon: Icon(Icons.restart_alt, size: 18),
                   label: Text(resetOutputLabel),
                 ),
                 OutlinedButton.icon(
                   onPressed: onOpenOutput,
-                  icon: const Icon(Icons.open_in_new, size: 18),
+                  icon: Icon(Icons.open_in_new, size: 18),
                   label: Text(openOutputLabel),
                 ),
                 OutlinedButton.icon(
                   onPressed: onShareOutput,
-                  icon: const Icon(Icons.share_outlined, size: 18),
+                  icon: Icon(Icons.share_outlined, size: 18),
                   label: Text(shareOutputLabel),
                 ),
               ],
@@ -5900,7 +5158,7 @@ class _RecentTasksPanel extends StatelessWidget {
       child: ExpansionTile(
         tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         childrenPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.history_rounded),
+        leading: Icon(Icons.history_rounded),
         title: Text(
           title,
           style: theme.textTheme.titleSmall?.copyWith(
@@ -5965,12 +5223,12 @@ class _RecentTasksPanel extends StatelessWidget {
                               '分享输出',
                               'Share output',
                             ),
-                            icon: const Icon(Icons.share_outlined, size: 18),
+                            icon: Icon(Icons.share_outlined, size: 18),
                             onPressed: () => onSharePath(task.outputPath),
                           ),
                           IconButton(
                             tooltip: copyTooltip,
-                            icon: const Icon(Icons.copy_outlined, size: 18),
+                            icon: Icon(Icons.copy_outlined, size: 18),
                             onPressed: () => onCopyPath(task.outputPath),
                           ),
                         ],

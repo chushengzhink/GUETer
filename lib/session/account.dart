@@ -270,6 +270,14 @@ class AccountManager {
 
   static String? get currentSessionId => _currentSessionId;
 
+  /// Read a platform's selected session without switching the global platform.
+  static String? currentSessionForPlatform(PlatformType platform) {
+    final name = _getPlatformName(platform);
+    return _normalizePlatformStorageName(name) == _currentPlatformStorageKey
+        ? _currentSessionId
+        : _prefs.getString(_sessionKeyForPlatformName(name));
+  }
+
   static User? get currentAccount {
     final userId = _currentSessionId;
     if (userId == null || userId.isEmpty) {

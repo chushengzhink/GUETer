@@ -52,6 +52,11 @@ class ExamController extends GetxController {
   final RxMap<String, String> answerCache = <String, String>{}.obs;
   final RxBool isLoading = false.obs;
   final RxBool isSaving = false.obs;
+  final RxBool isSubmitting = false.obs;
+  final RxBool isSubmitted = false.obs;
+  final RxSet<String> unsavedAnswers = <String>{}.obs;
+  final Map<String, Future<bool>> _pendingSaves = {};
+  int _activeSaves = 0;
   final RxString error = ''.obs;
 
   final KetangpaiExamListRequest _listRequest;
@@ -104,6 +109,10 @@ class ExamController extends GetxController {
 
     isLoading.value = true;
     error.value = '';
+    if (_currentCourseId != trimmedCourseId ||
+        _currentPaperId != trimmedPaperId) {
+      isSubmitted.value = false;
+    }
     _currentCourseId = trimmedCourseId;
     _currentPaperId = trimmedPaperId;
     try {
@@ -157,15 +166,34 @@ class ExamController extends GetxController {
       }
     }
     answerCache.assignAll(next);
+    unsavedAnswers.clear();
   }
 
   void updateCachedAnswer(String subjectId, String answer) {
     final trimmedSubjectId = subjectId.trim();
     if (trimmedSubjectId.isEmpty) return;
     answerCache[trimmedSubjectId] = answer;
+    unsavedAnswers.add(trimmedSubjectId);
   }
 
-  Future<bool> saveAnswer(String subjectId, String answer) async {
+  Future<bool> saveAnswer(String subjectId, String answer) {
+    final id = subjectId.trim();
+    final previous = _pendingSaves[id];
+    // Serialize explicitly requested edits for the same answer. Never retry a
+    // failed write automatically, and never let an old response replace input.
+    late final Future<bool> request;
+    request =
+        (() async {
+          if (previous != null) await previous;
+          return _saveAnswerNow(id, answer);
+        })().whenComplete(() {
+          if (identical(_pendingSaves[id], request)) _pendingSaves.remove(id);
+        });
+    _pendingSaves[id] = request;
+    return request;
+  }
+
+  Future<bool> _saveAnswerNow(String subjectId, String answer) async {
     final courseId = _currentCourseId;
     final paperId = _currentPaperId;
     if (courseId == null ||
@@ -182,6 +210,7 @@ class ExamController extends GetxController {
       return false;
     }
 
+    _activeSaves++;
     isSaving.value = true;
     error.value = '';
     try {
@@ -196,7 +225,11 @@ class ExamController extends GetxController {
         _notifier('保存答案', error.value, false);
         return false;
       }
-      answerCache[trimmedSubjectId] = answer;
+      if (answerCache[trimmedSubjectId] == null ||
+          answerCache[trimmedSubjectId] == answer) {
+        answerCache[trimmedSubjectId] = answer;
+        unsavedAnswers.remove(trimmedSubjectId);
+      }
       _notifier('保存答案', result.message.isEmpty ? '保存成功' : result.message, true);
       return true;
     } catch (e) {
@@ -204,11 +237,13 @@ class ExamController extends GetxController {
       _notifier('保存答案', error.value, false);
       return false;
     } finally {
-      isSaving.value = false;
+      _activeSaves--;
+      isSaving.value = _activeSaves > 0 || isSubmitting.value;
     }
   }
 
   Future<bool> submitExam(String courseId, String paperId) async {
+    if (isSubmitting.value || isSubmitted.value) return false;
     final trimmedCourseId = courseId.trim();
     final trimmedPaperId = paperId.trim();
     if (trimmedCourseId.isEmpty || trimmedPaperId.isEmpty) {
@@ -216,10 +251,12 @@ class ExamController extends GetxController {
       return false;
     }
 
+    isSubmitting.value = true;
     isSaving.value = true;
     error.value = '';
     try {
-      for (final entry in answerCache.entries) {
+      await Future.wait(_pendingSaves.values.toList());
+      for (final entry in answerCache.entries.toList()) {
         final saveResult = await _saveRequest(
           courseId: trimmedCourseId,
           testPaperId: trimmedPaperId,
@@ -243,6 +280,8 @@ class ExamController extends GetxController {
         return false;
       }
 
+      unsavedAnswers.clear();
+      isSubmitted.value = true;
       _notifier(
         '提交试卷',
         submitResult.message.isEmpty ? '提交成功' : submitResult.message,
@@ -254,7 +293,8 @@ class ExamController extends GetxController {
       _notifier('提交试卷', error.value, false);
       return false;
     } finally {
-      isSaving.value = false;
+      isSubmitting.value = false;
+      isSaving.value = _activeSaves > 0;
     }
   }
 

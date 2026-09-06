@@ -44,6 +44,7 @@ ExamController _examController({
   void Function(String subjectId, String answer)? onSave,
   void Function(String courseId, String paperId)? onSubmit,
   bool saveSuccess = true,
+  int remainingTimes = 3661,
 }) {
   return ExamController(
     notifier: (_, _, _) {},
@@ -66,6 +67,8 @@ ExamController _examController({
           'id': testPaperId,
           'courseid': courseId,
           'title': 'Final exam',
+          'nickname': 'Student Name',
+          'studentId': '2026001',
         },
       });
     },
@@ -116,6 +119,7 @@ ExamController _examController({
           },
         ],
         'testpaper': {'id': testPaperId, 'courseid': courseId},
+        'remainTimes': remainingTimes,
       });
     },
     saveRequest:
@@ -145,28 +149,31 @@ ExamController _examController({
 Future<void> _pumpQuestionPage(
   WidgetTester tester, {
   ExamController? controller,
+  bool readOnly = false,
 }) async {
   await tester.pumpWidget(
     GetMaterialApp(
       home: KetangpaiExamQuestionPageV2(
         courseId: 'course-1',
         paperId: 'paper-1',
+        readOnly: readOnly,
         examController: controller ?? _examController(),
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  await tester.pump();
+  await tester.pump();
 }
 
 Future<void> _tapNextQuestion(WidgetTester tester) async {
-  await tester.tap(find.byType(OutlinedButton).at(1));
+  await tester.tap(find.byKey(const ValueKey('ketangpai-next-question')));
   await tester.pumpAndSettle();
 }
 
 Future<void> _confirmSubmit(WidgetTester tester) async {
-  await tester.tap(find.byType(FilledButton).last);
+  await tester.tap(find.widgetWithText(TextButton, '交卷'));
   await tester.pumpAndSettle();
-  await tester.tap(find.byType(FilledButton).last);
+  await tester.tap(find.widgetWithText(FilledButton, '交卷'));
   await tester.pumpAndSettle();
 }
 
@@ -195,9 +202,44 @@ void main() {
   ) async {
     await _pumpQuestionPage(tester);
 
+    expect(find.text('剩余 01:01:01'), findsOneWidget);
+    expect(find.text('答题卡'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '交卷'), findsOneWidget);
+    expect(find.text('第一题'), findsOneWidget);
+    expect(find.text('下一题'), findsOneWidget);
+    expect(find.byType(CustomPaint), findsWidgets);
     expect(find.byType(RadioListTile<String>), findsNWidgets(2));
     await _tapNextQuestion(tester);
     expect(find.byType(CheckboxListTile), findsNWidgets(2));
+  });
+
+  testWidgets('question page countdown uses remainingTimes from paper data', (
+    tester,
+  ) async {
+    await _pumpQuestionPage(tester);
+
+    expect(find.text('剩余 01:01:01'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 2));
+
+    expect(find.text('剩余 01:00:59'), findsOneWidget);
+  });
+
+  testWidgets('question page hides countdown when remainingTimes is zero', (
+    tester,
+  ) async {
+    await _pumpQuestionPage(
+      tester,
+      controller: _examController(remainingTimes: 0),
+    );
+
+    expect(find.textContaining('剩余'), findsNothing);
+  });
+
+  testWidgets('question page hides countdown in read only mode', (tester) async {
+    await _pumpQuestionPage(tester, readOnly: true);
+
+    expect(find.textContaining('剩余'), findsNothing);
   });
 
   testWidgets('judge question writes selected answer into cache', (
@@ -245,7 +287,7 @@ void main() {
     }
     await tester.enterText(find.byType(TextField).first, 'kept answer');
     await _tapNextQuestion(tester);
-    await tester.tap(find.byType(OutlinedButton).first);
+    await tester.tap(find.byKey(const ValueKey('ketangpai-prev-question')));
     await tester.pumpAndSettle();
 
     expect(find.text('kept answer'), findsOneWidget);

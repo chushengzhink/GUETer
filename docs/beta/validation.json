@@ -1,0 +1,20 @@
+{
+  "branch": "beta",
+  "versionName": "1.0.14",
+  "androidVersionCode": 2015,
+  "applicationId": "com.gueter.cszm",
+  "minSdk": 29,
+  "targetSdk": 36,
+  "abi": "arm64-v8a",
+  "apk": "build/app/outputs/flutter-apk/GUETer-beta-1.0.14-arm64.apk",
+  "bytes": 90282348,
+  "sha256": "C555FE4EBAFDE8BBE1750BF1149D73C275210F8A5720F0C5FF63572DED3CD650",
+  "signature": "APK v2 verified, one signer",
+  "testsPassed": 539,
+  "testsFailed": 0,
+  "analyze": "No issues found",
+  "toolsPreserved": 28,
+  "layoutScenarios": 24,
+  "pageRenders": 4,
+  "physicalDeviceTested": false
+}

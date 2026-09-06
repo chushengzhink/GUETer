@@ -25,6 +25,7 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
+  Future<void>? _initializing;
   bool _notificationsEnabled = true;
   bool _showTodosOnLockScreen = true;
 
@@ -33,9 +34,14 @@ class NotificationService {
       'todo_notifications_show_on_lock_screen';
   static const int _ongoingNotificationId = 999999;
 
-  Future<void> initialize() async {
-    if (_initialized) return;
+  Future<void> initialize() {
+    if (_initialized) return Future.value();
+    return _initializing ??= _initialize().whenComplete(
+      () => _initializing = null,
+    );
+  }
 
+  Future<void> _initialize() async {
     tz.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
 
