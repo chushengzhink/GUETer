@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+ <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#3A91FF"/><stop offset=".46" stop-color="#4969EE"/><stop offset="1" stop-color="#8547DD"/></linearGradient>
+ <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#FFFFFF" stop-opacity=".62"/><stop offset="1" stop-color="#FFFFFF" stop-opacity=".07"/></linearGradient>
+ <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#DBEAFF"/></linearGradient>
+ <linearGradient id="badge" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#71D7FF"/><stop offset=".52" stop-color="#329BFF"/><stop offset="1" stop-color="#3A66E5"/></linearGradient>
+ <radialGradient id="glow" cx=".1" cy="0" r="1"><stop stop-color="#FFFFFF" stop-opacity=".32"/><stop offset=".8" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>
+</defs>
+<rect x="60" y="72" width="904" height="904" rx="216" fill="#342279" opacity=".17"/>
+<rect x="60" y="52" width="904" height="904" rx="216" fill="url(#tile)"/>
+<rect x="67" y="59" width="890" height="890" rx="209" fill="url(#glow)" stroke="url(#rim)" stroke-width="3"/>
+<!-- An open book: simple silhouette survives small desktop sizes. -->
+<path d="M228 320 Q349 286 478 360 Q596 288 718 320 L718 682 Q586 656 478 732 Q356 660 228 688 Z" fill="#242A92" opacity=".22" transform="translate(0 24)"/>
+<path d="M214 322 Q334 279 478 351 Q612 279 734 322 L734 665 Q614 636 478 713 Q336 637 214 673 Z" fill="#BBCDFB"/>
+<path d="M226 299 Q347 274 478 349 L478 690 Q350 621 226 653 Z" fill="url(#paper)"/>
+<path d="M478 349 Q606 276 722 299 L722 653 Q606 626 478 690 Z" fill="#FFFFFF"/>
+<path d="M478 353 L478 684" stroke="#BCD2F7" stroke-width="10" stroke-linecap="round"/>
+<path d="M280 391 Q351 385 414 420 M280 455 Q351 449 414 483 M280 519 Q351 513 414 547" fill="none" stroke="#9EB9EC" stroke-width="17" stroke-linecap="round"/>
+<path d="M542 420 Q600 386 668 391 M542 483 Q600 449 654 454" fill="none" stroke="#BED0F2" stroke-width="17" stroke-linecap="round"/>
+<!-- Raised check badge, with a white separation rim. -->
+<circle cx="716" cy="701" r="151" fill="#2F287E" opacity=".23"/>
+<circle cx="716" cy="682" r="151" fill="#ECF5FF"/>
+<circle cx="716" cy="682" r="136" fill="url(#badge)"/>
+<path d="M650 680 L697 728 L788 630" fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

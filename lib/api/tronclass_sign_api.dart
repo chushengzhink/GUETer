@@ -7,6 +7,7 @@ import '../platform.dart';
 import '../session/account.dart';
 import '../utils/user_agent.dart';
 import 'api_service.dart';
+import 'platform_read_exception.dart';
 import 'sign_request_profile.dart';
 import 'tronclass_client.dart';
 
@@ -123,17 +124,38 @@ class TronclassSignApi {
   }
 
   static Future<RollcallsResponse> getRollcalls() async {
-    final client = await _client();
-    final headers = await _headers();
+    try {
+      final client = await _client();
+      final headers = await _headers();
+      final response = await client.dio.get<dynamic>(
+        '/api/radar/rollcalls?api_version=1.1.0',
+        options: Options(headers: headers, responseType: ResponseType.plain),
+      );
+      ApiService.appendExternalConsoleLog(
+        'tronclass',
+        'GET /api/radar/rollcalls status=${response.statusCode} '
+            'contentType=${response.headers.value(Headers.contentTypeHeader)} '
+            'responseType=${response.data.runtimeType}',
+      );
+      return parseRollcalls(response);
+    } catch (error) {
+      ApiService.appendExternalConsoleLog(
+        'tronclass',
+        'rollcall read failed: $error',
+      );
+      throw PlatformReadException.from(error);
+    }
+  }
 
-    final response = await client.dio.get<Map<String, dynamic>>(
-      '/api/radar/rollcalls?api_version=1.1.0',
-      options: Options(headers: headers, responseType: ResponseType.json),
-    );
-
-    final data = response.data;
-    if (data == null) {
-      throw Exception('获取签到列表失败');
+  static RollcallsResponse parseRollcalls(Response response) {
+    final data = readPlatformObject(response);
+    final code = (data['code'] ?? data['error'] ?? '').toString();
+    if (const ['401', '403', 'unauthorized', 'not_login'].contains(code)) {
+      throw const PlatformReadException(PlatformReadFailure.auth);
+    }
+    final list = data['rollcalls'];
+    if (list is! List || list.any((item) => item is! Map)) {
+      throw const PlatformReadException(PlatformReadFailure.format);
     }
     return RollcallsResponse.fromJson(data);
   }
@@ -232,7 +254,7 @@ class TronclassSignApi {
   static Future<TronclassClient> _client() async {
     final userId = AccountManager.currentSessionId;
     if (userId == null || userId.isEmpty) {
-      throw Exception('未登录，无法访问畅课签到接口');
+      throw const PlatformReadException(PlatformReadFailure.auth);
     }
     return TronclassClient.getInstance(userId);
   }
@@ -250,8 +272,12 @@ class TronclassSignApi {
     send,
   }) async {
     final response = await SignRequestExecutor.run(
-      context: SignRequestContext(platform: PlatformType.tronclass,
-        url: PlatformManager().tronclassBaseUrl, method: 'PUT', contentKind: SignRequestContentKind.json),
+      context: SignRequestContext(
+        platform: PlatformType.tronclass,
+        url: PlatformManager().tronclassBaseUrl,
+        method: 'PUT',
+        contentKind: SignRequestContentKind.json,
+      ),
       profile: profile,
       headers: headers.map((key, value) => MapEntry(key, value.toString())),
       legacyHeaders: headers.map(

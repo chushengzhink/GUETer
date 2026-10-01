@@ -1,3 +1,5 @@
+import '../api/platform_read_exception.dart';
+import '../widgets/account_context_header.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -31,6 +33,8 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
   List<Course>? _signingCourses;
   List<dynamic>? _pendingSigns;
   bool _loading = true;
+  PlatformReadException? _loadError;
+  Future<void>? _pendingLoad;
 
   @override
   void initState() {
@@ -38,7 +42,49 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
     _loadDetail();
   }
 
-  Future<void> _loadDetail() async {
+  Future<void> _loadDetail() =>
+      _pendingLoad ??= _loadSafely().whenComplete(() => _pendingLoad = null);
+
+  Future<void> _loadSafely() async {
+    if (mounted) setState(() => _loadError = null);
+    try {
+      await _loadDetailData();
+    } catch (error) {
+      if (mounted) {
+        setState(() => _loadError = PlatformReadException.from(error));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Widget _readError() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          contextText(
+            context,
+            '签到信息加载失败',
+            'Could not load check-in information',
+          ),
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+        Text(
+          _loadError!.message(
+            english: Localizations.localeOf(context).languageCode == 'en',
+          ),
+        ),
+        TextButton(
+          onPressed: _loading ? null : _loadDetail,
+          child: Text(contextText(context, '重试', 'Retry')),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _loadDetailData() async {
     setState(() {
       _loading = true;
     });
@@ -436,7 +482,7 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
       ),
       body: RefreshIndicator(
         onRefresh: _loadDetail,
-        child: _loading
+        child: _loading && _courseDetail == null
             ? ListView(
                 children: const [
                   SizedBox(height: 240),
@@ -446,6 +492,8 @@ class _KetangpaiCourseDetailPageState extends State<KetangpaiCourseDetailPage> {
             : ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  if (_loading) const LinearProgressIndicator(),
+                  if (_loadError != null) _readError(),
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(

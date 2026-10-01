@@ -1,3 +1,7 @@
+import '../session/sign_execution_context.dart';
+import 'package:dio/dio.dart';
+import 'platform_read_exception.dart';
+import '../session/ketangpai_semester.dart';
 import 'api_service.dart';
 import 'platform_request_stability.dart';
 import 'platform_request_context.dart';
@@ -56,57 +60,44 @@ class KTPCourseApi {
   static Future<List<Course>> getCoursesList({
     String? semester,
     String? term,
+  }) => _identity.run(() => _getCoursesList(semester: semester, term: term));
+
+  static SignExecutionContext get _identity =>
+      SignExecutionContext.current?.platform == PlatformType.ketangpai
+      ? SignExecutionContext.current!
+      : SignExecutionContext.capture(platform: PlatformType.ketangpai);
+
+  static Future<List<Course>> _getCoursesList({
+    String? semester,
+    String? term,
   }) async {
     final userId = AccountManager.currentSessionId;
     if (userId == null || userId.isEmpty) {
-      ApiService.appendExternalConsoleLog('课堂派', '未登录，无法获取课程');
-      return [];
+      throw const PlatformReadException(PlatformReadFailure.auth);
     }
-
+    final endpoint = PlatformManager().ketangpaiBaseUrl;
+    final selected = await KetangpaiSemesterStore.instance.load(
+      userId,
+      endpoint,
+    );
     final context = await PlatformRequestContext.create(
       platform: PlatformType.ketangpai,
       userId: userId,
     );
-
     try {
-      final account = AccountManager.getAccountById(userId);
-      final tokenLength = account?.token.length ?? 0;
-      ApiService.appendExternalConsoleLog('课堂派', '已注入 Token 总长度: $tokenLength');
-
-      final now = DateTime.now();
-      final currentYear = now.year;
-      final currentMonth = now.month;
-
-      String defaultSemester;
-      String defaultTerm;
-
-      if (currentMonth >= 9) {
-        defaultSemester = '$currentYear-${currentYear + 1}';
-        defaultTerm = '1';
-      } else if (currentMonth >= 2) {
-        defaultSemester = '${currentYear - 1}-$currentYear';
-        defaultTerm = '2';
-      } else {
-        defaultSemester = '${currentYear - 1}-$currentYear';
-        defaultTerm = '1';
-      }
-
-      final finalSemester = semester ?? defaultSemester;
-      final finalTerm = term ?? defaultTerm;
-
-      const endpoint = '/CourseApi/semesterCourseList';
       final body = {
         'isstudy': '1',
         'search': '',
-        'semester': finalSemester,
-        'term': finalTerm,
+        'semester': semester ?? selected.semester,
+        'term': term ?? selected.term.toString(),
         'reqtimestamp': DateTime.now().millisecondsSinceEpoch,
       };
-
-      _logApiEndpoint('request', endpoint, data: body);
-
+      ApiService.appendExternalConsoleLog(
+        '课堂派',
+        '获取课程 学年=${body['semester']} 学期=${body['term']}',
+      );
       final response = await context.sendRequest(
-        endpoint,
+        '/CourseApi/semesterCourseList',
         method: 'POST',
         body: body,
         platformOptions: _ketangpaiReadOptions('ketangpai.course.list'),
@@ -115,114 +106,45 @@ class KTPCourseApi {
           'Origin': 'https://w.ketangpai.com',
         },
       );
-
-      _logApiEndpoint('response', endpoint, data: response.data);
-
-      ApiService.appendExternalConsoleLog(
-        '课堂派',
-        '学期参数: $finalSemester 学期: $finalTerm',
+      _logApiEndpoint(
+        'response',
+        '/CourseApi/semesterCourseList',
+        data: response.data,
       );
-
-      debugPrint('[KTPCourseApi] 响应类型: ${response.data.runtimeType}');
-      if (response.data is Map<String, dynamic>) {
-        final status = response.data['status'];
-        final code = response.data['code'];
-        final message = response.data['message'];
-        debugPrint('[KTPCourseApi] status=$status code=$code message=$message');
-
-        // 课堂派 API 返回 status=1 且 code=10000 表示成功
-        final isSuccess =
-            (status == 1 && code == 10000) ||
-            (status == 1 && code == null) ||
-            (code == 10000 && status == null);
-        debugPrint('[KTPCourseApi] isSuccess=$isSuccess');
-
-        if (isSuccess) {
-          final data = response.data['data'];
-          debugPrint('[KTPCourseApi] data 类型: ${data.runtimeType}');
-          debugPrint('[KTPCourseApi] data 值: $data');
-          debugPrint('[KTPCourseApi] data == null: ${data == null}');
-
-          if (data == null) {
-            debugPrint('[KTPCourseApi] data 为 null，检查完整响应结构');
-            debugPrint('[KTPCourseApi] 完整响应: ${response.data}');
-            return [];
-          }
-
-          if (data is List) {
-            debugPrint('[KTPCourseApi] 原始数据包含 ${data.length} 个课程对象');
-            final courses = <Course>[];
-            for (var i = 0; i < data.length; i++) {
-              try {
-                final item = data[i];
-                debugPrint('[KTPCourseApi] 课程$i 原始数据: $item');
-                if (item is Map) {
-                  final course = Course.fromKTPJson(
-                    Map<String, dynamic>.from(item),
-                  );
-                  courses.add(course);
-                  debugPrint(
-                    '[KTPCourseApi] 课程$i: id=${course.courseId} name=${course.name}',
-                  );
-                }
-              } catch (e, stackTrace) {
-                debugPrint('[KTPCourseApi] 解析课程$i失败: $e');
-                debugPrint('[KTPCourseApi] StackTrace: $stackTrace');
-              }
-            }
-            debugPrint('[KTPCourseApi] 成功解析 ${courses.length} 门课程');
-            return courses;
-          } else {
-            debugPrint('[KTPCourseApi] data 不是 List，而是: ${data.runtimeType}');
-            debugPrint('[KTPCourseApi] data 内容: $data');
-            if (data is Map) {
-              debugPrint(
-                '[KTPCourseApi] data 是 Map，keys: ${data.keys.toList()}',
-              );
-              if (data.containsKey('list')) {
-                debugPrint('[KTPCourseApi] data 包含 list 字段，尝试提取');
-                final list = data['list'];
-                if (list is List) {
-                  debugPrint(
-                    '[KTPCourseApi] 从 data.list 提取到 ${list.length} 个课程',
-                  );
-                  final courses = <Course>[];
-                  for (var i = 0; i < list.length; i++) {
-                    try {
-                      final item = list[i];
-                      if (item is Map) {
-                        final course = Course.fromKTPJson(
-                          Map<String, dynamic>.from(item),
-                        );
-                        courses.add(course);
-                        debugPrint(
-                          '[KTPCourseApi] 课程$i: id=${course.courseId} name=${course.name}',
-                        );
-                      }
-                    } catch (e, stackTrace) {
-                      debugPrint('[KTPCourseApi] 解析课程$i失败: $e');
-                      debugPrint('[KTPCourseApi] StackTrace: $stackTrace');
-                    }
-                  }
-                  return courses;
-                }
-              }
-            }
-          }
-        } else {
-          debugPrint('[KTPCourseApi] 状态检查失败: status=$status code=$code');
-        }
-      } else {
-        debugPrint('[KTPCourseApi] 响应不是 Map，而是: ${response.data.runtimeType}');
-      }
-      return [];
-    } catch (e) {
-      _logApiEndpoint('error', '/CourseApi/semesterCourseList', error: e);
-      debugPrint('KTPCourseApi.getCoursesList error: $e');
-      return [];
+      final courses = parseCourseList(response);
+      return courses;
+    } catch (error) {
+      _logApiEndpoint('error', '/CourseApi/semesterCourseList', error: error);
+      throw PlatformReadException.from(error);
     } finally {
       context.dispose();
     }
+  }
+
+  static List<Course> parseCourseList(Response response) =>
+      parseReadList(response).map(Course.fromKTPJson).toList();
+
+  static List<Map<String, dynamic>> parseReadList(Response response) {
+    final payload = readPlatformObject(response);
+    if (isKetangpaiAuthExpired(payload)) {
+      throw const PlatformReadException(PlatformReadFailure.auth);
+    }
+    if (!isKetangpaiSuccess(payload) ||
+        (payload['status'] != null && payload['status'].toString() != '1') ||
+        (payload['code'] != null && payload['code'].toString() != '10000')) {
+      throw const PlatformReadException(PlatformReadFailure.business);
+    }
+    dynamic list = payload['data'];
+    if (list is Map) {
+      list = [
+        for (final key in ['list', 'lists', 'rows', 'data'])
+          if (list[key] is List) list[key],
+      ].firstOrNull;
+    }
+    if (list is! List || list.any((item) => item is! Map)) {
+      throw const PlatformReadException(PlatformReadFailure.format);
+    }
+    return asKetangpaiMapList(list);
   }
 
   /// 获取课程内容（作业、测试、话题、资料）（使用独立 Dio 实例）
@@ -323,7 +245,10 @@ class KTPCourseApi {
   }
 
   /// 获取所有待办项（作业、测试、话题）（使用独立 Dio 实例）
-  static Future<List<Map<String, dynamic>>> getAllTodos() async {
+  static Future<List<Map<String, dynamic>>> getAllTodos() =>
+      _identity.run(_getAllTodos);
+
+  static Future<List<Map<String, dynamic>>> _getAllTodos() async {
     final userId = AccountManager.currentSessionId;
     if (userId == null || userId.isEmpty) {
       ApiService.appendExternalConsoleLog('课堂派', '未登录，无法获取待办');
@@ -345,7 +270,7 @@ class KTPCourseApi {
         final contents = await getCourseContentAll(courseId, contentType: 0);
 
         for (final item in contents) {
-          final contentType = item['contenttype'];
+          final contentType = int.tryParse('${item['contenttype']}');
 
           if (contentType == 4 || contentType == 5 || contentType == 6) {
             final todo = <String, dynamic>{
@@ -367,7 +292,7 @@ class KTPCourseApi {
       return allTodos;
     } catch (e) {
       debugPrint('KTPCourseApi.getAllTodos error: $e');
-      return [];
+      throw PlatformReadException.from(e);
     }
   }
 
@@ -470,11 +395,14 @@ class KTPCourseApi {
   }
 
   /// 获取正在上课的课程列表
-  static Future<List<Course>> getOnlineCourses() async {
+  static Future<List<Course>> getOnlineCourses() =>
+      _identity.run(_getOnlineCourses);
+
+  static Future<List<Course>> _getOnlineCourses() async {
     final userId = AccountManager.currentSessionId;
     if (userId == null || userId.isEmpty) {
       ApiService.appendExternalConsoleLog('课堂派', '未登录，无法获取在线课程');
-      return [];
+      throw const PlatformReadException(PlatformReadFailure.auth);
     }
 
     final context = await PlatformRequestContext.create(
@@ -483,6 +411,8 @@ class KTPCourseApi {
     );
 
     try {
+      // Resolve the selected semester before the state request can outlive a switch.
+      final allCourses = await getCoursesList();
       const endpoint = '/CourseApi/getCourseStateAll';
       final body = {'reqtimestamp': DateTime.now().millisecondsSinceEpoch};
 
@@ -495,38 +425,16 @@ class KTPCourseApi {
       );
       _logApiEndpoint('response', endpoint, data: response.data);
 
-      if (response.data is Map<String, dynamic>) {
-        final status = response.data['status'];
-        if (status == 1) {
-          final data = response.data['data'];
-          if (data is List) {
-            // 提取正在上课的课程 ID
-            final onlineCourseIds = <String>{};
-            for (final item in data) {
-              if (item is Map && item['courseid'] != null) {
-                onlineCourseIds.add(item['courseid'].toString());
-              }
-            }
-
-            // 获取所有课程并标记正在上课的
-            final allCourses = await getCoursesList();
-            final onlineCourses = allCourses.where((course) {
-              return onlineCourseIds.contains(course.courseId);
-            }).toList();
-
-            ApiService.appendExternalConsoleLog(
-              '课堂派',
-              '正在上课的课程: ${onlineCourses.length}/${allCourses.length}',
-            );
-            return onlineCourses;
-          }
-        }
-      }
-      return [];
+      final onlineCourseIds = parseReadList(
+        response,
+      ).map((item) => item['courseid']?.toString()).whereType<String>().toSet();
+      return allCourses
+          .where((course) => onlineCourseIds.contains(course.courseId))
+          .toList();
     } catch (e) {
       _logApiEndpoint('error', '/CourseApi/getCourseStateAll', error: e);
       debugPrint('KTPCourseApi.getOnlineCourses error: $e');
-      return [];
+      throw PlatformReadException.from(e);
     } finally {
       context.dispose();
     }
@@ -538,7 +446,7 @@ class KTPCourseApi {
   ) async {
     final userId = AccountManager.currentSessionId;
     if (userId == null || userId.isEmpty) {
-      return [];
+      throw const PlatformReadException(PlatformReadFailure.auth);
     }
 
     final context = await PlatformRequestContext.create(
@@ -560,29 +468,25 @@ class KTPCourseApi {
         platformOptions: _ketangpaiReadOptions('ketangpai.sign.pending'),
       );
 
-      if (response.data is Map<String, dynamic>) {
-        final status = response.data['status'];
-        if (status == 1) {
-          final data = response.data['data'];
-          if (data is List) {
-            return data
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList();
-          }
-        }
-      }
-      return [];
+      _logApiEndpoint(
+        'response',
+        '/AttenceApi/getNotFinishAttenceStudent',
+        data: response.data,
+      );
+      return parseReadList(response);
     } catch (e) {
       debugPrint('KTPCourseApi.getNotFinishSign error: $e');
-      return [];
+      throw PlatformReadException.from(e);
     } finally {
       context.dispose();
     }
   }
 
   /// 获取正在签到的课程列表
-  static Future<List<Map<String, dynamic>>> getSigningCourses() async {
+  static Future<List<Map<String, dynamic>>> getSigningCourses() =>
+      _identity.run(_getSigningCourses);
+
+  static Future<List<Map<String, dynamic>>> _getSigningCourses() async {
     try {
       final courses = await getCoursesList();
       final signingCourses = <Map<String, dynamic>>[];
@@ -612,7 +516,7 @@ class KTPCourseApi {
       return signingCourses;
     } catch (e) {
       debugPrint('KTPCourseApi.getSigningCourses error: $e');
-      return [];
+      throw PlatformReadException.from(e);
     }
   }
 }

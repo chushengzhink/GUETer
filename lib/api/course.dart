@@ -1816,18 +1816,10 @@ class KTCourseApi {
     }).toList();
   }
 
-  static Future<List<Course>> getCoursesList() async {
-    try {
-      debugPrint('[KTCourseApi] 直接调用 KTPCourseApi');
-      final courses = await KTPCourseApi.getCoursesList();
-      debugPrint('[KTCourseApi] KTPCourseApi 返回 ${courses.length} 门课程');
-      return courses;
-    } catch (e, stackTrace) {
-      debugPrint('KTCourseApi.getCoursesList error: $e');
-      debugPrint('StackTrace: $stackTrace');
-      return [];
-    }
-  }
+  static Future<List<Course>> getCoursesList({
+    String? semester,
+    String? term,
+  }) => KTPCourseApi.getCoursesList(semester: semester, term: term);
 
   static Future<Map<String, dynamic>?> getCourseDetail(String courseId) async {
     try {
@@ -1849,7 +1841,7 @@ class KTCourseApi {
     } catch (e, stackTrace) {
       debugPrint('KTCourseApi.getSigningCourses error: $e');
       debugPrint('StackTrace: $stackTrace');
-      return [];
+      rethrow;
     }
   }
 
@@ -1862,7 +1854,7 @@ class KTCourseApi {
     } catch (e, stackTrace) {
       debugPrint('KTCourseApi.getOnlineCourses error: $e');
       debugPrint('StackTrace: $stackTrace');
-      return [];
+      rethrow;
     }
   }
 
@@ -1872,7 +1864,7 @@ class KTCourseApi {
       return await KTPCourseApi.getSigningCourses();
     } catch (e) {
       debugPrint('KTCourseApi.getSigningCoursesWithDetails error: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -1881,7 +1873,7 @@ class KTCourseApi {
       return await KTPCourseApi.getNotFinishSign(courseId);
     } catch (e) {
       debugPrint('KTCourseApi.getNotFinishSign error: $e');
-      return [];
+      rethrow;
     }
   }
 

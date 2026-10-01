@@ -35,3 +35,11 @@
 - 最终：分析无问题，539 测试全部通过。
 - 28 个静态工具动作 ID 全部保留；24 个目录布局组合与4个实际页面渲染通过。
 - Android release 最终增量 APK 构建成功，v2 签名验证通过。无连接设备，真机验收在 docs/beta/README.md 标记未实测。
+
+## 2026-09-07 Beta platform and interaction fixes
+- [x] Harden Tronclass/Ketangpai reads; preserve failures and cached data.
+- [x] Persist manual semesters per account/site; isolate dependent queries and UI state.
+- [x] Improve active course workspace and Tronclass list interactions and accessibility.
+- [x] Export blue-purple book/check PNG and multi-resolution ICO.
+- [x] Add behavioral regression coverage, analyze, run full suite and render UI.
+- Beta only; no merges. Keep existing untracked reports. Live checks require available credentials/device.

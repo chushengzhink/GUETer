@@ -1,0 +1,75 @@
+{
+  "date": "2026-09-07",
+  "branch": "beta",
+  "baseline": "f06a42e",
+  "analyze": {
+    "result": "passed",
+    "issues": 0,
+    "log": "_tmp/beta-platform-final-analyze.log"
+  },
+  "tests": {
+    "result": "passed",
+    "passed": 616,
+    "failed": 0,
+    "baselineCount": 572,
+    "log": "_tmp/beta-platform-final-test.log"
+  },
+  "ui": {
+    "layoutCombinations": 24,
+    "widths": [
+      360,
+      390,
+      600
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "languages": [
+      "zh",
+      "en"
+    ],
+    "textScales": [
+      1,
+      2
+    ],
+    "source": "Actual Flutter widgets rendered with fictional data"
+  },
+  "coveredBehaviors": [
+    "Tronclass object/text JSON, malformed payloads, authentication/server/network failures",
+    "Ketangpai string/numeric status codes and supported list shapes",
+    "Pending attendance data.lists and propagated facade errors",
+    "Semester date boundaries and per-account/site persistence",
+    "Full CoursesPage HTTP replay: refresh sharing, cache/timestamp retention, stale response rejection, cached semester refresh",
+    "Semester sheet cancellation, validation and keyboard insets",
+    "Ended attendance blocks navigation and repeated taps open one route"
+  ],
+  "apk": {
+    "path": "build/app/outputs/flutter-apk/GUETer-beta3-1.0.14-arm64.apk",
+    "version": "1.0.14+15",
+    "abi": "arm64-v8a",
+    "bytes": 90215660,
+    "sha256": "1B07DFD49C49DB4A6A22D1050B9D87D980086274B9239727FBB602747341186F",
+    "signatureV2": true,
+    "buildSeconds": 107.5
+  },
+  "icon": {
+    "png": "output/app-icon/course-helper-beta-v1.png",
+    "ico": "output/app-icon/course-helper-beta-v1.ico",
+    "validation": "output/app-icon/validation.json",
+    "existingAppIconReplaced": false
+  },
+  "liveValidation": {
+    "performed": false,
+    "reason": "No connected adb device or supplied valid platform login",
+    "attendanceSubmitted": false
+  },
+  "masterComparison": {
+    "reference": "origin/master",
+    "commit": "3342a7b",
+    "remoteFetched": false,
+    "modified": false
+  },
+  "merged": false,
+  "pushed": false
+}

@@ -10,3 +10,12 @@
 - 待办原实现取平台首个账号且没有绑定账号事件，已改为读取平台选中账号并隔离在途数据。
 - 考试旧答案保存响应可能覆盖较新输入，且多请求共享单一 saving 布尔值；已串行同题写入并正确计数、保留未保存集合。
 - Android 当前无可用 adb 设备。界面截图来自 Flutter widget 渲染，外部服务初始化关闭，记录中明确区别于真机截图。
+
+## 2026-09-07 Beta investigation
+- Tronclass get<Map<String,dynamic>> casts text responses before validation.
+- KTP list queries swallow errors; data.lists pending attendance omitted.
+- Actual beta entry is CourseWorkspace and AccountContextHeader, not legacy showcase builders.
+- Baseline: analyzer clean; 572 tests passed during planning. No live responses supplied.
+- Final caller review found two legacy KTP pages without propagated-error handling and a pending-attendance facade still swallowing errors; fixed and covered by regression tests.
+- Cached semester changes previously skipped refresh; now explicitly refresh. A full CoursesPage/Dio replay verifies request sharing, retained cache/timestamp, and stale semester rejection.
+- Local origin/master 3342a7b uses a different Tronclass read path with JSON decoding and null KTP semester defaults; it still hides read failures. Detailed static comparison is in docs/beta-platform-fixes.md.

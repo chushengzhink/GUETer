@@ -1,3 +1,6 @@
+import '../session/ketangpai_semester.dart';
+import '../widgets/ketangpai_semester_picker.dart';
+import '../api/platform_read_exception.dart';
 import '../models/user.dart';
 import '../controllers/account_context_controller.dart';
 import '../features/courses/course_workspace.dart';
@@ -305,8 +308,9 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
               .onlineOnly =
           value;
   String _snapshotPage(CourseContext context) =>
-      'courses@${context.$3}${context.$1 == PlatformType.rainClassroom ? (_showOnlineOnly ? ":online" : ":offline") : ""}';
+      'courses@${context.$3}${context.$4.isEmpty ? '' : ':semester=${context.$4}'}${context.$1 == PlatformType.rainClassroom ? (_showOnlineOnly ? ":online" : ":offline") : ""}';
   String? _emptyHint;
+  PlatformReadException? _courseReadFailure;
   Map<String, dynamic>? _rainCourseDebugSummary;
   StreamSubscription? _accountChangeSubscription;
   StreamSubscription? _platformChangeSubscription;
@@ -318,7 +322,54 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     PlatformManager().currentPlatform,
     AccountManager.currentSessionId ?? '',
     SignExecutionContext.capture().endpoint,
+    PlatformManager().isKetangpai ? _selectedSemester.key : '',
   );
+  final _semesters = KetangpaiSemesterStore.instance;
+  KetangpaiSemester get _selectedSemester => _semesters.current(
+    AccountManager.currentSessionId ?? '',
+    PlatformManager().ketangpaiBaseUrl,
+  );
+  bool _selectingSemester = false;
+
+  Future<void> _chooseSemester() async {
+    if (_selectingSemester) return;
+    final identity = SignExecutionContext.capture();
+    final uid = identity.account?.uid;
+    if (uid == null || identity.platform != PlatformType.ketangpai) return;
+    setState(() => _selectingSemester = true);
+    try {
+      final previous = await _semesters.load(uid, identity.endpoint);
+      if (!mounted || identity.key != SignExecutionContext.capture().key) {
+        return;
+      }
+      final selected = await showKetangpaiSemesterPicker(context, previous);
+      if (selected == null ||
+          selected == previous ||
+          !mounted ||
+          identity.key != SignExecutionContext.capture().key) {
+        return;
+      }
+      await _semesters.select(uid, identity.endpoint, selected);
+    } catch (error) {
+      ApiService.appendExternalConsoleLog('课堂派', '保存学期失败: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              contextText(
+                context,
+                '保存学期失败，请重试',
+                'Could not save semester. Please retry.',
+              ),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _selectingSemester = false);
+    }
+  }
+
   bool _isShowingCachedCourses = false;
   bool _isRefreshingCoursesInBackground = false;
   Color _globalPrimary = const Color(0xFF1F9EA8);
@@ -380,14 +431,16 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     final refreshedContext = _courseContext;
     await _loadCourses(forceNetwork: true);
     if (!mounted || refreshedContext != _courseContext) return;
-    if (mounted) {
-      _lastRefreshAt = DateTime.now();
+    if (mounted &&
+        !_snapshotRefreshFailed &&
+        AccountManager.hasActiveSession()) {
+      _lastRefreshAt = _snapshotUpdatedAt;
       _lastRefreshMessage = _courses.isEmpty
           ? '未获取到课程数据'
           : '已加载 ${_courses.length} 门课程';
       setState(() {});
     }
-    if (!mounted || !showFeedback) {
+    if (!mounted || !showFeedback || !AccountManager.hasActiveSession()) {
       return;
     }
 
@@ -2167,6 +2220,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     }
 
     _courseLoads.switchContext(_courseContext);
+    _semesters.addListener(_onSemesterChanged);
     _accountChangeSubscription = AccountChangeNotifier().accountStateChanges
         .listen((snapshot) {
           if (!mounted ||
@@ -2210,9 +2264,19 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCourseSnapshotThenRefresh(PlatformType platform) async {
+    final identity = SignExecutionContext.capture();
+    final userId = identity.account?.uid ?? '';
+    if (platform == PlatformType.ketangpai && userId.isNotEmpty) {
+      await _semesters.load(userId, identity.endpoint);
+      if (!mounted || identity.key != SignExecutionContext.capture().key) {
+        return;
+      }
+    }
+    if (!mounted) return;
+    final requestContext = _courseContext;
+    _courseLoads.switchContext(requestContext);
+    setState(() {});
     final readVersion = ++_snapshotReadVersion;
-    final endpoint = SignExecutionContext.capture().endpoint;
-    final userId = AccountManager.currentSessionId ?? '';
     if (userId.isNotEmpty) {
       unawaited(
         PlatformNetworkWarmupService().warmupDio(
@@ -2223,37 +2287,40 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       final snapshot = await _snapshotStore.readList(
         platform: platform,
         userId: userId,
-        page: _snapshotPage((platform, userId, endpoint)),
+        page: _snapshotPage(requestContext),
       );
       if (mounted &&
           readVersion == _snapshotReadVersion &&
-          _courseContext == (platform, userId, endpoint) &&
+          _courseContext == requestContext &&
           snapshot != null &&
           snapshot.data.isNotEmpty) {
         final courses = snapshot.data.map(Course.fromJson).toList();
         setState(() {
           _courses = courses;
-          _coursesCache[(platform, userId, endpoint)] = courses;
-          _cacheTimestamps[(platform, userId, endpoint)] = snapshot.updatedAt;
+          _coursesCache[requestContext] = courses;
+          _cacheTimestamps[requestContext] = snapshot.updatedAt;
           _snapshotUpdatedAt = snapshot.updatedAt;
           _isLoading = false;
           _isShowingCachedCourses = true;
           _isRefreshingCoursesInBackground = true;
           _snapshotRefreshFailed = false;
           _emptyHint = null;
+          _courseReadFailure = null;
         });
       }
     }
 
     if (!mounted ||
         readVersion != _snapshotReadVersion ||
-        _courseContext != (platform, userId, endpoint)) {
+        _courseContext != requestContext) {
       return;
     }
     unawaited(_loadCourses());
   }
 
-  void _onCourseContextChanged() {
+  void _onSemesterChanged() => _onCourseContextChanged(forceNetwork: true);
+
+  void _onCourseContextChanged({bool forceNetwork = false}) {
     final next = _courseContext;
     if (_courseLoads.context == next) return;
     _courseLoads.switchContext(next);
@@ -2263,25 +2330,48 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       _offlineCourses = _offlineCoursesCache[next] ?? [];
       _snapshotUpdatedAt = _cacheTimestamps[next];
       _emptyHint = null;
+      _courseReadFailure = null;
       _snapshotRefreshFailed = false;
       _isShowingCachedCourses = _courses.isNotEmpty;
       _isRefreshingCoursesInBackground = false;
       _isLoading = _courses.isEmpty && !PlatformManager().isRainClassroom;
     });
     final cachedAt = _cacheTimestamps[next];
-    if (_courses.isNotEmpty &&
+    if (!forceNetwork &&
+        _courses.isNotEmpty &&
         cachedAt != null &&
         DateTime.now().difference(cachedAt) < const Duration(minutes: 5)) {
       return;
     }
     if (_courses.isNotEmpty) {
-      unawaited(_loadCourses());
+      unawaited(_loadCourses(forceNetwork: forceNetwork));
     } else {
       unawaited(_loadCourseSnapshotThenRefresh(next.$1));
     }
   }
 
   Future<void> _loadCourses({
+    Map<String, dynamic>? onLessonCourses,
+    bool forceNetwork = false,
+  }) async {
+    final identity = SignExecutionContext.capture();
+    if (identity.platform == PlatformType.ketangpai &&
+        identity.account != null) {
+      await _semesters.load(identity.account!.uid, identity.endpoint);
+      if (!mounted || identity.key != SignExecutionContext.capture().key) {
+        return;
+      }
+    }
+    return _courseLoads.share(
+      _courseContext,
+      () => _loadCoursesImpl(
+        onLessonCourses: onLessonCourses,
+        forceNetwork: forceNetwork,
+      ),
+    );
+  }
+
+  Future<void> _loadCoursesImpl({
     Map<String, dynamic>? onLessonCourses,
     bool forceNetwork = false,
   }) async {
@@ -2294,6 +2384,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     if (!mounted) return;
     final identity = SignExecutionContext.capture();
     final requestContext = _courseContext;
+    final semester = _selectedSemester;
     _snapshotReadVersion++;
     final generation = _courseLoads.begin(requestContext);
     if (generation == null) return;
@@ -2321,6 +2412,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         _offlineCourses = [];
       }
       _emptyHint = null;
+      _courseReadFailure = null;
       _rainCourseDebugSummary = null;
     });
 
@@ -2334,7 +2426,11 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         _isLoading = false;
         _isShowingCachedCourses = false;
         _isRefreshingCoursesInBackground = false;
-        _emptyHint = '当前未登录，请先到账号页登录。';
+        _emptyHint = contextText(
+          context,
+          '当前未登录，请先登录账号。',
+          'Please sign in to load your courses.',
+        );
       });
       _courseLoads.finish(generation);
       return;
@@ -2366,7 +2462,10 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         } else if (PlatformManager().isTronclass) {
           coursesData = await TCCourseApi.getCoursesList();
         } else if (PlatformManager().isKetangpai) {
-          coursesData = await KTCourseApi.getCoursesList();
+          coursesData = await KTCourseApi.getCoursesList(
+            semester: semester.semester,
+            term: semester.term.toString(),
+          );
         }
       });
 
@@ -2410,6 +2509,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
           _isRefreshingCoursesInBackground = false;
           _snapshotRefreshFailed = false;
           _emptyHint = null;
+          _courseReadFailure = null;
           _rainCourseDebugSummary = PlatformManager().isRainClassroom
               ? RCCourseApi.getLastCourseDebugSummary()
               : null;
@@ -2444,8 +2544,10 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
       }
     } catch (e) {
       debugPrint('[Courses] load failed: $e');
+      ApiService.appendExternalConsoleLog('courses', 'read failed: $e');
       if (!isCurrent()) return;
       setState(() {
+        _courseReadFailure = e is PlatformReadException ? e : null;
         if (!hasCachedCourses) {
           _courses = [];
           _onlineCourses = [];
@@ -2454,8 +2556,16 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         _isLoading = false;
         _isRefreshingCoursesInBackground = false;
         _snapshotRefreshFailed = true;
-        _emptyHint = hasCachedCourses
-            ? '正在显示缓存课程，后台刷新失败'
+        _emptyHint = e is PlatformReadException
+            ? e.message(
+                english: Localizations.localeOf(context).languageCode == 'en',
+              )
+            : hasCachedCourses
+            ? contextText(
+                context,
+                '刷新失败，已保留原有课程',
+                'Refresh failed. Previous courses retained.',
+              )
             : PlatformManager().isRainClassroom
             ? '课程加载失败，请检查账号和服务器后重试'
             : PlatformManager().isChaoxing
@@ -2671,25 +2781,34 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> handleScanContent(String result, {SignExecutionContext? sourceIdentity,
-    ValueChanged<SignExecutionContext>? onResolvedIdentity}) async {
+  Future<void> handleScanContent(
+    String result, {
+    SignExecutionContext? sourceIdentity,
+    ValueChanged<SignExecutionContext>? onResolvedIdentity,
+  }) async {
     try {
       final uri = Uri.tryParse(result);
       final detectedPlatform = _detectScanPlatform(result, uri);
       var identity = sourceIdentity ?? SignExecutionContext.capture();
-      final rainServer = detectedPlatform == PlatformType.rainClassroom ? switch (uri?.host) {
-        'www.yuketang.cn' => RainClassroomServerType.yuketang,
-        'pro.yuketang.cn' => RainClassroomServerType.pro,
-        'changjiang.yuketang.cn' => RainClassroomServerType.changjiang,
-        'huanghe.yuketang.cn' => RainClassroomServerType.huanghe,
-        _ => identity.server,
-      } : identity.server;
+      final rainServer = detectedPlatform == PlatformType.rainClassroom
+          ? switch (uri?.host) {
+              'www.yuketang.cn' => RainClassroomServerType.yuketang,
+              'pro.yuketang.cn' => RainClassroomServerType.pro,
+              'changjiang.yuketang.cn' => RainClassroomServerType.changjiang,
+              'huanghe.yuketang.cn' => RainClassroomServerType.huanghe,
+              _ => identity.server,
+            }
+          : identity.server;
       if (detectedPlatform != null &&
-          (detectedPlatform != identity.platform || identity.account == null || rainServer != identity.server)) {
+          (detectedPlatform != identity.platform ||
+              identity.account == null ||
+              rainServer != identity.server)) {
         final selected = await showAccountPicker(
           context,
           platform: detectedPlatform,
-          site: detectedPlatform == PlatformType.rainClassroom ? uri?.host : null,
+          site: detectedPlatform == PlatformType.rainClassroom
+              ? uri?.host
+              : null,
         );
         if (selected == null || !mounted) return;
         await AccountContextController.instance.select(
@@ -3870,8 +3989,14 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ScanPage(onContextualScanResult: (result, source, onResolved) =>
-          handleScanContent(result, sourceIdentity: source, onResolvedIdentity: onResolved)),
+        builder: (context) => ScanPage(
+          onContextualScanResult: (result, source, onResolved) =>
+              handleScanContent(
+                result,
+                sourceIdentity: source,
+                onResolvedIdentity: onResolved,
+              ),
+        ),
       ),
     );
   }
@@ -4010,8 +4135,9 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
         body: SafeArea(
           bottom: false,
           child: CourseWorkspace(
-            key: ValueKey(identity.key),
-            contextId: identity.key,
+            key: ValueKey(_courseContext),
+            contextId: '${identity.key}|${_courseContext.$4}',
+            preferenceId: identity.key,
             memory: _workspaceMemory.putIfAbsent(
               _courseContext,
               CourseWorkspaceMemory.new,
@@ -4019,8 +4145,27 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
             courses: _courses,
             loading: _isLoading,
             refreshing: _isRefreshingCoursesInBackground,
+            failed: _snapshotRefreshFailed,
+            authExpired: _courseReadFailure?.kind == PlatformReadFailure.auth,
+            updatedAt: _snapshotUpdatedAt,
+            signedIn: identity.account != null,
+            onLogin: () => selectAccountFromSheet(context, platform: platform),
+            onChangeSemester:
+                identity.platform == PlatformType.ketangpai &&
+                    !controller.switching &&
+                    !_selectingSemester &&
+                    identity.account != null
+                ? _chooseSemester
+                : null,
+            semesterLabel: identity.platform == PlatformType.ketangpai
+                ? _selectedSemester.label(
+                    english:
+                        Localizations.localeOf(context).languageCode == 'en',
+                  )
+                : null,
             enabled:
                 !controller.switching &&
+                identity.account != null &&
                 identity.platform != PlatformType.weizhuojiao,
             message: identity.platform == PlatformType.weizhuojiao
                 ? contextText(
@@ -4069,15 +4214,6 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
                   selectAccountFromSheet(context, platform: platform),
             ),
           ),
-        ),
-        floatingActionButton: FloatingActionButton(
-          tooltip: contextText(context, '扫码签到', 'Scan to check in'),
-          onPressed:
-              controller.switching ||
-                  identity.platform == PlatformType.weizhuojiao
-              ? null
-              : _openScanPage,
-          child: const Icon(Icons.qr_code_scanner),
         ),
       );
     },
@@ -4312,6 +4448,7 @@ class CoursesPageState extends State<CoursesPage> with WidgetsBindingObserver {
     _accountChangeSubscription?.cancel();
     _platformChangeSubscription?.cancel();
     _refreshTimer?.cancel();
+    _semesters.removeListener(_onSemesterChanged);
     _scanConsoleController.dispose();
     super.dispose();
   }

@@ -22,3 +22,20 @@
 - APK SHA-256：190DA68FF2C9EB1564470358F19ACB9C87A9C14D64F1F5CF54008986004AF977。
 - docs/beta2/README.md 和 validation.json 记录功能保留/移除、交互步骤、截图、测试和后续建议；UI 与交付提交主题为 feat: simplify beta navigation and everyday workflows。
 - adb 未发现设备，真实账号、平台、权限、设备性能和系统分享未实测。未推送或发布；八份独立分析报告保持未跟踪，不混入应用提交。
+
+## 2026-09-07 implementation
+- User approved complete beta-only platform/UI/icon plan. Started implementation; workspace has eight unrelated untracked reports.
+- Added strict response parsers, persisted manual semesters, scoped course caches, refresh sharing, and active UI improvements.
+- New regression tests caught a Flutter setState callback returning a Future while storing an in-flight refresh; changed to a void block. Other parser/semester/layout cases passed.
+- Icon PNG/ICO generated and visually checked at small sizes. adb reports no connected devices; live account validation remains unavailable.
+
+- Full regression after implementation: 609 passed. Added two real Dio replay tests and one duplicate-navigation test; these also pass. Final combined regression running.
+- 24 width/theme/language/font combinations pass for courses, semester form and Tronclass cards. Screenshot fixtures now load Chinese and icon fonts.
+- Transport fixture initially lacked AccountManager initialization; fixed setup and rerun passed. No production credentials or network submission used.
+- Building an Android arm64 release artifact for review.
+- Final caller fixes and actual course-page replay completed. Test harness advances fake timers for the existing POST throttle and uses runAsync for filesystem/preference work.
+- Final analyzer: no issues. Full regression: 616 passed, 0 failed. Local master comparison recorded without modifying or merging branches.
+- Rebuilding the final arm64-only release APK with all final changes; existing named beta/beta2 artifacts preserved.
+- First final APK built and v2 signature verified. Restored response diagnostics in the request console; rerunning final validation/build so the delivered artifact includes these logs.
+- Final source including console diagnostics: analyzer clean, 616 tests passed. APK rebuilt in 107.5 seconds; v2 signature verified and arm64-v8a libraries confirmed. Delivered GUETer-beta3-1.0.14-arm64.apk (90,215,660 bytes), SHA-256 1B07DFD49C49DB4A6A22D1050B9D87D980086274B9239727FBB602747341186F.
+- All authorized implementation, icon delivery, and available automated validation completed. No live account/device validation, real attendance submission, branch merge, commit, or push performed.

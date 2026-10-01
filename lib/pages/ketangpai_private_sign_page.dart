@@ -1,3 +1,5 @@
+import '../api/platform_read_exception.dart';
+import '../widgets/account_context_header.dart';
 import 'package:flutter/material.dart';
 
 import '../api/course.dart';
@@ -46,6 +48,8 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
     platformContext: SignPlatformContext.ketangpai,
   );
   bool _loading = true;
+  PlatformReadException? _loadError;
+  Future<void>? _pendingLoad;
 
   @override
   void dispose() {
@@ -62,7 +66,49 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
   List<User> get _ketangpaiUsers =>
       AccountManager.getAccountsForPlatform(PlatformType.ketangpai);
 
-  Future<void> _load() async {
+  Future<void> _load() =>
+      _pendingLoad ??= _loadSafely().whenComplete(() => _pendingLoad = null);
+
+  Future<void> _loadSafely() async {
+    if (mounted) setState(() => _loadError = null);
+    try {
+      await _loadData();
+    } catch (error) {
+      if (mounted) {
+        setState(() => _loadError = PlatformReadException.from(error));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Widget _readError() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          contextText(
+            context,
+            '签到信息加载失败',
+            'Could not load check-in information',
+          ),
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+        Text(
+          _loadError!.message(
+            english: Localizations.localeOf(context).languageCode == 'en',
+          ),
+        ),
+        TextButton(
+          onPressed: _loading ? null : _load,
+          child: Text(contextText(context, '重试', 'Retry')),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _loadData() async {
     setState(() {
       _loading = true;
     });
@@ -532,10 +578,17 @@ class _KetangpaiPrivateSignPageState extends State<KetangpaiPrivateSignPage> {
         padding: const EdgeInsets.all(16),
         child: RefreshIndicator(
           onRefresh: _load,
-          child: _loading
+          child: _loading && _signingCourses.isEmpty
               ? const Center(child: CircularProgressIndicator())
               : CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
                   slivers: [
+                    if (_loading)
+                      const SliverToBoxAdapter(
+                        child: LinearProgressIndicator(),
+                      ),
+                    if (_loadError != null)
+                      SliverToBoxAdapter(child: _readError()),
                     SliverToBoxAdapter(
                       child: SizedBox(
                         height: 50,

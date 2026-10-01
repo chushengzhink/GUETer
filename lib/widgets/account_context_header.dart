@@ -84,7 +84,7 @@ class AccountContextHeader extends StatelessWidget {
           child: ListTile(
             key: const ValueKey('current-account'),
             minVerticalPadding: 12,
-            onTap: onAccount,
+            onTap: switching ? null : onAccount,
             leading: CircleAvatar(
               backgroundColor: colors.primaryContainer,
               child: Icon(
@@ -97,6 +97,8 @@ class AccountContextHeader extends StatelessWidget {
             title: Text(
               account?.name ??
                   contextText(context, '选择或登录账号', 'Choose an account'),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             subtitle: Text(
@@ -104,7 +106,9 @@ class AccountContextHeader extends StatelessWidget {
                   ? contextText(context, '正在切换…', 'Switching…')
                   : account == null
                   ? contextText(context, '登录后开始签到', 'Sign in to check in')
-                  : '${account!.studentId ?? account!.uid} · ${contextText(context, '当前账号', 'Current account')}',
+                  : '${account!.studentId?.trim().isNotEmpty == true ? account!.studentId!.trim() : account!.uid} · ${contextText(context, '当前账号', 'Current account')}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             trailing: switching
                 ? const SizedBox.square(
@@ -223,7 +227,7 @@ class _AccountPickerState extends State<_AccountPicker> {
                         return ListTile(
                           title: Text(user.name),
                           subtitle: Text(
-                            '${user.studentId ?? user.uid} · ${expired ? contextText(context, '会话已到期', 'Session expired') : contextText(context, '已保存账号', 'Saved account')}',
+                            '${user.studentId?.trim().isNotEmpty == true ? user.studentId!.trim() : user.uid} · ${expired ? contextText(context, '会话已到期', 'Session expired') : contextText(context, '已保存账号', 'Saved account')}',
                           ),
                           trailing: user.uid == selected
                               ? const Icon(Icons.check_circle)
